@@ -1,0 +1,5 @@
+{
+  "name": "Narxi Tashkent",
+  "description": "Crowd-sourced price transparency platform for Tashkent, Uzbekistan. Scan receipts or report prices manually to find the best deals.",
+  "requestFramePermissions": ["geolocation"]
+}
