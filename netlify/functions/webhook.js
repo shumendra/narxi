@@ -149,13 +149,40 @@ async function sendTelegramMessage(chatId, payload) {
   });
 }
 
+async function sendMenu(chatId) {
+  if (!MINI_APP_URL) {
+    await sendTelegramMessage(chatId, { text: "Mini ilova havolasi sozlanmagan. Keyinroq urinib ko'ring." });
+    return;
+  }
+
+  const miniAppUrl = MINI_APP_URL;
+  await sendTelegramMessage(chatId, {
+    text: "Narxlarni bilish yoki yangi narx qo'shish uchun quyidagi tugmalardan foydalaning:",
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: 'Narx topish 🔍', web_app: { url: `${miniAppUrl}?mode=find&lang=uz` } },
+          { text: "Narx kiritish ➕", web_app: { url: `${miniAppUrl}?mode=report&lang=uz` } },
+        ],
+      ],
+    },
+  });
+}
+
 async function handleMessage(message) {
   const text = message.text || '';
   const chatId = message.chat?.id;
 
   if (!chatId) return;
 
-  if (text.includes('soliq.uz')) {
+  const normalizedText = text.trim();
+
+  if (normalizedText.startsWith('/start')) {
+    await sendMenu(chatId);
+    return;
+  }
+
+  if (normalizedText.includes('soliq.uz')) {
     const urlMatch = text.match(/https?:\/\/soliq\.uz[^\s]+/);
     if (!urlMatch) {
       await sendTelegramMessage(chatId, { text: "Kechirasiz, chek havolasi topilmadi. ❌" });
@@ -216,22 +243,7 @@ async function handleMessage(message) {
     return;
   }
 
-  if (!MINI_APP_URL) {
-    await sendTelegramMessage(chatId, { text: "Mini ilova havolasi sozlanmagan. Keyinroq urinib ko'ring." });
-    return;
-  }
-  const miniAppUrl = MINI_APP_URL;
-  await sendTelegramMessage(chatId, {
-    text: "Narxlarni bilish yoki yangi narx qo'shish uchun quyidagi tugmalardan foydalaning:",
-    reply_markup: {
-      inline_keyboard: [
-        [
-          { text: 'Narx topish 🔍', web_app: { url: `${miniAppUrl}?mode=find&lang=uz` } },
-          { text: "Narx kiritish ➕", web_app: { url: `${miniAppUrl}?mode=report&lang=uz` } },
-        ],
-      ],
-    },
-  });
+  await sendMenu(chatId);
 }
 
 exports.handler = async (event) => {
