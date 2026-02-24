@@ -236,9 +236,35 @@ async function answerCallbackQuery(callbackQueryId) {
   });
 }
 
+function getUserLang(sourceLang) {
+  if (!sourceLang) return 'uz';
+  if (sourceLang.startsWith('ru')) return 'ru';
+  if (sourceLang.startsWith('en')) return 'en';
+  return 'uz';
+}
+
+function extractSoliqUrl(message) {
+  const text = message.text || '';
+  const entities = message.entities || [];
+
+  for (const entity of entities) {
+    if (entity.type === 'text_link' && entity.url) {
+      if (entity.url.includes('soliq.uz')) return entity.url;
+    }
+    if (entity.type === 'url') {
+      const url = text.substring(entity.offset, entity.offset + entity.length);
+      if (url.includes('soliq.uz')) return url;
+    }
+  }
+
+  const match = text.match(/https?:\/\/(?:[a-z0-9-]+\.)*soliq\.uz[^\s]*/i);
+  return match ? match[0] : null;
+}
+
 async function handleMessage(message) {
   const text = message.text || '';
   const chatId = message.chat?.id;
+  const lang = getUserLang(message.from?.language_code);
 
   if (!chatId) return;
 
@@ -250,20 +276,20 @@ async function handleMessage(message) {
   }
 
   if (normalizedText.includes('soliq.uz')) {
-    const urlMatch = text.match(/https?:\/\/soliq\.uz[^\s]+/);
-    if (!urlMatch) {
-      await sendTelegramMessage(chatId, { text: BOT_COPY.uz.missingReceipt });
+    const receiptUrl = extractSoliqUrl(message);
+    if (!receiptUrl) {
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].missingReceipt });
       return;
     }
 
-    await sendTelegramMessage(chatId, { text: BOT_COPY.uz.processing });
+    await sendTelegramMessage(chatId, { text: BOT_COPY[lang].processing });
 
     if (!supabaseUrl || !supabaseKey) {
-      await sendTelegramMessage(chatId, { text: BOT_COPY.uz.serverError });
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].serverError });
       return;
     }
 
-    const receiptData = await scrapeSoliq(urlMatch[0]);
+    const receiptData = await scrapeSoliq(receiptUrl);
     if (receiptData && receiptData.items.length > 0) {
       try {
         const { data: existing } = await supabase
@@ -276,7 +302,7 @@ async function handleMessage(message) {
           .limit(1);
 
         if (existing && existing.length > 0) {
-          await sendTelegramMessage(chatId, { text: BOT_COPY.uz.alreadyAdded });
+          await sendTelegramMessage(chatId, { text: BOT_COPY[lang].alreadyAdded });
           return;
         }
 
@@ -298,19 +324,19 @@ async function handleMessage(message) {
         }
 
         await sendTelegramMessage(chatId, {
-          text: BOT_COPY.uz.saved(savedCount, receiptData.storeName),
+          text: BOT_COPY[lang].saved(savedCount, receiptData.storeName),
         });
       } catch (error) {
         console.error('Supabase insert error:', error);
-        await sendTelegramMessage(chatId, { text: BOT_COPY.uz.saveFailed });
+        await sendTelegramMessage(chatId, { text: BOT_COPY[lang].saveFailed });
       }
     } else {
-      await sendTelegramMessage(chatId, { text: BOT_COPY.uz.unreadable });
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].unreadable });
     }
     return;
   }
 
-  await sendMenu(chatId, 'uz');
+  await sendMenu(chatId, lang);
 }
 
 async function handleCallback(callbackQuery) {
