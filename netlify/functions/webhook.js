@@ -16,6 +16,51 @@ const MINI_APP_URL = process.env.TELEGRAM_MINI_APP_URL || '';
 
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 
+const BOT_COPY = {
+  uz: {
+    chooseLang: "Tilni tanlang:",
+    menuText: "Narxlarni bilish yoki yangi narx qo'shish uchun quyidagi tugmalardan foydalaning:",
+    missingMiniApp: "Mini ilova havolasi sozlanmagan. Keyinroq urinib ko'ring.",
+    missingReceipt: "Kechirasiz, chek havolasi topilmadi. ❌",
+    processing: 'Chek tekshirilmoqda... ⏳',
+    saved: (count, store) => `✅ ${count} ta mahsulot saqlandi!\n📍 Do'kon: ${store}`,
+    unreadable: "Kechirasiz, chek ma'lumotlarini o'qib bo'lmadi. ❌",
+    alreadyAdded: "Bu chek allaqachon qo'shilgan. ✅",
+    serverError: "Server sozlamalarida xatolik. Keyinroq urinib ko'ring.",
+    saveFailed: "Hozircha saqlab bo'lmadi. Keyinroq urinib ko'ring.",
+    btnFind: 'Narx topish 🔍',
+    btnReport: "Narx kiritish ➕",
+  },
+  ru: {
+    chooseLang: "Выберите язык:",
+    menuText: "Чтобы найти цены или добавить новую цену, используйте кнопки ниже:",
+    missingMiniApp: "Ссылка на мини‑приложение не настроена. Попробуйте позже.",
+    missingReceipt: "Не удалось найти ссылку на чек. ❌",
+    processing: 'Проверяем чек... ⏳',
+    saved: (count, store) => `✅ Сохранено товаров: ${count}\n📍 Магазин: ${store}`,
+    unreadable: "Не удалось прочитать данные чека. ❌",
+    alreadyAdded: "Этот чек уже был добавлен. ✅",
+    serverError: "Ошибка настроек сервера. Попробуйте позже.",
+    saveFailed: "Сейчас не удалось сохранить. Попробуйте позже.",
+    btnFind: 'Найти цену 🔍',
+    btnReport: 'Добавить цену ➕',
+  },
+  en: {
+    chooseLang: 'Choose a language:',
+    menuText: 'To find prices or add a new price, use the buttons below:',
+    missingMiniApp: 'Mini App URL is not configured. Please try again later.',
+    missingReceipt: 'Receipt link not found. ❌',
+    processing: 'Checking receipt... ⏳',
+    saved: (count, store) => `✅ Items saved: ${count}\n📍 Store: ${store}`,
+    unreadable: 'Could not read the receipt data. ❌',
+    alreadyAdded: 'This receipt was already added. ✅',
+    serverError: 'Server configuration error. Please try again later.',
+    saveFailed: 'Could not save right now. Please try again later.',
+    btnFind: 'Find price 🔍',
+    btnReport: 'Add price ➕',
+  },
+};
+
 function extractReceiptDate($) {
   const datePatterns = [
     /\b(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}:\d{2}:\d{2}))?\b/,
@@ -149,23 +194,45 @@ async function sendTelegramMessage(chatId, payload) {
   });
 }
 
-async function sendMenu(chatId) {
+async function sendMenu(chatId, lang) {
   if (!MINI_APP_URL) {
-    await sendTelegramMessage(chatId, { text: "Mini ilova havolasi sozlanmagan. Keyinroq urinib ko'ring." });
+    await sendTelegramMessage(chatId, { text: BOT_COPY[lang].missingMiniApp });
     return;
   }
 
   const miniAppUrl = MINI_APP_URL;
   await sendTelegramMessage(chatId, {
-    text: "Narxlarni bilish yoki yangi narx qo'shish uchun quyidagi tugmalardan foydalaning:",
+    text: BOT_COPY[lang].menuText,
     reply_markup: {
       inline_keyboard: [
         [
-          { text: 'Narx topish 🔍', web_app: { url: `${miniAppUrl}?mode=find&lang=uz` } },
-          { text: "Narx kiritish ➕", web_app: { url: `${miniAppUrl}?mode=report&lang=uz` } },
+          { text: BOT_COPY[lang].btnFind, web_app: { url: `${miniAppUrl}?mode=find&lang=${lang}` } },
+          { text: BOT_COPY[lang].btnReport, web_app: { url: `${miniAppUrl}?mode=report&lang=${lang}` } },
         ],
       ],
     },
+  });
+}
+
+async function sendLanguagePicker(chatId) {
+  await sendTelegramMessage(chatId, {
+    text: BOT_COPY.uz.chooseLang,
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: 'O‘zbekcha', callback_data: 'lang:uz' },
+          { text: 'Русский', callback_data: 'lang:ru' },
+          { text: 'English', callback_data: 'lang:en' },
+        ],
+      ],
+    },
+  });
+}
+
+async function answerCallbackQuery(callbackQueryId) {
+  if (!TELEGRAM_TOKEN) return;
+  await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
+    callback_query_id: callbackQueryId,
   });
 }
 
@@ -178,21 +245,21 @@ async function handleMessage(message) {
   const normalizedText = text.trim();
 
   if (normalizedText.startsWith('/start')) {
-    await sendMenu(chatId);
+    await sendLanguagePicker(chatId);
     return;
   }
 
   if (normalizedText.includes('soliq.uz')) {
     const urlMatch = text.match(/https?:\/\/soliq\.uz[^\s]+/);
     if (!urlMatch) {
-      await sendTelegramMessage(chatId, { text: "Kechirasiz, chek havolasi topilmadi. ❌" });
+      await sendTelegramMessage(chatId, { text: BOT_COPY.uz.missingReceipt });
       return;
     }
 
-    await sendTelegramMessage(chatId, { text: 'Chek tekshirilmoqda... ⏳' });
+    await sendTelegramMessage(chatId, { text: BOT_COPY.uz.processing });
 
     if (!supabaseUrl || !supabaseKey) {
-      await sendTelegramMessage(chatId, { text: "Server sozlamalarida xatolik. Keyinroq urinib ko'ring." });
+      await sendTelegramMessage(chatId, { text: BOT_COPY.uz.serverError });
       return;
     }
 
@@ -209,7 +276,7 @@ async function handleMessage(message) {
           .limit(1);
 
         if (existing && existing.length > 0) {
-          await sendTelegramMessage(chatId, { text: "Bu chek allaqachon qo'shilgan. ✅" });
+          await sendTelegramMessage(chatId, { text: BOT_COPY.uz.alreadyAdded });
           return;
         }
 
@@ -231,19 +298,36 @@ async function handleMessage(message) {
         }
 
         await sendTelegramMessage(chatId, {
-          text: `✅ ${savedCount} ta mahsulot saqlandi!\n📍 Do'kon: ${receiptData.storeName}`,
+          text: BOT_COPY.uz.saved(savedCount, receiptData.storeName),
         });
       } catch (error) {
         console.error('Supabase insert error:', error);
-        await sendTelegramMessage(chatId, { text: "Hozircha saqlab bo'lmadi. Keyinroq urinib ko'ring." });
+        await sendTelegramMessage(chatId, { text: BOT_COPY.uz.saveFailed });
       }
     } else {
-      await sendTelegramMessage(chatId, { text: "Kechirasiz, chek ma'lumotlarini o'qib bo'lmadi. ❌" });
+      await sendTelegramMessage(chatId, { text: BOT_COPY.uz.unreadable });
     }
     return;
   }
 
-  await sendMenu(chatId);
+  await sendMenu(chatId, 'uz');
+}
+
+async function handleCallback(callbackQuery) {
+  const chatId = callbackQuery?.message?.chat?.id;
+  if (!chatId) return;
+
+  if (callbackQuery.id) {
+    await answerCallbackQuery(callbackQuery.id);
+  }
+
+  const data = callbackQuery.data || '';
+  if (data.startsWith('lang:')) {
+    const lang = data.split(':')[1];
+    if (lang === 'uz' || lang === 'ru' || lang === 'en') {
+      await sendMenu(chatId, lang);
+    }
+  }
 }
 
 exports.handler = async (event) => {
@@ -265,6 +349,10 @@ exports.handler = async (event) => {
 
   if (payload?.message) {
     void handleMessage(payload.message);
+  }
+
+  if (payload?.callback_query) {
+    void handleCallback(payload.callback_query);
   }
 
   return { statusCode: 200, body: JSON.stringify({ ok: true }) };
