@@ -27,6 +27,7 @@ interface Product {
   id: string;
   name_uz: string;
   name_ru: string;
+  name_en?: string | null;
   category: string;
 }
 
@@ -182,13 +183,26 @@ export default function App() {
     if (!searchQuery) return [];
     return products.filter(p => 
       p.name_uz.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      p.name_ru.toLowerCase().includes(searchQuery.toLowerCase())
+      p.name_ru.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (p.name_en || '').toLowerCase().includes(searchQuery.toLowerCase())
     );
   }, [searchQuery, products]);
 
+  const getProductName = (product: Product, selectedLang: 'uz' | 'ru' | 'en') => {
+    if (selectedLang === 'ru') return product.name_ru;
+    if (selectedLang === 'en') return product.name_en || product.name_uz;
+    return product.name_uz;
+  };
+
+  const getProductSecondary = (product: Product, selectedLang: 'uz' | 'ru' | 'en') => {
+    if (selectedLang === 'ru') return product.name_uz;
+    if (selectedLang === 'en') return product.name_uz;
+    return product.name_ru;
+  };
+
   const handleProductSelect = async (product: Product) => {
     setSelectedProduct(product);
-    setSearchQuery(product.name_uz);
+    setSearchQuery(getProductName(product, lang));
     setShowDropdown(false);
     
     if (mode === 'find') {
@@ -247,7 +261,7 @@ export default function App() {
     setSubmitting(true);
     const { error } = await supabase.from('prices').insert({
       product_id: selectedProduct.id,
-      product_name_raw: selectedProduct.name_uz,
+      product_name_raw: getProductName(selectedProduct, lang),
       price: parseInt(reportPrice),
       quantity: 1,
       latitude: reportLocation?.lat ?? null,
@@ -354,8 +368,8 @@ export default function App() {
                   className="w-full text-left px-4 py-3 hover:bg-stone-50 border-b border-stone-100 last:border-none flex items-center justify-between"
                 >
                   <div>
-                    <div className="text-sm font-medium">{p.name_uz}</div>
-                    <div className="text-xs text-stone-400">{p.name_ru}</div>
+                    <div className="text-sm font-medium">{getProductName(p, lang)}</div>
+                    <div className="text-xs text-stone-400">{getProductSecondary(p, lang)}</div>
                   </div>
                   <ChevronRight className="w-4 h-4 text-stone-300" />
                 </button>

@@ -19,7 +19,7 @@ const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 const BOT_COPY = {
   uz: {
     chooseLang: "Tilni tanlang:",
-    menuText: "Narxlarni bilish yoki yangi narx qo'shish uchun quyidagi tugmalardan foydalaning:",
+    menuText: "Narxlarni bilish yoki yangi narx qo'shish uchun quyidagi tugmalardan foydalaning:\nChekni tekshirish uchun soliq.uz havolasini yuboring.",
     missingMiniApp: "Mini ilova havolasi sozlanmagan. Keyinroq urinib ko'ring.",
     missingReceipt: "Kechirasiz, chek havolasi topilmadi. ❌",
     processing: 'Chek tekshirilmoqda... ⏳',
@@ -33,7 +33,7 @@ const BOT_COPY = {
   },
   ru: {
     chooseLang: "Выберите язык:",
-    menuText: "Чтобы найти цены или добавить новую цену, используйте кнопки ниже:",
+    menuText: "Чтобы найти цены или добавить новую цену, используйте кнопки ниже:\nДля проверки чека отправьте ссылку soliq.uz.",
     missingMiniApp: "Ссылка на мини‑приложение не настроена. Попробуйте позже.",
     missingReceipt: "Не удалось найти ссылку на чек. ❌",
     processing: 'Проверяем чек... ⏳',
@@ -47,7 +47,7 @@ const BOT_COPY = {
   },
   en: {
     chooseLang: 'Choose a language:',
-    menuText: 'To find prices or add a new price, use the buttons below:',
+    menuText: 'To find prices or add a new price, use the buttons below:\nTo check a receipt, send a soliq.uz link.',
     missingMiniApp: 'Mini App URL is not configured. Please try again later.',
     missingReceipt: 'Receipt link not found. ❌',
     processing: 'Checking receipt... ⏳',
