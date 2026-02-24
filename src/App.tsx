@@ -519,7 +519,7 @@ export default function App() {
                     )}
                   </MapContainer>
                   {!reportLocation && (
-                    <div className="absolute inset-0 flex items-center justify-center text-sm text-stone-500 bg-white/70">
+                    <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-stone-500 bg-white/70">
                       {t.locationHint}
                     </div>
                   )}
