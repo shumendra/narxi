@@ -348,11 +348,11 @@ exports.handler = async (event) => {
   }
 
   if (payload?.message) {
-    void handleMessage(payload.message);
+    await handleMessage(payload.message);
   }
 
   if (payload?.callback_query) {
-    void handleCallback(payload.callback_query);
+    await handleCallback(payload.callback_query);
   }
 
   return { statusCode: 200, body: JSON.stringify({ ok: true }) };
