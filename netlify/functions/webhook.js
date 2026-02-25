@@ -16,6 +16,7 @@ const MINI_APP_URL = process.env.TELEGRAM_MINI_APP_URL || '';
 const ADMIN_TELEGRAM_ID = '7240925672';
 
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
+const DIAGNOSTIC_URL = 'https://ofd.soliq.uz/';
 
 const rateLimitCounter = {};
 
@@ -799,6 +800,48 @@ async function handleCallback(callbackQuery) {
 }
 
 exports.handler = async (event) => {
+  if (event.httpMethod === 'GET' && event.queryStringParameters?.diag === '1') {
+    const results = {
+      ok: false,
+      dns: null,
+      tcp: null,
+      http: null,
+      error: null,
+    };
+
+    try {
+      const dnsLookup = await new Promise((resolve, reject) => {
+        require('dns').lookup('ofd.soliq.uz', (err, address) => {
+          if (err) reject(err);
+          else resolve(address);
+        });
+      });
+      results.dns = dnsLookup;
+
+      const start = Date.now();
+      const response = await axios.get(DIAGNOSTIC_URL, {
+        timeout: 8000,
+        validateStatus: () => true,
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        },
+      });
+      results.tcp = Date.now() - start;
+      results.http = {
+        status: response.status,
+        headers: response.headers,
+      };
+      results.ok = true;
+    } catch (error) {
+      results.error = String(error.message || error);
+    }
+
+    return {
+      statusCode: 200,
+      body: JSON.stringify(results),
+    };
+  }
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405, body: 'Method Not Allowed' };
   }
