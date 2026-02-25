@@ -41,6 +41,18 @@ const BOT_COPY = {
     appealNoText: "Iltimos, murojaatingizni yozing. Masalan: /appeal Men xato qildim",
     appealAccepted: "Murojaatingiz qabul qilindi. Ko'rib chiqilgandan so'ng javob beramiz.",
     appealDisabled: "Murojaat yuborish imkoni yo'q.",
+    pendingEmpty: "Hech qanday taklif yo'q ✅",
+    pendingMore: (count) => `Yana ${count} ta taklif bor. /pending buyrug'ini qayta yuboring.`,
+    statsTitle: '📊 Narxi statistikasi:',
+    blockedEmpty: "Bloklangan foydalanuvchilar yo'q",
+    unblockOk: (id) => `✅ ${id} blokdan chiqarildi`,
+    appealsEmpty: "Hech qanday murojaat yo'q ✅",
+    approvedText: '✅ Tasdiqlandi',
+    rejectedText: '❌ Rad etildi',
+    blockedText: (id) => `🚫 ${id} bloklandi`,
+    blockedNotice: "Foydalanuvchi bloklandi. /unblock [telegram_id] bilan qaytarish mumkin.",
+    appealApprovedText: '✅ Blokdan chiqarildi',
+    appealRejectedText: '❌ Rad etildi',
     btnFind: 'Narx topish 🔍',
     btnReport: "Narx kiritish ➕",
   },
@@ -64,6 +76,18 @@ const BOT_COPY = {
     appealNoText: "Пожалуйста, напишите обращение. Например: /appeal Я исправлюсь",
     appealAccepted: "Ваше обращение принято. Мы ответим после проверки.",
     appealDisabled: "Отправка обращений недоступна.",
+    pendingEmpty: 'Нет предложений ✅',
+    pendingMore: (count) => `Осталось ${count} предложений. Отправьте /pending снова.`,
+    statsTitle: '📊 Статистика Narxi:',
+    blockedEmpty: 'Нет заблокированных пользователей',
+    unblockOk: (id) => `✅ ${id} разблокирован`,
+    appealsEmpty: 'Нет обращений ✅',
+    approvedText: '✅ Одобрено',
+    rejectedText: '❌ Отклонено',
+    blockedText: (id) => `🚫 ${id} заблокирован`,
+    blockedNotice: 'Пользователь заблокирован. Можно вернуть через /unblock [telegram_id].',
+    appealApprovedText: '✅ Разблокирован',
+    appealRejectedText: '❌ Отклонено',
     btnFind: 'Найти цену 🔍',
     btnReport: 'Добавить цену ➕',
   },
@@ -87,6 +111,18 @@ const BOT_COPY = {
     appealNoText: 'Please write your appeal. Example: /appeal I will do better',
     appealAccepted: 'Your appeal was received. We will respond after review.',
     appealDisabled: 'Appeals are not available.',
+    pendingEmpty: 'No pending submissions ✅',
+    pendingMore: (count) => `There are ${count} more submissions. Send /pending again.`,
+    statsTitle: '📊 Narxi statistics:',
+    blockedEmpty: 'No blocked users',
+    unblockOk: (id) => `✅ ${id} unblocked`,
+    appealsEmpty: 'No appeals ✅',
+    approvedText: '✅ Approved',
+    rejectedText: '❌ Rejected',
+    blockedText: (id) => `🚫 ${id} blocked`,
+    blockedNotice: 'User blocked. Restore with /unblock [telegram_id].',
+    appealApprovedText: '✅ Unblocked',
+    appealRejectedText: '❌ Rejected',
     btnFind: 'Find price 🔍',
     btnReport: 'Add price ➕',
   },
@@ -448,7 +484,7 @@ async function handleMessage(message) {
         .limit(10);
 
       if (!pending || pending.length === 0) {
-        await sendTelegramMessage(chatId, { text: "Hech qanday taklif yo'q ✅" });
+        await sendTelegramMessage(chatId, { text: BOT_COPY[lang].pendingEmpty });
         return;
       }
 
@@ -475,7 +511,7 @@ async function handleMessage(message) {
 
       const remaining = (count || 0) - pending.length;
       if (remaining > 0) {
-        await sendTelegramMessage(chatId, { text: `Yana ${remaining} ta taklif bor. /pending buyrug'ini qayta yuboring.` });
+        await sendTelegramMessage(chatId, { text: BOT_COPY[lang].pendingMore(remaining) });
       }
       return;
     }
@@ -492,7 +528,7 @@ async function handleMessage(message) {
 
       await sendTelegramMessage(chatId, {
         text:
-          `📊 Narxi statistikasi:\n\n` +
+          `${BOT_COPY[lang].statsTitle}\n\n` +
           `✅ Tasdiqlangan narxlar: ${pricesCount || 0}\n` +
           `⏳ Kutilayotgan: ${pendingCount || 0}\n` +
           `❌ Rad etilgan: ${rejectedCount || 0}\n` +
@@ -510,7 +546,7 @@ async function handleMessage(message) {
         .order('blocked_at', { ascending: false });
 
       if (!blockedUsers || blockedUsers.length === 0) {
-        await sendTelegramMessage(chatId, { text: "Bloklangan foydalanuvchilar yo'q" });
+        await sendTelegramMessage(chatId, { text: BOT_COPY[lang].blockedEmpty });
         return;
       }
 
@@ -524,7 +560,7 @@ async function handleMessage(message) {
       const targetId = parts[1];
       if (targetId) {
         await supabase.from('blocked_users').delete().eq('telegram_id', targetId);
-        await sendTelegramMessage(chatId, { text: `✅ ${targetId} blokdan chiqarildi` });
+        await sendTelegramMessage(chatId, { text: BOT_COPY[lang].unblockOk(targetId) });
       }
       return;
     }
@@ -537,7 +573,7 @@ async function handleMessage(message) {
         .order('created_at', { ascending: true });
 
       if (!appeals || appeals.length === 0) {
-        await sendTelegramMessage(chatId, { text: 'Hech qanday murojaat yo\'q ✅' });
+        await sendTelegramMessage(chatId, { text: BOT_COPY[lang].appealsEmpty });
         return;
       }
 
@@ -726,10 +762,11 @@ async function handleCallback(callbackQuery) {
 
     await supabase.from('pending_prices').update({ status: 'approved' }).eq('id', id);
 
+    const adminLang = getUserLang(callbackQuery?.from?.language_code);
     await axios.post(`${TELEGRAM_API}/editMessageText`, {
       chat_id: chatId,
       message_id: callbackQuery?.message?.message_id,
-      text: '✅ Tasdiqlandi',
+      text: BOT_COPY[adminLang].approvedText,
     });
     return;
   }
@@ -737,10 +774,11 @@ async function handleCallback(callbackQuery) {
   if (data.startsWith('reject_')) {
     const id = data.replace('reject_', '');
     await supabase.from('pending_prices').update({ status: 'rejected' }).eq('id', id);
+    const adminLang = getUserLang(callbackQuery?.from?.language_code);
     await axios.post(`${TELEGRAM_API}/editMessageText`, {
       chat_id: chatId,
       message_id: callbackQuery?.message?.message_id,
-      text: '❌ Rad etildi',
+      text: BOT_COPY[adminLang].rejectedText,
     });
     return;
   }
@@ -759,14 +797,15 @@ async function handleCallback(callbackQuery) {
 
     await supabase.from('pending_prices').update({ status: 'rejected' }).eq('id', pendingId);
 
+    const adminLang = getUserLang(callbackQuery?.from?.language_code);
     await axios.post(`${TELEGRAM_API}/editMessageText`, {
       chat_id: chatId,
       message_id: callbackQuery?.message?.message_id,
-      text: `🚫 ${targetId} bloklandi`,
+      text: BOT_COPY[adminLang].blockedText(targetId),
     });
 
     await sendTelegramMessage(chatId, {
-      text: "Foydalanuvchi bloklandi. /unblock [telegram_id] bilan qaytarish mumkin.",
+      text: BOT_COPY[adminLang].blockedNotice,
     });
     return;
   }
@@ -780,10 +819,11 @@ async function handleCallback(callbackQuery) {
     await supabase.from('appeals').update({ status: 'approved' }).eq('id', appealId);
 
     await sendTelegramMessage(targetId, { text: "Murojaaatingiz ko'rib chiqildi. Siz tizimga qaytadingiz ✅" });
+    const adminLang = getUserLang(callbackQuery?.from?.language_code);
     await axios.post(`${TELEGRAM_API}/editMessageText`, {
       chat_id: chatId,
       message_id: callbackQuery?.message?.message_id,
-      text: '✅ Blokdan chiqarildi',
+      text: BOT_COPY[adminLang].appealApprovedText,
     });
     return;
   }
@@ -791,10 +831,11 @@ async function handleCallback(callbackQuery) {
   if (data.startsWith('appeal_reject_')) {
     const appealId = data.replace('appeal_reject_', '');
     await supabase.from('appeals').update({ status: 'rejected' }).eq('id', appealId);
+    const adminLang = getUserLang(callbackQuery?.from?.language_code);
     await axios.post(`${TELEGRAM_API}/editMessageText`, {
       chat_id: chatId,
       message_id: callbackQuery?.message?.message_id,
-      text: '❌ Rad etildi',
+      text: BOT_COPY[adminLang].appealRejectedText,
     });
   }
 }
