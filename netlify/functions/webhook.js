@@ -13,8 +13,11 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const MINI_APP_URL = process.env.TELEGRAM_MINI_APP_URL || '';
+const ADMIN_TELEGRAM_ID = '7240925672';
 
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
+
+const rateLimitCounter = {};
 
 const BOT_COPY = {
   uz: {
@@ -28,6 +31,15 @@ const BOT_COPY = {
     alreadyAdded: "Bu chek allaqachon qo'shilgan. ✅",
     serverError: "Server sozlamalarida xatolik. Keyinroq urinib ko'ring.",
     saveFailed: "Hozircha saqlab bo'lmadi. Keyinroq urinib ko'ring.",
+    scrapeFailed: "Chekni o'qishda xatolik yuz berdi. Iltimos, havolani tekshirib qayta yuboring 🔄",
+    noItems: "Chekda mahsulotlar topilmadi. Bu chek bo'sh yoki format qo'llab-quvvatlanmaydi.",
+    rateLimited: "Juda ko'p ma'lumot yuborildi. Iltimos keyinroq urinib ko'ring 🕐",
+    blocked: "Siz tizimdan bloklangansiz.",
+    blockedAppeal: "Siz takliflar yuborishdan vaqtincha bloklangansiz.\n\nAgar bu xato deb hisoblasangiz, /appeal buyrug'i orqali murojaat yuboring.",
+    appealNotBlocked: "Siz bloklangan emassiz.",
+    appealNoText: "Iltimos, murojaatingizni yozing. Masalan: /appeal Men xato qildim",
+    appealAccepted: "Murojaatingiz qabul qilindi. Ko'rib chiqilgandan so'ng javob beramiz.",
+    appealDisabled: "Murojaat yuborish imkoni yo'q.",
     btnFind: 'Narx topish 🔍',
     btnReport: "Narx kiritish ➕",
   },
@@ -42,6 +54,15 @@ const BOT_COPY = {
     alreadyAdded: "Этот чек уже был добавлен. ✅",
     serverError: "Ошибка настроек сервера. Попробуйте позже.",
     saveFailed: "Сейчас не удалось сохранить. Попробуйте позже.",
+    scrapeFailed: "Не удалось прочитать чек. Проверьте ссылку и отправьте снова 🔄",
+    noItems: "В чеке нет товаров. Возможно, чек пустой или формат не поддерживается.",
+    rateLimited: "Слишком много данных. Попробуйте позже 🕐",
+    blocked: "Вы заблокированы.",
+    blockedAppeal: "Вы временно заблокированы от отправки.\n\nЕсли это ошибка, отправьте /appeal.",
+    appealNotBlocked: "Вы не заблокированы.",
+    appealNoText: "Пожалуйста, напишите обращение. Например: /appeal Я исправлюсь",
+    appealAccepted: "Ваше обращение принято. Мы ответим после проверки.",
+    appealDisabled: "Отправка обращений недоступна.",
     btnFind: 'Найти цену 🔍',
     btnReport: 'Добавить цену ➕',
   },
@@ -56,6 +77,15 @@ const BOT_COPY = {
     alreadyAdded: 'This receipt was already added. ✅',
     serverError: 'Server configuration error. Please try again later.',
     saveFailed: 'Could not save right now. Please try again later.',
+    scrapeFailed: 'Could not read the receipt. Please check the link and resend 🔄',
+    noItems: 'No items found on the receipt. It may be empty or unsupported.',
+    rateLimited: 'Too much data sent. Please try again later 🕐',
+    blocked: 'You are blocked from the system.',
+    blockedAppeal: 'You are temporarily blocked from sending.\n\nIf this is a mistake, send /appeal.',
+    appealNotBlocked: 'You are not blocked.',
+    appealNoText: 'Please write your appeal. Example: /appeal I will do better',
+    appealAccepted: 'Your appeal was received. We will respond after review.',
+    appealDisabled: 'Appeals are not available.',
     btnFind: 'Find price 🔍',
     btnReport: 'Add price ➕',
   },
@@ -64,7 +94,7 @@ const BOT_COPY = {
 function extractReceiptDate($) {
   const datePatterns = [
     /\b(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}:\d{2}:\d{2}))?\b/,
-    /\b(\d{2}\.\d{2}\.\d{4})(?:\s+(\d{2}:\d{2}:\d{2}))?\b/,
+    /\b(\d{2}\.\d{2}\.\d{4})(?:,?\s*(\d{2}:\d{2}(?::\d{2})?))?\b/,
   ];
 
   const labeled = $('*:contains("Sana"), *:contains("Vaqt"), *:contains("Дата"), *:contains("Время")');
@@ -90,6 +120,22 @@ function extractReceiptDate($) {
 }
 
 function findItemsTable($) {
+  const soliqTable = $('table.products-tables');
+  if (soliqTable.length > 0) {
+    const headerCells = soliqTable.find('thead tr').first().find('th, td');
+    const headers = headerCells
+      .toArray()
+      .map(cell => $(cell).text().trim().toLowerCase());
+
+    const hasName = headers.some(h => h.includes('nomi'));
+    const hasQty = headers.some(h => h.includes('soni'));
+    const hasPrice = headers.some(h => h.includes('narxi'));
+
+    if (hasName && hasQty && hasPrice) {
+      return { table: soliqTable, headers };
+    }
+  }
+
   const tables = $('table');
   for (const table of tables.toArray()) {
     const headerCells = $(table).find('tr').first().find('th, td');
@@ -118,8 +164,17 @@ async function scrapeSoliq(url) {
     });
     const $ = cheerio.load(data);
 
-    const storeName = $('h1, .company-name, b').first().text().trim() || "Noma'lum do'kon";
-    const storeAddress = $('.address, .company-address').first().text().trim() || 'Toshkent sh.';
+    const storeHeader = $('h3').filter((_, el) => $(el).text().includes('"') || $(el).text().includes('MCHJ') || $(el).text().includes('JAMIYAT')).first();
+    const storeName = storeHeader.text().trim() || $('h1, .company-name, b').first().text().trim() || "Noma'lum do'kon";
+    const storeBlock = storeHeader.closest('td');
+    const storeAddress = storeBlock
+      .clone()
+      .find('h3')
+      .remove()
+      .end()
+      .text()
+      .replace(/\s+/g, ' ')
+      .trim() || $('.address, .company-address').first().text().trim() || 'Toshkent sh.';
     const receiptDateRaw = extractReceiptDate($);
     const parsedDate = receiptDateRaw ? new Date(receiptDateRaw) : null;
     const receiptDate = parsedDate && !Number.isNaN(parsedDate.getTime())
@@ -134,25 +189,25 @@ async function scrapeSoliq(url) {
       const qtyIndex = headers.findIndex(h => h.includes('soni'));
       const priceIndex = headers.findIndex(h => h.includes('narxi'));
 
-      $(table)
-        .find('tr')
-        .slice(1)
-        .each((_, el) => {
-          const cols = $(el).find('td');
-          if (cols.length === 0) return;
+      const rows = $(table).find('tbody tr.products-row');
+      const targetRows = rows.length > 0 ? rows : $(table).find('tr').slice(1);
 
-          const name = $(cols[nameIndex]).text().trim();
-          const quantityStr = $(cols[qtyIndex]).text().trim().replace(',', '.');
-          const priceStr = $(cols[priceIndex]).text().trim().replace(/\s/g, '').replace(',', '.');
+      targetRows.each((_, el) => {
+        const cols = $(el).find('td');
+        if (cols.length === 0) return;
 
-          const quantity = Number.parseFloat(quantityStr) || 1;
-          const totalPrice = Number.parseFloat(priceStr) || 0;
-          const unitPrice = quantity > 0 ? Math.round(totalPrice / quantity) : totalPrice;
+        const name = $(cols[nameIndex]).text().trim();
+        const quantityStr = $(cols[qtyIndex]).text().trim().replace(',', '.');
+        const priceStr = $(cols[priceIndex]).text().trim().replace(/\s/g, '').replace(',', '.');
 
-          if (name && totalPrice > 0) {
-            items.push({ name, quantity, totalPrice, unitPrice });
-          }
-        });
+        const quantity = Number.parseFloat(quantityStr) || 1;
+        const totalPrice = Number.parseFloat(priceStr) || 0;
+        const unitPrice = quantity > 0 ? Math.round(totalPrice / quantity) : totalPrice;
+
+        if (name && totalPrice > 0) {
+          items.push({ name, quantity, totalPrice, unitPrice });
+        }
+      });
     }
 
     return { storeName, storeAddress, items, receiptDate };
@@ -191,6 +246,20 @@ async function sendTelegramMessage(chatId, payload) {
   await axios.post(`${TELEGRAM_API}/sendMessage`, {
     chat_id: chatId,
     ...payload,
+  });
+}
+
+async function sendTelegramPhoto(chatId, photoUrl, caption, replyMarkup) {
+  if (!TELEGRAM_TOKEN) {
+    console.error('Missing TELEGRAM_BOT_TOKEN');
+    return;
+  }
+  await axios.post(`${TELEGRAM_API}/sendPhoto`, {
+    chat_id: chatId,
+    photo: photoUrl,
+    caption,
+    parse_mode: 'HTML',
+    reply_markup: replyMarkup,
   });
 }
 
@@ -261,10 +330,57 @@ function extractSoliqUrl(message) {
   return match ? match[0] : null;
 }
 
+function formatPendingItem(item, matchedName, unitLabel) {
+  const unitPrice = item.unit_price || item.price || 0;
+  const total = item.price || 0;
+  const quantity = item.quantity || 1;
+  const dateText = item.receipt_date || item.created_at;
+  const sourceLabel = item.source === 'soliq_qr' ? 'Soliq QR' : "Qo'lda kiritilgan";
+  const matchText = matchedName ? `${item.match_confidence || 0}% — ${matchedName}` : `${item.match_confidence || 0}% — Topilmadi`;
+
+  return (
+    `📦 ${item.product_name_raw}\n` +
+    `💰 Narx: ${unitPrice} so'm/${unitLabel} (jami: ${total} so'm x ${quantity})\n` +
+    `🏪 Do'kon: ${item.place_name || '-'}\n` +
+    `📍 Manzil: ${item.place_address || '-'}\n` +
+    `📅 Sana: ${dateText || '-'}\n` +
+    `🔗 Manba: ${sourceLabel}\n` +
+    `👤 ID: ${item.submitted_by}\n` +
+    `🎯 Moslik: ${matchText}`
+  );
+}
+
+async function isAdmin(telegramId) {
+  return telegramId === ADMIN_TELEGRAM_ID;
+}
+
+async function getProductsIndex() {
+  const { data: products } = await supabase.from('products').select('id, name_uz, name_ru, name_en, unit');
+  return products || [];
+}
+
 async function handleMessage(message) {
   const text = message.text || '';
   const chatId = message.chat?.id;
   const lang = getUserLang(message.from?.language_code);
+  const telegramId = message?.from?.id?.toString();
+
+  if (!chatId || !telegramId) return;
+
+  const { data: blockedUser } = await supabase
+    .from('blocked_users')
+    .select('telegram_id, can_appeal')
+    .eq('telegram_id', telegramId)
+    .maybeSingle();
+
+  if (blockedUser) {
+    if (blockedUser.can_appeal) {
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].blockedAppeal });
+    } else {
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].blocked });
+    }
+    return;
+  }
 
   if (!chatId) return;
 
@@ -273,6 +389,163 @@ async function handleMessage(message) {
   if (normalizedText.startsWith('/start')) {
     await sendLanguagePicker(chatId);
     return;
+  }
+
+  if (normalizedText.startsWith('/appeal')) {
+    const appealText = normalizedText.replace('/appeal', '').trim();
+    const { data: blocked } = await supabase
+      .from('blocked_users')
+      .select('telegram_id, can_appeal')
+      .eq('telegram_id', telegramId)
+      .maybeSingle();
+
+    if (!blocked) {
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].appealNotBlocked });
+      return;
+    }
+    if (!blocked.can_appeal) {
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].appealDisabled });
+      return;
+    }
+    if (!appealText) {
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].appealNoText });
+      return;
+    }
+
+    await supabase.from('appeals').insert({
+      telegram_id: telegramId,
+      appeal_message: appealText,
+      status: 'pending',
+    });
+
+    await sendTelegramMessage(chatId, { text: BOT_COPY[lang].appealAccepted });
+    return;
+  }
+
+  if (await isAdmin(telegramId)) {
+    if (normalizedText.startsWith('/pending')) {
+      const { data: pending, count } = await supabase
+        .from('pending_prices')
+        .select('*, products(name_uz, unit)', { count: 'exact' })
+        .eq('status', 'pending')
+        .order('created_at', { ascending: true })
+        .limit(10);
+
+      if (!pending || pending.length === 0) {
+        await sendTelegramMessage(chatId, { text: "Hech qanday taklif yo'q ✅" });
+        return;
+      }
+
+      for (const item of pending) {
+        const matchedName = item.products?.name_uz || null;
+        const unitLabel = item.products?.unit || 'dona';
+        const textBlock = formatPendingItem(item, matchedName, unitLabel);
+        const keyboard = {
+          inline_keyboard: [
+            [
+              { text: '✅ Tasdiqlash', callback_data: `approve_${item.id}` },
+              { text: '❌ Rad etish', callback_data: `reject_${item.id}` },
+              { text: '🚫 Bloklash', callback_data: `block_${item.submitted_by}_${item.id}` },
+            ],
+          ],
+        };
+
+        if (item.photo_url) {
+          await sendTelegramPhoto(chatId, item.photo_url, textBlock, keyboard);
+        } else {
+          await sendTelegramMessage(chatId, { text: textBlock, reply_markup: keyboard });
+        }
+      }
+
+      const remaining = (count || 0) - pending.length;
+      if (remaining > 0) {
+        await sendTelegramMessage(chatId, { text: `Yana ${remaining} ta taklif bor. /pending buyrug'ini qayta yuboring.` });
+      }
+      return;
+    }
+
+    if (normalizedText.startsWith('/stats')) {
+      const [{ count: pricesCount }, { count: pendingCount }, { count: rejectedCount }, { count: productsCount }, { count: blockedCount }, { count: appealsCount }] = await Promise.all([
+        supabase.from('prices').select('id', { count: 'exact', head: true }),
+        supabase.from('pending_prices').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
+        supabase.from('pending_prices').select('id', { count: 'exact', head: true }).eq('status', 'rejected'),
+        supabase.from('products').select('id', { count: 'exact', head: true }),
+        supabase.from('blocked_users').select('telegram_id', { count: 'exact', head: true }),
+        supabase.from('appeals').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
+      ]);
+
+      await sendTelegramMessage(chatId, {
+        text:
+          `📊 Narxi statistikasi:\n\n` +
+          `✅ Tasdiqlangan narxlar: ${pricesCount || 0}\n` +
+          `⏳ Kutilayotgan: ${pendingCount || 0}\n` +
+          `❌ Rad etilgan: ${rejectedCount || 0}\n` +
+          `📦 Mahsulotlar: ${productsCount || 0}\n` +
+          `🚫 Bloklangan: ${blockedCount || 0}\n` +
+          `📨 Murojaatlar: ${appealsCount || 0}`,
+      });
+      return;
+    }
+
+    if (normalizedText.startsWith('/blocked')) {
+      const { data: blockedUsers } = await supabase
+        .from('blocked_users')
+        .select('telegram_id, blocked_at')
+        .order('blocked_at', { ascending: false });
+
+      if (!blockedUsers || blockedUsers.length === 0) {
+        await sendTelegramMessage(chatId, { text: "Bloklangan foydalanuvchilar yo'q" });
+        return;
+      }
+
+      const lines = blockedUsers.map(user => `🚫 ${user.telegram_id} — ${user.blocked_at}`).join('\n');
+      await sendTelegramMessage(chatId, { text: lines });
+      return;
+    }
+
+    if (normalizedText.startsWith('/unblock')) {
+      const parts = normalizedText.split(' ');
+      const targetId = parts[1];
+      if (targetId) {
+        await supabase.from('blocked_users').delete().eq('telegram_id', targetId);
+        await sendTelegramMessage(chatId, { text: `✅ ${targetId} blokdan chiqarildi` });
+      }
+      return;
+    }
+
+    if (normalizedText.startsWith('/appeals')) {
+      const { data: appeals } = await supabase
+        .from('appeals')
+        .select('*')
+        .eq('status', 'pending')
+        .order('created_at', { ascending: true });
+
+      if (!appeals || appeals.length === 0) {
+        await sendTelegramMessage(chatId, { text: 'Hech qanday murojaat yo\'q ✅' });
+        return;
+      }
+
+      for (const appeal of appeals) {
+        const textBlock =
+          `📨 Murojaat\n\n` +
+          `👤 ID: ${appeal.telegram_id}\n` +
+          `💬 Xabar: ${appeal.appeal_message}\n` +
+          `📅 Sana: ${appeal.created_at}\n`;
+
+        await sendTelegramMessage(chatId, {
+          text: textBlock,
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '✅ Blokdan chiqarish', callback_data: `appeal_approve_${appeal.telegram_id}_${appeal.id}` },
+                { text: '❌ Rad etish', callback_data: `appeal_reject_${appeal.id}` },
+              ],
+            ],
+          },
+        });
+      }
+      return;
+    }
   }
 
   if (normalizedText.includes('soliq.uz')) {
@@ -289,49 +562,87 @@ async function handleMessage(message) {
       return;
     }
 
+    const { data: alreadyProcessed } = await supabase
+      .from('receipts_log')
+      .select('receipt_url')
+      .eq('receipt_url', receiptUrl)
+      .maybeSingle();
+
+    if (alreadyProcessed) {
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].alreadyAdded });
+      return;
+    }
+
     const receiptData = await scrapeSoliq(receiptUrl);
+    if (!receiptData) {
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].scrapeFailed });
+      return;
+    }
+
     if (receiptData && receiptData.items.length > 0) {
       try {
-        const { data: existing } = await supabase
-          .from('prices')
-          .select('id')
-          .eq('place_name', receiptData.storeName)
-          .eq('receipt_date', receiptData.receiptDate)
-          .eq('submitted_by', String(message.from?.id || chatId))
-          .eq('source', 'soliq_qr')
-          .limit(1);
-
-        if (existing && existing.length > 0) {
-          await sendTelegramMessage(chatId, { text: BOT_COPY[lang].alreadyAdded });
+        const currentCount = rateLimitCounter[telegramId] || 0;
+        if (currentCount + receiptData.items.length > 10) {
+          await sendTelegramMessage(chatId, { text: BOT_COPY[lang].rateLimited });
           return;
         }
+        rateLimitCounter[telegramId] = currentCount + receiptData.items.length;
 
-        let savedCount = 0;
-        for (const item of receiptData.items) {
-          const productMatch = await findProductMatch(item.name);
-          await supabase.from('prices').insert({
+        const products = await getProductsIndex();
+
+        const inserts = receiptData.items.map(async item => {
+          let bestMatch = null;
+          let highestScore = 0;
+
+          for (const product of products) {
+            const candidates = [product.name_uz, product.name_ru, product.name_en].filter(Boolean);
+            const scores = candidates.map(name => fuzzball.ratio(item.name.toLowerCase(), name.toLowerCase()));
+            const score = Math.max(...scores, 0);
+            if (score > highestScore) {
+              highestScore = score;
+              bestMatch = product;
+            }
+          }
+
+          return supabase.from('pending_prices').insert({
             product_name_raw: item.name,
-            product_id: productMatch?.id || null,
-            price: item.unitPrice,
+            product_id: bestMatch?.id || null,
+            match_confidence: highestScore,
+            price: item.totalPrice,
             quantity: item.quantity,
+            unit_price: item.unitPrice,
             place_name: receiptData.storeName,
             place_address: receiptData.storeAddress,
+            receipt_url: receiptUrl,
             receipt_date: receiptData.receiptDate,
-            submitted_by: String(message.from?.id || chatId),
             source: 'soliq_qr',
+            submitted_by: telegramId,
           });
-          savedCount++;
-        }
+        });
+
+        await Promise.all(inserts);
+
+        await supabase.from('receipts_log').insert({
+          receipt_url: receiptUrl,
+          submitted_by: telegramId,
+          item_count: receiptData.items.length,
+        });
 
         await sendTelegramMessage(chatId, {
-          text: BOT_COPY[lang].saved(savedCount, receiptData.storeName),
+          text:
+            `✅ Chek qabul qilindi!\n\n` +
+            `🏪 Do'kon: ${receiptData.storeName}\n` +
+            `📍 Manzil: ${receiptData.storeAddress}\n` +
+            `📦 Mahsulotlar: ${receiptData.items.length} ta\n` +
+            `⏳ Ko'rib chiqilmoqda...\n\n` +
+            `Rahmat! Siz Toshkent aholisiga narxlarni bilishga yordam berdingiz 🙌`,
         });
       } catch (error) {
         console.error('Supabase insert error:', error);
         await sendTelegramMessage(chatId, { text: BOT_COPY[lang].saveFailed });
       }
     } else {
-      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].unreadable });
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].noItems });
     }
     return;
   }
@@ -341,7 +652,12 @@ async function handleMessage(message) {
 
 async function handleCallback(callbackQuery) {
   const chatId = callbackQuery?.message?.chat?.id;
+  const telegramId = callbackQuery?.from?.id?.toString();
   if (!chatId) return;
+
+  if (!telegramId || !(await isAdmin(telegramId))) {
+    return;
+  }
 
   if (callbackQuery.id) {
     await answerCallbackQuery(callbackQuery.id);
@@ -353,6 +669,117 @@ async function handleCallback(callbackQuery) {
     if (lang === 'uz' || lang === 'ru' || lang === 'en') {
       await sendMenu(chatId, lang);
     }
+    return;
+  }
+
+  if (data.startsWith('approve_')) {
+    const id = data.replace('approve_', '');
+    const { data: pending } = await supabase
+      .from('pending_prices')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (!pending) return;
+
+    let productId = pending.product_id;
+    if (!productId) {
+      const { data: created } = await supabase
+        .from('products')
+        .insert({ name_uz: pending.product_name_raw, name_ru: '', name_en: '', category: 'Boshqa', unit: 'dona' })
+        .select('id')
+        .single();
+      productId = created?.id || null;
+    }
+
+    await supabase.from('prices').insert({
+      product_id: productId,
+      product_name_raw: pending.product_name_raw,
+      price: pending.price,
+      quantity: pending.quantity,
+      unit_price: pending.unit_price,
+      place_name: pending.place_name,
+      place_address: pending.place_address,
+      latitude: pending.latitude,
+      longitude: pending.longitude,
+      receipt_date: pending.receipt_date,
+      submitted_by: pending.submitted_by,
+      source: pending.source,
+      photo_url: pending.photo_url,
+    });
+
+    await supabase.from('pending_prices').update({ status: 'approved' }).eq('id', id);
+
+    await axios.post(`${TELEGRAM_API}/editMessageText`, {
+      chat_id: chatId,
+      message_id: callbackQuery?.message?.message_id,
+      text: '✅ Tasdiqlandi',
+    });
+    return;
+  }
+
+  if (data.startsWith('reject_')) {
+    const id = data.replace('reject_', '');
+    await supabase.from('pending_prices').update({ status: 'rejected' }).eq('id', id);
+    await axios.post(`${TELEGRAM_API}/editMessageText`, {
+      chat_id: chatId,
+      message_id: callbackQuery?.message?.message_id,
+      text: '❌ Rad etildi',
+    });
+    return;
+  }
+
+  if (data.startsWith('block_')) {
+    const parts = data.replace('block_', '').split('_');
+    const targetId = parts[0];
+    const pendingId = parts[1];
+
+    await supabase.from('blocked_users').upsert({
+      telegram_id: targetId,
+      blocked_by: ADMIN_TELEGRAM_ID,
+      reason: 'Admin tomonidan bloklandi',
+      can_appeal: true,
+    });
+
+    await supabase.from('pending_prices').update({ status: 'rejected' }).eq('id', pendingId);
+
+    await axios.post(`${TELEGRAM_API}/editMessageText`, {
+      chat_id: chatId,
+      message_id: callbackQuery?.message?.message_id,
+      text: `🚫 ${targetId} bloklandi`,
+    });
+
+    await sendTelegramMessage(chatId, {
+      text: "Foydalanuvchi bloklandi. /unblock [telegram_id] bilan qaytarish mumkin.",
+    });
+    return;
+  }
+
+  if (data.startsWith('appeal_approve_')) {
+    const parts = data.replace('appeal_approve_', '').split('_');
+    const targetId = parts[0];
+    const appealId = parts[1];
+
+    await supabase.from('blocked_users').delete().eq('telegram_id', targetId);
+    await supabase.from('appeals').update({ status: 'approved' }).eq('id', appealId);
+
+    await sendTelegramMessage(targetId, { text: "Murojaaatingiz ko'rib chiqildi. Siz tizimga qaytadingiz ✅" });
+    await axios.post(`${TELEGRAM_API}/editMessageText`, {
+      chat_id: chatId,
+      message_id: callbackQuery?.message?.message_id,
+      text: '✅ Blokdan chiqarildi',
+    });
+    return;
+  }
+
+  if (data.startsWith('appeal_reject_')) {
+    const appealId = data.replace('appeal_reject_', '');
+    await supabase.from('appeals').update({ status: 'rejected' }).eq('id', appealId);
+    await axios.post(`${TELEGRAM_API}/editMessageText`, {
+      chat_id: chatId,
+      message_id: callbackQuery?.message?.message_id,
+      text: '❌ Rad etildi',
+    });
   }
 }
 

@@ -92,7 +92,7 @@ export default function App() {
         tipTitle: 'Maslahat',
         tipBody: "Chekni skanerlash orqali narxlarni avtomatik qo'shishingiz mumkin. Buning uchun chekdagi QR kodni botga yuboring.",
         alertFill: "Iltimos, barcha maydonlarni to'ldiring",
-        alertSuccess: "Narx muvaffaqiyatli qo'shildi! Rahmat.",
+        alertSuccess: "Narxingiz yuborildi va ko'rib chiqilgandan so'ng qo'shiladi ✅",
         alertError: "Xatolik yuz berdi. Qayta urinib ko'ring.",
         locationHint: "Joylashuv tanlanmagan",
         photoLabel: "Chek rasmi (ixtiyoriy)",
@@ -119,7 +119,7 @@ export default function App() {
         tipTitle: 'Совет',
         tipBody: 'Можно автоматически добавлять цены через чек. Отправьте QR-код чека боту.',
         alertFill: 'Пожалуйста, заполните все поля',
-        alertSuccess: 'Цена успешно добавлена! Спасибо.',
+        alertSuccess: 'Цена отправлена и будет добавлена после проверки ✅',
         alertError: 'Произошла ошибка. Попробуйте еще раз.',
         locationHint: 'Локация не выбрана',
         photoLabel: 'Фото чека (необязательно)',
@@ -146,7 +146,7 @@ export default function App() {
         tipTitle: 'Tip',
         tipBody: 'You can auto-add prices by scanning receipts. Send the QR code to the bot.',
         alertFill: 'Please fill in all fields',
-        alertSuccess: 'Price added successfully! Thank you.',
+        alertSuccess: 'Your price was submitted and will be added after review ✅',
         alertError: 'Something went wrong. Please try again.',
         locationHint: 'Location not selected',
         photoLabel: 'Receipt photo (optional)',
@@ -253,22 +253,25 @@ export default function App() {
   };
 
   const handleReportSubmit = async () => {
-    if (!selectedProduct || !reportPrice || !reportLocation) {
+    if (!reportPrice || (!selectedProduct && !searchQuery.trim())) {
       window.Telegram?.WebApp?.showAlert(t.alertFill);
       return;
     }
 
     setSubmitting(true);
-    const { error } = await supabase.from('prices').insert({
-      product_id: selectedProduct.id,
-      product_name_raw: getProductName(selectedProduct, lang),
+    const manualName = selectedProduct ? getProductName(selectedProduct, lang) : searchQuery.trim();
+    const { error } = await supabase.from('pending_prices').insert({
+      product_id: selectedProduct?.id || null,
+      product_name_raw: manualName || searchQuery.trim(),
+      match_confidence: selectedProduct ? 100 : 0,
       price: parseInt(reportPrice),
       quantity: 1,
+      unit_price: parseInt(reportPrice),
       latitude: reportLocation?.lat ?? null,
       longitude: reportLocation?.lng ?? null,
       source: 'manual',
-      receipt_date: new Date().toISOString(),
-      submitted_by: window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || 'unknown'
+      submitted_by: window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || 'unknown',
+      photo_url: null,
     });
 
     setSubmitting(false);
@@ -559,7 +562,7 @@ export default function App() {
               </div>
 
               <button 
-                disabled={submitting || !selectedProduct || !reportPrice}
+                disabled={submitting || !reportPrice || (!selectedProduct && !searchQuery.trim())}
                 onClick={handleReportSubmit}
                 className="w-full bg-emerald-600 text-white py-4 rounded-xl font-bold text-lg shadow-lg shadow-emerald-200 active:scale-95 transition-all disabled:opacity-50 disabled:shadow-none"
               >
