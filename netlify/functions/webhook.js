@@ -154,14 +154,29 @@ function findItemsTable($) {
   return null;
 }
 
+async function fetchWithRetry(url, attempts = 2) {
+  let lastError = null;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      return await axios.get(url, {
+        timeout: 10000,
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+          'Accept-Language': 'uz,ru;q=0.8,en;q=0.6',
+        },
+      });
+    } catch (error) {
+      lastError = error;
+      if (i === attempts - 1) break;
+    }
+  }
+  throw lastError;
+}
+
 async function scrapeSoliq(url) {
   try {
-    const { data } = await axios.get(url, {
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-      },
-    });
+    const { data } = await fetchWithRetry(url);
     const $ = cheerio.load(data);
 
     const storeHeader = $('h3').filter((_, el) => $(el).text().includes('"') || $(el).text().includes('MCHJ') || $(el).text().includes('JAMIYAT')).first();
