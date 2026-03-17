@@ -9,7 +9,9 @@ dotenv.config({ path: '.env.local', override: true });
 
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
 const supabaseKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseKey);
+const supabase = (supabaseUrl && supabaseKey)
+  ? createClient(supabaseUrl, supabaseKey)
+  : null;
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const MINI_APP_URL = process.env.TELEGRAM_MINI_APP_URL || '';
@@ -402,6 +404,22 @@ function formatPendingItem(item, matchedName, unitLabel) {
   );
 }
 
+async function handleMessage(message) {
+  const chatId = message?.chat?.id;
+  const text = message?.text || '';
+  const normalizedText = text.trim().toLowerCase();
+  const telegramId = message?.from?.id?.toString();
+  const lang = getUserLang(message?.from?.language_code);
+
+  if (!chatId || !telegramId) {
+    return;
+  }
+
+  if (normalizedText === '/start') {
+    await sendLanguagePicker(chatId);
+    return;
+  }
+
   if (await isAdmin(telegramId)) {
     if (normalizedText.startsWith('/pending')) {
       // DEBUG: Log admin check and query
@@ -707,6 +725,8 @@ function formatPendingItem(item, matchedName, unitLabel) {
   await sendMenu(chatId, lang);
 }
 
+}
+
 async function handleCallback(callbackQuery) {
   const chatId = callbackQuery?.message?.chat?.id;
   const telegramId = callbackQuery?.from?.id?.toString();
@@ -888,6 +908,12 @@ exports.handler = async (event) => {
       body: JSON.stringify(results),
     };
   }
+
+  if (!supabase) {
+    console.error('Supabase environment variables are missing.');
+    return { statusCode: 200, body: JSON.stringify({ ok: false, error: 'SUPABASE_ENV_MISSING' }) };
+  }
+
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405, body: 'Method Not Allowed' };
   }
