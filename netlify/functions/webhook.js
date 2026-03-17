@@ -740,20 +740,21 @@ async function handleCallback(callbackQuery) {
   const telegramId = callbackQuery?.from?.id?.toString();
   if (!chatId) return;
 
-  if (!telegramId || !(await isAdmin(telegramId))) {
-    return;
-  }
+  const data = callbackQuery.data || '';
 
   if (callbackQuery.id) {
     await answerCallbackQuery(callbackQuery.id);
   }
 
-  const data = callbackQuery.data || '';
   if (data.startsWith('lang:')) {
     const lang = data.split(':')[1];
     if (lang === 'uz' || lang === 'ru' || lang === 'en') {
       await sendMenu(chatId, lang);
     }
+    return;
+  }
+
+  if (!telegramId || !(await isAdmin(telegramId))) {
     return;
   }
 
@@ -941,6 +942,16 @@ export const handler = async (event) => {
       await handleMessage(payload.message);
     } catch (error) {
       console.error('Failed to handle /start', error);
+    }
+    return { statusCode: 200, body: JSON.stringify({ ok: true }) };
+  }
+
+  const callbackData = payload?.callback_query?.data || '';
+  if (callbackData.startsWith('lang:')) {
+    try {
+      await handleCallback(payload.callback_query);
+    } catch (error) {
+      console.error('Failed to handle language callback', error);
     }
     return { statusCode: 200, body: JSON.stringify({ ok: true }) };
   }
