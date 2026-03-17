@@ -385,6 +385,12 @@ function extractSoliqUrl(message) {
   return match ? match[0] : null;
 }
 
+function getCommand(text) {
+  const normalizedText = (text || '').trim().toLowerCase();
+  const firstToken = normalizedText.split(' ')[0] || '';
+  return firstToken.includes('@') ? firstToken.split('@')[0] : firstToken;
+}
+
 function formatPendingItem(item, matchedName, unitLabel) {
   const unitPrice = item.unit_price || item.price || 0;
   const total = item.price || 0;
@@ -409,6 +415,7 @@ async function handleMessage(message) {
   const chatId = message?.chat?.id;
   const text = message?.text || '';
   const normalizedText = text.trim().toLowerCase();
+  const command = getCommand(text);
   const telegramId = message?.from?.id?.toString();
   const lang = getUserLang(message?.from?.language_code);
 
@@ -416,7 +423,7 @@ async function handleMessage(message) {
     return;
   }
 
-  if (normalizedText === '/start') {
+  if (command === '/start') {
     await sendLanguagePicker(chatId);
     return;
   }
@@ -910,11 +917,6 @@ export const handler = async (event) => {
     };
   }
 
-  if (!supabase) {
-    console.error('Supabase environment variables are missing.');
-    return { statusCode: 200, body: JSON.stringify({ ok: false, error: 'SUPABASE_ENV_MISSING' }) };
-  }
-
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405, body: 'Method Not Allowed' };
   }
@@ -931,12 +933,37 @@ export const handler = async (event) => {
     return { statusCode: 200, body: 'ok' };
   }
 
+  const incomingText = payload?.message?.text || '';
+  const incomingCommand = getCommand(incomingText);
+
+  if (incomingCommand === '/start') {
+    try {
+      await handleMessage(payload.message);
+    } catch (error) {
+      console.error('Failed to handle /start', error);
+    }
+    return { statusCode: 200, body: JSON.stringify({ ok: true }) };
+  }
+
+  if (!supabase) {
+    console.error('Supabase environment variables are missing.');
+    return { statusCode: 200, body: JSON.stringify({ ok: false, error: 'SUPABASE_ENV_MISSING' }) };
+  }
+
   if (payload?.message) {
-    await handleMessage(payload.message);
+    try {
+      await handleMessage(payload.message);
+    } catch (error) {
+      console.error('Failed to handle message', error);
+    }
   }
 
   if (payload?.callback_query) {
-    await handleCallback(payload.callback_query);
+    try {
+      await handleCallback(payload.callback_query);
+    } catch (error) {
+      console.error('Failed to handle callback query', error);
+    }
   }
 
   return { statusCode: 200, body: JSON.stringify({ ok: true }) };
