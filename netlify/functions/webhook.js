@@ -1,8 +1,9 @@
-const axios = require('axios');
-const cheerio = require('cheerio');
-const { createClient } = require('@supabase/supabase-js');
-const fuzzball = require('fuzzball');
-const dotenv = require('dotenv');
+import axios from 'axios';
+import * as cheerio from 'cheerio';
+import { createClient } from '@supabase/supabase-js';
+import * as fuzzball from 'fuzzball';
+import dotenv from 'dotenv';
+import dns from 'node:dns';
 
 dotenv.config();
 dotenv.config({ path: '.env.local', override: true });
@@ -865,7 +866,7 @@ async function handleCallback(callbackQuery) {
   }
 }
 
-exports.handler = async (event) => {
+export const handler = async (event) => {
   if (event.httpMethod === 'GET' && event.queryStringParameters?.diag === '1') {
     const results = {
       ok: false,
@@ -877,7 +878,7 @@ exports.handler = async (event) => {
 
     try {
       const dnsLookup = await new Promise((resolve, reject) => {
-        require('dns').lookup('ofd.soliq.uz', (err, address) => {
+        dns.lookup('ofd.soliq.uz', (err, address) => {
           if (err) reject(err);
           else resolve(address);
         });

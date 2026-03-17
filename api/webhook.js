@@ -1,6 +1,6 @@
-const { handler } = require('../netlify/functions/webhook.js');
+import { handler } from '../netlify/functions/webhook.js';
 
-module.exports = async (req, res) => {
+export default async function webhook(req, res) {
   const queryStringParameters = req.query || {};
   const rawBody = typeof req.body === 'string'
     ? req.body
@@ -21,4 +21,4 @@ module.exports = async (req, res) => {
   res.status(statusCode);
   res.setHeader('Content-Type', 'application/json');
   res.send(body);
-};
+}
