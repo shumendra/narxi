@@ -178,7 +178,6 @@ async function approvePending(id) {
     product_name_raw: pending.product_name_raw,
     price: unitPrice,
     quantity,
-    unit_price: unitPrice,
     place_name: pending.place_name || 'Unknown store',
     place_address: pending.place_address || '',
     latitude: pending.latitude ?? null,

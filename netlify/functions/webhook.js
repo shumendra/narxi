@@ -1139,7 +1139,6 @@ async function handleCallback(callbackQuery) {
       product_name_raw: pending.product_name_raw,
       price: pending.price,
       quantity: pending.quantity,
-      unit_price: pending.unit_price,
       place_name: pending.place_name,
       place_address: pending.place_address,
       latitude: pending.latitude,

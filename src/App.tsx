@@ -359,27 +359,6 @@ export default function App() {
     }));
   };
 
-  const saveModerationItem = async (item: PendingModerationItem) => {
-    setModerationSavingId(item.id);
-    try {
-      await callModerationApi('update', {
-        id: item.id,
-        changes: {
-          product_name_raw: item.product_name_raw,
-          price: item.price,
-          quantity: item.quantity,
-          unit_price: item.unit_price,
-        },
-      });
-      await fetchModerationItems();
-      window.Telegram?.WebApp?.showAlert(t.moderationSaved);
-    } catch (error) {
-      window.Telegram?.WebApp?.showAlert(`${t.moderationError}: ${(error as Error).message}`);
-    } finally {
-      setModerationSavingId(null);
-    }
-  };
-
   const approveModerationItem = async (item: PendingModerationItem) => {
     setModerationSavingId(item.id);
     try {
@@ -425,35 +404,6 @@ export default function App() {
       await callModerationApi('reject', { id: item.id });
       await fetchModerationItems();
       window.Telegram?.WebApp?.showAlert(t.moderationRejected);
-    } catch (error) {
-      window.Telegram?.WebApp?.showAlert(`${t.moderationError}: ${(error as Error).message}`);
-    } finally {
-      setModerationSavingId(null);
-    }
-  };
-
-  const deletePendingItem = async (item: PendingModerationItem) => {
-    setModerationSavingId(item.id);
-    try {
-      await callModerationApi('deletePending', { id: item.id });
-      await fetchModerationItems();
-      window.Telegram?.WebApp?.showAlert(t.moderationDeleted);
-    } catch (error) {
-      window.Telegram?.WebApp?.showAlert(`${t.moderationError}: ${(error as Error).message}`);
-    } finally {
-      setModerationSavingId(null);
-    }
-  };
-
-  const deleteApprovedItem = async (item: ApprovedModerationItem) => {
-    setModerationSavingId(item.id);
-    try {
-      await callModerationApi('deleteApproved', { id: item.id });
-      await fetchModerationItems();
-      if (selectedProduct?.id === item.product_id) {
-        await loadPricesForProduct(item.product_id);
-      }
-      window.Telegram?.WebApp?.showAlert(t.moderationDeleted);
     } catch (error) {
       window.Telegram?.WebApp?.showAlert(`${t.moderationError}: ${(error as Error).message}`);
     } finally {
@@ -928,11 +878,9 @@ export default function App() {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-4 gap-2">
-                        <button onClick={() => saveModerationItem(item)} disabled={moderationSavingId === item.id} className="rounded-xl border border-stone-200 bg-stone-100 px-4 py-3 text-sm font-semibold text-stone-700 disabled:opacity-50">{t.moderationSave}</button>
-                        <button onClick={() => approveModerationItem(item)} disabled={moderationSavingId === item.id} className="rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">{t.moderationApprove}</button>
-                        <button onClick={() => rejectModerationItem(item)} disabled={moderationSavingId === item.id} className="rounded-xl bg-amber-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">{t.moderationReject}</button>
-                        <button onClick={() => deletePendingItem(item)} disabled={moderationSavingId === item.id} className="rounded-xl bg-rose-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">{t.moderationDelete}</button>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button onClick={() => approveModerationItem(item)} disabled={moderationSavingId === item.id} className="min-w-0 rounded-xl bg-emerald-600 px-3 py-3 text-sm font-semibold text-white disabled:opacity-50">{t.moderationApprove}</button>
+                        <button onClick={() => rejectModerationItem(item)} disabled={moderationSavingId === item.id} className="min-w-0 rounded-xl bg-rose-600 px-3 py-3 text-sm font-semibold text-white disabled:opacity-50">{t.moderationReject}</button>
                       </div>
                     </div>
                   ))}
@@ -951,7 +899,6 @@ export default function App() {
                           <div className="text-sm font-semibold text-stone-900">{item.product_name_raw}</div>
                           <div className="text-xs text-stone-500">{priceFormatter.format(item.price)} {t.sumLabel}</div>
                         </div>
-                        <button onClick={() => deleteApprovedItem(item)} disabled={moderationSavingId === item.id} className="rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{t.moderationDelete}</button>
                       </div>
                       <div className="text-xs text-stone-500">
                         <div>{t.moderationUser}: {item.submitted_by}</div>
