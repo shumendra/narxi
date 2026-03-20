@@ -132,25 +132,12 @@ async function approvePending(id) {
   }
 
   let productId = pending.product_id;
-  const quantity = Number(pending.quantity) > 0 ? Number(pending.quantity) : 1;
-  const unitPrice = Number(pending.unit_price) > 0
-    ? Math.round(Number(pending.unit_price))
-    : Number(pending.price) > 0
-      ? Math.round(Number(pending.price) / quantity)
-      : 0;
-
-  if (!unitPrice) {
-    const invalid = new Error('Invalid pending price');
-    invalid.statusCode = 400;
-    throw invalid;
-  }
 
   if (!productId) {
     const { data: existingProduct } = await supabase
       .from('products')
       .select('id')
       .eq('name_uz', pending.product_name_raw)
-      .limit(1)
       .maybeSingle();
 
     if (existingProduct?.id) {
@@ -173,18 +160,19 @@ async function approvePending(id) {
     }
   }
 
+  const unitPrice = pending.unit_price || pending.price;
   const { error: insertError } = await supabase.from('prices').insert({
     product_id: productId,
     product_name_raw: pending.product_name_raw,
     price: unitPrice,
-    quantity,
-    place_name: pending.place_name || 'Unknown store',
-    place_address: pending.place_address || '',
-    latitude: pending.latitude ?? null,
-    longitude: pending.longitude ?? null,
-    receipt_date: pending.receipt_date || new Date().toISOString(),
-    submitted_by: pending.submitted_by || 'unknown',
-    source: pending.source || 'manual',
+    quantity: pending.quantity,
+    place_name: pending.place_name,
+    place_address: pending.place_address,
+    latitude: pending.latitude,
+    longitude: pending.longitude,
+    receipt_date: pending.receipt_date,
+    submitted_by: pending.submitted_by,
+    source: pending.source,
   });
 
   if (insertError) throw insertError;
@@ -201,11 +189,6 @@ async function approvePending(id) {
 
 async function rejectPending(id) {
   const { error } = await supabase.from('pending_prices').update({ status: 'rejected' }).eq('id', id);
-  if (error) throw error;
-}
-
-async function deletePending(id) {
-  const { error } = await supabase.from('pending_prices').delete().eq('id', id);
   if (error) throw error;
 }
 
@@ -250,10 +233,6 @@ export default async function moderation(req, res) {
       }
       case 'reject': {
         await rejectPending(body.id);
-        return send(res, 200, { ok: true });
-      }
-      case 'deletePending': {
-        await deletePending(body.id);
         return send(res, 200, { ok: true });
       }
       case 'deleteApproved': {
