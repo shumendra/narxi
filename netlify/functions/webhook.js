@@ -421,6 +421,42 @@ async function isAdmin(telegramId) {
   return ADMIN_TELEGRAM_IDS.includes(String(telegramId));
 }
 
+async function getPendingItems(limit = 10) {
+  const { data: pending, count, error } = await supabase
+    .from('pending_prices')
+    .select('*', { count: 'exact' })
+    .eq('status', 'pending')
+    .order('created_at', { ascending: true })
+    .limit(limit);
+
+  if (error) {
+    throw error;
+  }
+
+  const productIds = [...new Set((pending || []).map(item => item.product_id).filter(Boolean))];
+  let productsById = {};
+
+  if (productIds.length > 0) {
+    const { data: products, error: productsError } = await supabase
+      .from('products')
+      .select('id, name_uz, unit')
+      .in('id', productIds);
+
+    if (productsError) {
+      throw productsError;
+    }
+
+    productsById = Object.fromEntries((products || []).map(product => [product.id, product]));
+  }
+
+  const enriched = (pending || []).map(item => ({
+    ...item,
+    products: item.product_id ? productsById[item.product_id] || null : null,
+  }));
+
+  return { pending: enriched, count: count || 0 };
+}
+
 async function handleMessage(message) {
   const chatId = message?.chat?.id;
   const text = message?.text || '';
@@ -435,6 +471,20 @@ async function handleMessage(message) {
 
   if (command === '/start') {
     await sendLanguagePicker(chatId);
+    return;
+  }
+
+  if (command === '/myid') {
+    await sendTelegramMessage(chatId, {
+      text: `Your Telegram ID: ${telegramId}\nAdmin match: ${await isAdmin(telegramId) ? 'yes' : 'no'}`,
+    });
+    return;
+  }
+
+  if (command === '/pending' && !(await isAdmin(telegramId))) {
+    await sendTelegramMessage(chatId, {
+      text: `You are not recognized as admin.\nYour Telegram ID: ${telegramId}`,
+    });
     return;
   }
 
@@ -594,12 +644,7 @@ async function handleMessage(message) {
     }
 
     if (normalizedText.startsWith('/pending')) {
-      const { data: pending, count } = await supabase
-        .from('pending_prices')
-        .select('*, products(name_uz, unit)', { count: 'exact' })
-        .eq('status', 'pending')
-        .order('created_at', { ascending: true })
-        .limit(10);
+      const { pending, count } = await getPendingItems(10);
 
       if (!pending || pending.length === 0) {
         await sendTelegramMessage(chatId, { text: BOT_COPY[lang].pendingEmpty });
