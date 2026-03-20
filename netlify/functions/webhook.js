@@ -64,6 +64,41 @@ const BOT_COPY = {
     appealRejectedText: '❌ Rad etildi',
     btnFind: 'Narx topish 🔍',
     btnReport: "Narx kiritish ➕",
+    btnAdminPending: 'Kutilayotganlar 📥',
+    btnAdminStats: 'Statistika 📊',
+    btnAdminAppeals: 'Murojaatlar 📨',
+    btnAdminBlocked: 'Bloklar 🚫',
+    btnAdminEdit: 'Tahrir yordami ✏️',
+    btnApprove: '✅ Tasdiqlash',
+    btnReject: '❌ Rad etish',
+    btnBlock: '🚫 Bloklash',
+    btnEditName: '✏️ Nom',
+    btnEditPrice: '💰 Jami',
+    btnEditQty: '📦 Miqdor',
+    btnEditUnit: '🧮 Birlik',
+    pendingCard: (item, matchedName, unitLabel) => {
+      const unitPrice = item.unit_price || item.price || 0;
+      const total = item.price || 0;
+      const quantity = item.quantity || 1;
+      const dateText = item.receipt_date || item.created_at;
+      const sourceLabel = item.source === 'soliq_qr' ? 'Soliq QR' : "Qo'lda kiritilgan";
+      const matchText = matchedName ? `${item.match_confidence || 0}% — ${matchedName}` : `${item.match_confidence || 0}% — Topilmadi`;
+      return (
+        `🆔 Pending ID: ${item.id}\n` +
+        `📦 Mahsulot: ${item.product_name_raw}\n` +
+        `💰 Narx: ${unitPrice} so'm/${unitLabel} (jami: ${total} so'm x ${quantity})\n` +
+        `🏪 Do'kon: ${item.place_name || '-'}\n` +
+        `📍 Manzil: ${item.place_address || '-'}\n` +
+        `📅 Sana: ${dateText || '-'}\n` +
+        `🔗 Manba: ${sourceLabel}\n` +
+        `👤 Foydalanuvchi ID: ${item.submitted_by}\n` +
+        `🎯 Moslik: ${matchText}`
+      );
+    },
+    editNamePrompt: (id) => `✏️ Nomni tahrirlash\nNusxalab yuboring:\n/setname ${id} Yangi mahsulot nomi`,
+    editPricePrompt: (id) => `💰 Jami narxni tahrirlash\nNusxalab yuboring:\n/setprice ${id} 25000`,
+    editQtyPrompt: (id) => `📦 Miqdorni tahrirlash\nNusxalab yuboring:\n/setqty ${id} 1`,
+    editUnitPrompt: (id) => `🧮 Birlik narxini tahrirlash\nNusxalab yuboring:\n/setunit ${id} 25000`,
   },
   ru: {
     chooseLang: "Выберите язык:",
@@ -99,6 +134,41 @@ const BOT_COPY = {
     appealRejectedText: '❌ Отклонено',
     btnFind: 'Найти цену 🔍',
     btnReport: 'Добавить цену ➕',
+    btnAdminPending: 'Ожидающие 📥',
+    btnAdminStats: 'Статистика 📊',
+    btnAdminAppeals: 'Обращения 📨',
+    btnAdminBlocked: 'Блокировки 🚫',
+    btnAdminEdit: 'Помощь по правке ✏️',
+    btnApprove: '✅ Одобрить',
+    btnReject: '❌ Отклонить',
+    btnBlock: '🚫 Блокировать',
+    btnEditName: '✏️ Название',
+    btnEditPrice: '💰 Сумма',
+    btnEditQty: '📦 Кол-во',
+    btnEditUnit: '🧮 За единицу',
+    pendingCard: (item, matchedName, unitLabel) => {
+      const unitPrice = item.unit_price || item.price || 0;
+      const total = item.price || 0;
+      const quantity = item.quantity || 1;
+      const dateText = item.receipt_date || item.created_at;
+      const sourceLabel = item.source === 'soliq_qr' ? 'Soliq QR' : 'Вручную';
+      const matchText = matchedName ? `${item.match_confidence || 0}% — ${matchedName}` : `${item.match_confidence || 0}% — Не найдено`;
+      return (
+        `🆔 Pending ID: ${item.id}\n` +
+        `📦 Товар: ${item.product_name_raw}\n` +
+        `💰 Цена: ${unitPrice} сум/${unitLabel} (всего: ${total} сум x ${quantity})\n` +
+        `🏪 Магазин: ${item.place_name || '-'}\n` +
+        `📍 Адрес: ${item.place_address || '-'}\n` +
+        `📅 Дата: ${dateText || '-'}\n` +
+        `🔗 Источник: ${sourceLabel}\n` +
+        `👤 ID пользователя: ${item.submitted_by}\n` +
+        `🎯 Совпадение: ${matchText}`
+      );
+    },
+    editNamePrompt: (id) => `✏️ Изменить название\nСкопируйте и отправьте:\n/setname ${id} Новое название товара`,
+    editPricePrompt: (id) => `💰 Изменить общую цену\nСкопируйте и отправьте:\n/setprice ${id} 25000`,
+    editQtyPrompt: (id) => `📦 Изменить количество\nСкопируйте и отправьте:\n/setqty ${id} 1`,
+    editUnitPrompt: (id) => `🧮 Изменить цену за единицу\nСкопируйте и отправьте:\n/setunit ${id} 25000`,
   },
   en: {
     chooseLang: 'Choose a language:',
@@ -134,6 +204,41 @@ const BOT_COPY = {
     appealRejectedText: '❌ Rejected',
     btnFind: 'Find price 🔍',
     btnReport: 'Add price ➕',
+    btnAdminPending: 'Pending 📥',
+    btnAdminStats: 'Stats 📊',
+    btnAdminAppeals: 'Appeals 📨',
+    btnAdminBlocked: 'Blocked 🚫',
+    btnAdminEdit: 'Edit help ✏️',
+    btnApprove: '✅ Approve',
+    btnReject: '❌ Reject',
+    btnBlock: '🚫 Block',
+    btnEditName: '✏️ Name',
+    btnEditPrice: '💰 Total',
+    btnEditQty: '📦 Qty',
+    btnEditUnit: '🧮 Unit',
+    pendingCard: (item, matchedName, unitLabel) => {
+      const unitPrice = item.unit_price || item.price || 0;
+      const total = item.price || 0;
+      const quantity = item.quantity || 1;
+      const dateText = item.receipt_date || item.created_at;
+      const sourceLabel = item.source === 'soliq_qr' ? 'Soliq QR' : 'Manual';
+      const matchText = matchedName ? `${item.match_confidence || 0}% — ${matchedName}` : `${item.match_confidence || 0}% — Not found`;
+      return (
+        `🆔 Pending ID: ${item.id}\n` +
+        `📦 Product: ${item.product_name_raw}\n` +
+        `💰 Price: ${unitPrice} so'm/${unitLabel} (total: ${total} so'm x ${quantity})\n` +
+        `🏪 Store: ${item.place_name || '-'}\n` +
+        `📍 Address: ${item.place_address || '-'}\n` +
+        `📅 Date: ${dateText || '-'}\n` +
+        `🔗 Source: ${sourceLabel}\n` +
+        `👤 User ID: ${item.submitted_by}\n` +
+        `🎯 Match: ${matchText}`
+      );
+    },
+    editNamePrompt: (id) => `✏️ Edit name\nCopy and send:\n/setname ${id} New product name`,
+    editPricePrompt: (id) => `💰 Edit total price\nCopy and send:\n/setprice ${id} 25000`,
+    editQtyPrompt: (id) => `📦 Edit quantity\nCopy and send:\n/setqty ${id} 1`,
+    editUnitPrompt: (id) => `🧮 Edit unit price\nCopy and send:\n/setunit ${id} 25000`,
   },
 };
 
@@ -324,23 +429,64 @@ async function sendTelegramPhoto(chatId, photoUrl, caption, replyMarkup) {
   });
 }
 
-async function sendMenu(chatId, lang) {
+function formatPendingItem(item, matchedName, unitLabel, lang) {
+  return BOT_COPY[lang].pendingCard(item, matchedName, unitLabel);
+}
+
+function getAdminModerationKeyboard(item, lang) {
+  return {
+    inline_keyboard: [
+      [
+        { text: BOT_COPY[lang].btnApprove, callback_data: `approve_${item.id}` },
+        { text: BOT_COPY[lang].btnReject, callback_data: `reject_${item.id}` },
+        { text: BOT_COPY[lang].btnBlock, callback_data: `block_${item.submitted_by}_${item.id}` },
+      ],
+      [
+        { text: BOT_COPY[lang].btnEditName, callback_data: `editname_${item.id}` },
+        { text: BOT_COPY[lang].btnEditPrice, callback_data: `editprice_${item.id}` },
+      ],
+      [
+        { text: BOT_COPY[lang].btnEditQty, callback_data: `editqty_${item.id}` },
+        { text: BOT_COPY[lang].btnEditUnit, callback_data: `editunit_${item.id}` },
+      ],
+    ],
+  };
+}
+
+async function sendMenu(chatId, lang, telegramId = null) {
   if (!MINI_APP_URL) {
     await sendTelegramMessage(chatId, { text: BOT_COPY[lang].missingMiniApp });
     return;
   }
 
   const miniAppUrl = MINI_APP_URL;
+  const isAdminUser = telegramId ? await isAdmin(telegramId) : false;
+  const inline_keyboard = [
+    [
+      { text: BOT_COPY[lang].btnFind, web_app: { url: `${miniAppUrl}?mode=find&lang=${lang}` } },
+      { text: BOT_COPY[lang].btnReport, web_app: { url: `${miniAppUrl}?mode=report&lang=${lang}` } },
+    ],
+  ];
+
+  if (isAdminUser) {
+    inline_keyboard.push(
+      [
+        { text: BOT_COPY[lang].btnAdminPending, callback_data: 'menu:pending' },
+        { text: BOT_COPY[lang].btnAdminStats, callback_data: 'menu:stats' },
+      ],
+      [
+        { text: BOT_COPY[lang].btnAdminAppeals, callback_data: 'menu:appeals' },
+        { text: BOT_COPY[lang].btnAdminBlocked, callback_data: 'menu:blocked' },
+      ],
+      [
+        { text: BOT_COPY[lang].btnAdminEdit, callback_data: 'menu:edithelp' },
+      ],
+    );
+  }
+
   await sendTelegramMessage(chatId, {
     text: BOT_COPY[lang].menuText,
-    reply_markup: {
-      inline_keyboard: [
-        [
-          { text: BOT_COPY[lang].btnFind, web_app: { url: `${miniAppUrl}?mode=find&lang=${lang}` } },
-          { text: BOT_COPY[lang].btnReport, web_app: { url: `${miniAppUrl}?mode=report&lang=${lang}` } },
-        ],
-      ],
-    },
+    reply_markup: { inline_keyboard },
   });
 }
 
@@ -397,27 +543,6 @@ function getCommand(text) {
   return firstToken.includes('@') ? firstToken.split('@')[0] : firstToken;
 }
 
-function formatPendingItem(item, matchedName, unitLabel) {
-  const unitPrice = item.unit_price || item.price || 0;
-  const total = item.price || 0;
-  const quantity = item.quantity || 1;
-  const dateText = item.receipt_date || item.created_at;
-  const sourceLabel = item.source === 'soliq_qr' ? 'Soliq QR' : "Qo'lda kiritilgan";
-  const matchText = matchedName ? `${item.match_confidence || 0}% — ${matchedName}` : `${item.match_confidence || 0}% — Topilmadi`;
-
-  return (
-    `🆔 Pending ID: ${item.id}\n` +
-    `📦 ${item.product_name_raw}\n` +
-    `💰 Narx: ${unitPrice} so'm/${unitLabel} (jami: ${total} so'm x ${quantity})\n` +
-    `🏪 Do'kon: ${item.place_name || '-'}\n` +
-    `📍 Manzil: ${item.place_address || '-'}\n` +
-    `📅 Sana: ${dateText || '-'}\n` +
-    `🔗 Manba: ${sourceLabel}\n` +
-    `👤 ID: ${item.submitted_by}\n` +
-    `🎯 Moslik: ${matchText}`
-  );
-}
-
 async function isAdmin(telegramId) {
   if (!telegramId) return false;
   return ADMIN_TELEGRAM_IDS.includes(String(telegramId));
@@ -457,6 +582,121 @@ async function getPendingItems(limit = 10) {
   }));
 
   return { pending: enriched, count: count || 0 };
+}
+
+async function sendAdminEditHelp(chatId) {
+  await sendTelegramMessage(chatId, {
+    text:
+      'Admin edit commands:\n' +
+      '/pending\n' +
+      '/pendingdebug\n' +
+      '/fixpendingstatus\n' +
+      '/setname <pending_id> <new product name>\n' +
+      '/setprice <pending_id> <total_price>\n' +
+      '/setqty <pending_id> <quantity>\n' +
+      '/setunit <pending_id> <unit_price>',
+  });
+}
+
+async function sendPendingQueue(chatId, lang) {
+  const { pending, count } = await getPendingItems(10);
+
+  if (!pending || pending.length === 0) {
+    await sendTelegramMessage(chatId, {
+      text: isUsingServiceRole
+        ? BOT_COPY[lang].pendingEmpty
+        : `${BOT_COPY[lang].pendingEmpty}\n\nDebug hint: set SUPABASE_SERVICE_ROLE_KEY in Vercel for admin moderation reads.`,
+    });
+    return;
+  }
+
+  for (const item of pending) {
+    const matchedName = item.products?.name_uz || null;
+    const unitLabel = item.products?.unit || 'dona';
+    const textBlock = formatPendingItem(item, matchedName, unitLabel, lang);
+    const keyboard = getAdminModerationKeyboard(item, lang);
+
+    if (item.photo_url) {
+      await sendTelegramPhoto(chatId, item.photo_url, textBlock, keyboard);
+    } else {
+      await sendTelegramMessage(chatId, { text: textBlock, reply_markup: keyboard });
+    }
+  }
+
+  const remaining = (count || 0) - pending.length;
+  if (remaining > 0) {
+    await sendTelegramMessage(chatId, { text: BOT_COPY[lang].pendingMore(remaining) });
+  }
+}
+
+async function sendAdminStats(chatId, lang) {
+  const [{ count: pricesCount }, { count: pendingCount }, { count: rejectedCount }, { count: productsCount }, { count: blockedCount }, { count: appealsCount }] = await Promise.all([
+    supabase.from('prices').select('id', { count: 'exact', head: true }),
+    supabase.from('pending_prices').select('id', { count: 'exact', head: true }).or('status.eq.pending,status.is.null'),
+    supabase.from('pending_prices').select('id', { count: 'exact', head: true }).eq('status', 'rejected'),
+    supabase.from('products').select('id', { count: 'exact', head: true }),
+    supabase.from('blocked_users').select('telegram_id', { count: 'exact', head: true }),
+    supabase.from('appeals').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
+  ]);
+
+  await sendTelegramMessage(chatId, {
+    text:
+      `${BOT_COPY[lang].statsTitle}\n\n` +
+      `✅ Approved: ${pricesCount || 0}\n` +
+      `⏳ Pending: ${pendingCount || 0}\n` +
+      `❌ Rejected: ${rejectedCount || 0}\n` +
+      `📦 Products: ${productsCount || 0}\n` +
+      `🚫 Blocked: ${blockedCount || 0}\n` +
+      `📨 Appeals: ${appealsCount || 0}`,
+  });
+}
+
+async function sendBlockedUsers(chatId, lang) {
+  const { data: blockedUsers } = await supabase
+    .from('blocked_users')
+    .select('telegram_id, blocked_at')
+    .order('blocked_at', { ascending: false });
+
+  if (!blockedUsers || blockedUsers.length === 0) {
+    await sendTelegramMessage(chatId, { text: BOT_COPY[lang].blockedEmpty });
+    return;
+  }
+
+  const lines = blockedUsers.map(user => `🚫 ${user.telegram_id} — ${user.blocked_at}`).join('\n');
+  await sendTelegramMessage(chatId, { text: lines });
+}
+
+async function sendAppealsQueue(chatId, lang) {
+  const { data: appeals } = await supabase
+    .from('appeals')
+    .select('*')
+    .eq('status', 'pending')
+    .order('created_at', { ascending: true });
+
+  if (!appeals || appeals.length === 0) {
+    await sendTelegramMessage(chatId, { text: BOT_COPY[lang].appealsEmpty });
+    return;
+  }
+
+  for (const appeal of appeals) {
+    const textBlock =
+      `📨 Appeal\n\n` +
+      `👤 ID: ${appeal.telegram_id}\n` +
+      `💬 Message: ${appeal.appeal_message}\n` +
+      `📅 Date: ${appeal.created_at}\n`;
+
+    await sendTelegramMessage(chatId, {
+      text: textBlock,
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: '✅ Unblock', callback_data: `appeal_approve_${appeal.telegram_id}_${appeal.id}` },
+            { text: '❌ Reject', callback_data: `appeal_reject_${appeal.id}` },
+          ],
+        ],
+      },
+    });
+  }
 }
 
 async function handleMessage(message) {
@@ -626,17 +866,7 @@ async function handleMessage(message) {
     }
 
     if (command === '/edithelp') {
-      await sendTelegramMessage(chatId, {
-        text:
-          'Admin edit commands:\n' +
-          '/pending\n' +
-          '/pendingdebug\n' +
-          '/fixpendingstatus\n' +
-          '/setname <pending_id> <new product name>\n' +
-          '/setprice <pending_id> <total_price>\n' +
-          '/setqty <pending_id> <quantity>\n' +
-          '/setunit <pending_id> <unit_price>',
-      });
+      await sendAdminEditHelp(chatId);
       return;
     }
 
@@ -676,89 +906,17 @@ async function handleMessage(message) {
     }
 
     if (normalizedText.startsWith('/pending')) {
-      const { pending, count } = await getPendingItems(10);
-
-      if (!pending || pending.length === 0) {
-        await sendTelegramMessage(chatId, {
-          text: isUsingServiceRole
-            ? BOT_COPY[lang].pendingEmpty
-            : `${BOT_COPY[lang].pendingEmpty}\n\nDebug hint: set SUPABASE_SERVICE_ROLE_KEY in Vercel for admin moderation reads.`,
-        });
-        return;
-      }
-
-      for (const item of pending) {
-        const matchedName = item.products?.name_uz || null;
-        const unitLabel = item.products?.unit || 'dona';
-        const textBlock = formatPendingItem(item, matchedName, unitLabel);
-        const keyboard = {
-          inline_keyboard: [
-            [
-              { text: '✅ Tasdiqlash', callback_data: `approve_${item.id}` },
-              { text: '❌ Rad etish', callback_data: `reject_${item.id}` },
-              { text: '🚫 Bloklash', callback_data: `block_${item.submitted_by}_${item.id}` },
-            ],
-            [
-              { text: '✏️ Nom', callback_data: `editname_${item.id}` },
-              { text: '💰 Jami', callback_data: `editprice_${item.id}` },
-            ],
-            [
-              { text: '📦 Miqdor', callback_data: `editqty_${item.id}` },
-              { text: '🧮 Birlik', callback_data: `editunit_${item.id}` },
-            ],
-          ],
-        };
-
-        if (item.photo_url) {
-          await sendTelegramPhoto(chatId, item.photo_url, textBlock, keyboard);
-        } else {
-          await sendTelegramMessage(chatId, { text: textBlock, reply_markup: keyboard });
-        }
-      }
-
-      const remaining = (count || 0) - pending.length;
-      if (remaining > 0) {
-        await sendTelegramMessage(chatId, { text: BOT_COPY[lang].pendingMore(remaining) });
-      }
+      await sendPendingQueue(chatId, lang);
       return;
     }
 
     if (normalizedText.startsWith('/stats')) {
-      const [{ count: pricesCount }, { count: pendingCount }, { count: rejectedCount }, { count: productsCount }, { count: blockedCount }, { count: appealsCount }] = await Promise.all([
-        supabase.from('prices').select('id', { count: 'exact', head: true }),
-        supabase.from('pending_prices').select('id', { count: 'exact', head: true }).or('status.eq.pending,status.is.null'),
-        supabase.from('pending_prices').select('id', { count: 'exact', head: true }).eq('status', 'rejected'),
-        supabase.from('products').select('id', { count: 'exact', head: true }),
-        supabase.from('blocked_users').select('telegram_id', { count: 'exact', head: true }),
-        supabase.from('appeals').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
-      ]);
-
-      await sendTelegramMessage(chatId, {
-        text:
-          `${BOT_COPY[lang].statsTitle}\n\n` +
-          `✅ Tasdiqlangan narxlar: ${pricesCount || 0}\n` +
-          `⏳ Kutilayotgan: ${pendingCount || 0}\n` +
-          `❌ Rad etilgan: ${rejectedCount || 0}\n` +
-          `📦 Mahsulotlar: ${productsCount || 0}\n` +
-          `🚫 Bloklangan: ${blockedCount || 0}\n` +
-          `📨 Murojaatlar: ${appealsCount || 0}`,
-      });
+      await sendAdminStats(chatId, lang);
       return;
     }
 
     if (normalizedText.startsWith('/blocked')) {
-      const { data: blockedUsers } = await supabase
-        .from('blocked_users')
-        .select('telegram_id, blocked_at')
-        .order('blocked_at', { ascending: false });
-
-      if (!blockedUsers || blockedUsers.length === 0) {
-        await sendTelegramMessage(chatId, { text: BOT_COPY[lang].blockedEmpty });
-        return;
-      }
-
-      const lines = blockedUsers.map(user => `🚫 ${user.telegram_id} — ${user.blocked_at}`).join('\n');
-      await sendTelegramMessage(chatId, { text: lines });
+      await sendBlockedUsers(chatId, lang);
       return;
     }
 
@@ -773,36 +931,7 @@ async function handleMessage(message) {
     }
 
     if (normalizedText.startsWith('/appeals')) {
-      const { data: appeals } = await supabase
-        .from('appeals')
-        .select('*')
-        .eq('status', 'pending')
-        .order('created_at', { ascending: true });
-
-      if (!appeals || appeals.length === 0) {
-        await sendTelegramMessage(chatId, { text: BOT_COPY[lang].appealsEmpty });
-        return;
-      }
-
-      for (const appeal of appeals) {
-        const textBlock =
-          `📨 Murojaat\n\n` +
-          `👤 ID: ${appeal.telegram_id}\n` +
-          `💬 Xabar: ${appeal.appeal_message}\n` +
-          `📅 Sana: ${appeal.created_at}\n`;
-
-        await sendTelegramMessage(chatId, {
-          text: textBlock,
-          reply_markup: {
-            inline_keyboard: [
-              [
-                { text: '✅ Blokdan chiqarish', callback_data: `appeal_approve_${appeal.telegram_id}_${appeal.id}` },
-                { text: '❌ Rad etish', callback_data: `appeal_reject_${appeal.id}` },
-              ],
-            ],
-          },
-        });
-      }
+      await sendAppealsQueue(chatId, lang);
       return;
     }
   }
@@ -907,7 +1036,7 @@ async function handleMessage(message) {
     return;
   }
 
-  await sendMenu(chatId, lang);
+  await sendMenu(chatId, lang, telegramId);
 }
 
 async function handleCallback(callbackQuery) {
@@ -924,7 +1053,7 @@ async function handleCallback(callbackQuery) {
   if (data.startsWith('lang:')) {
     const lang = data.split(':')[1];
     if (lang === 'uz' || lang === 'ru' || lang === 'en') {
-      await sendMenu(chatId, lang);
+      await sendMenu(chatId, lang, telegramId);
     }
     return;
   }
@@ -933,10 +1062,37 @@ async function handleCallback(callbackQuery) {
     return;
   }
 
+  const adminLang = getUserLang(callbackQuery?.from?.language_code);
+
+  if (data === 'menu:pending') {
+    await sendPendingQueue(chatId, adminLang);
+    return;
+  }
+
+  if (data === 'menu:stats') {
+    await sendAdminStats(chatId, adminLang);
+    return;
+  }
+
+  if (data === 'menu:appeals') {
+    await sendAppealsQueue(chatId, adminLang);
+    return;
+  }
+
+  if (data === 'menu:blocked') {
+    await sendBlockedUsers(chatId, adminLang);
+    return;
+  }
+
+  if (data === 'menu:edithelp') {
+    await sendAdminEditHelp(chatId);
+    return;
+  }
+
   if (data.startsWith('editname_')) {
     const pendingId = data.replace('editname_', '');
     await sendTelegramMessage(chatId, {
-      text: `✏️ Edit name\nCopy and send:\n/setname ${pendingId} Yangi mahsulot nomi`,
+      text: BOT_COPY[adminLang].editNamePrompt(pendingId),
     });
     return;
   }
@@ -944,7 +1100,7 @@ async function handleCallback(callbackQuery) {
   if (data.startsWith('editprice_')) {
     const pendingId = data.replace('editprice_', '');
     await sendTelegramMessage(chatId, {
-      text: `💰 Edit total price\nCopy and send:\n/setprice ${pendingId} 25000`,
+      text: BOT_COPY[adminLang].editPricePrompt(pendingId),
     });
     return;
   }
@@ -952,7 +1108,7 @@ async function handleCallback(callbackQuery) {
   if (data.startsWith('editqty_')) {
     const pendingId = data.replace('editqty_', '');
     await sendTelegramMessage(chatId, {
-      text: `📦 Edit quantity\nCopy and send:\n/setqty ${pendingId} 1`,
+      text: BOT_COPY[adminLang].editQtyPrompt(pendingId),
     });
     return;
   }
@@ -960,7 +1116,7 @@ async function handleCallback(callbackQuery) {
   if (data.startsWith('editunit_')) {
     const pendingId = data.replace('editunit_', '');
     await sendTelegramMessage(chatId, {
-      text: `🧮 Edit unit price\nCopy and send:\n/setunit ${pendingId} 25000`,
+      text: BOT_COPY[adminLang].editUnitPrompt(pendingId),
     });
     return;
   }
