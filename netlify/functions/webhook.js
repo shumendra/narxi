@@ -9,10 +9,12 @@ dotenv.config();
 dotenv.config({ path: '.env.local', override: true });
 
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
-const supabaseKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const supabaseKey = supabaseServiceRoleKey || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
 const supabase = (supabaseUrl && supabaseKey)
   ? createClient(supabaseUrl, supabaseKey)
   : null;
+const isUsingServiceRole = Boolean(supabaseServiceRoleKey);
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const MINI_APP_URL = process.env.TELEGRAM_MINI_APP_URL || '';
@@ -628,6 +630,8 @@ async function handleMessage(message) {
         text:
           'Admin edit commands:\n' +
           '/pending\n' +
+          '/pendingdebug\n' +
+          '/fixpendingstatus\n' +
           '/setname <pending_id> <new product name>\n' +
           '/setprice <pending_id> <total_price>\n' +
           '/setqty <pending_id> <quantity>\n' +
@@ -636,11 +640,50 @@ async function handleMessage(message) {
       return;
     }
 
+    if (command === '/pendingdebug') {
+      const [{ count: allCount }, { count: pendingCount }, { count: nullCount }] = await Promise.all([
+        supabase.from('pending_prices').select('id', { count: 'exact', head: true }),
+        supabase.from('pending_prices').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
+        supabase.from('pending_prices').select('id', { count: 'exact', head: true }).is('status', null),
+      ]);
+
+      await sendTelegramMessage(chatId, {
+        text:
+          `Supabase mode: ${isUsingServiceRole ? 'service_role' : 'anon'}\n` +
+          `All rows visible: ${allCount || 0}\n` +
+          `Pending rows visible: ${pendingCount || 0}\n` +
+          `Null-status rows visible: ${nullCount || 0}`,
+      });
+      return;
+    }
+
+    if (command === '/fixpendingstatus') {
+      const { data, error } = await supabase
+        .from('pending_prices')
+        .update({ status: 'pending' })
+        .is('status', null)
+        .select('id');
+
+      if (error) {
+        await sendTelegramMessage(chatId, { text: `❌ Failed to normalize pending statuses: ${error.message}` });
+        return;
+      }
+
+      await sendTelegramMessage(chatId, {
+        text: `✅ Normalized ${data?.length || 0} rows from null status to pending`,
+      });
+      return;
+    }
+
     if (normalizedText.startsWith('/pending')) {
       const { pending, count } = await getPendingItems(10);
 
       if (!pending || pending.length === 0) {
-        await sendTelegramMessage(chatId, { text: BOT_COPY[lang].pendingEmpty });
+        await sendTelegramMessage(chatId, {
+          text: isUsingServiceRole
+            ? BOT_COPY[lang].pendingEmpty
+            : `${BOT_COPY[lang].pendingEmpty}\n\nDebug hint: set SUPABASE_SERVICE_ROLE_KEY in Vercel for admin moderation reads.`,
+        });
         return;
       }
 
