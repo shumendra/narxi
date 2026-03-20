@@ -617,6 +617,14 @@ async function handleMessage(message) {
               { text: '❌ Rad etish', callback_data: `reject_${item.id}` },
               { text: '🚫 Bloklash', callback_data: `block_${item.submitted_by}_${item.id}` },
             ],
+            [
+              { text: '✏️ Nom', callback_data: `editname_${item.id}` },
+              { text: '💰 Jami', callback_data: `editprice_${item.id}` },
+            ],
+            [
+              { text: '📦 Miqdor', callback_data: `editqty_${item.id}` },
+              { text: '🧮 Birlik', callback_data: `editunit_${item.id}` },
+            ],
           ],
         };
 
@@ -840,6 +848,38 @@ async function handleCallback(callbackQuery) {
   }
 
   if (!telegramId || !(await isAdmin(telegramId))) {
+    return;
+  }
+
+  if (data.startsWith('editname_')) {
+    const pendingId = data.replace('editname_', '');
+    await sendTelegramMessage(chatId, {
+      text: `✏️ Edit name\nCopy and send:\n/setname ${pendingId} Yangi mahsulot nomi`,
+    });
+    return;
+  }
+
+  if (data.startsWith('editprice_')) {
+    const pendingId = data.replace('editprice_', '');
+    await sendTelegramMessage(chatId, {
+      text: `💰 Edit total price\nCopy and send:\n/setprice ${pendingId} 25000`,
+    });
+    return;
+  }
+
+  if (data.startsWith('editqty_')) {
+    const pendingId = data.replace('editqty_', '');
+    await sendTelegramMessage(chatId, {
+      text: `📦 Edit quantity\nCopy and send:\n/setqty ${pendingId} 1`,
+    });
+    return;
+  }
+
+  if (data.startsWith('editunit_')) {
+    const pendingId = data.replace('editunit_', '');
+    await sendTelegramMessage(chatId, {
+      text: `🧮 Edit unit price\nCopy and send:\n/setunit ${pendingId} 25000`,
+    });
     return;
   }
 
