@@ -16,7 +16,11 @@ const supabase = (supabaseUrl && supabaseKey)
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const MINI_APP_URL = process.env.TELEGRAM_MINI_APP_URL || '';
-const ADMIN_TELEGRAM_ID = '7240925672';
+const ADMIN_TELEGRAM_IDS = (process.env.ADMIN_TELEGRAM_IDS || process.env.ADMIN_TELEGRAM_ID || '7240925672')
+  .split(',')
+  .map(id => id.trim())
+  .filter(Boolean);
+const PRIMARY_ADMIN_TELEGRAM_ID = ADMIN_TELEGRAM_IDS[0] || '7240925672';
 
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 const DIAGNOSTIC_URL = 'https://ofd.soliq.uz/';
@@ -400,6 +404,7 @@ function formatPendingItem(item, matchedName, unitLabel) {
   const matchText = matchedName ? `${item.match_confidence || 0}% — ${matchedName}` : `${item.match_confidence || 0}% — Topilmadi`;
 
   return (
+    `🆔 Pending ID: ${item.id}\n` +
     `📦 ${item.product_name_raw}\n` +
     `💰 Narx: ${unitPrice} so'm/${unitLabel} (jami: ${total} so'm x ${quantity})\n` +
     `🏪 Do'kon: ${item.place_name || '-'}\n` +
@@ -409,6 +414,11 @@ function formatPendingItem(item, matchedName, unitLabel) {
     `👤 ID: ${item.submitted_by}\n` +
     `🎯 Moslik: ${matchText}`
   );
+}
+
+async function isAdmin(telegramId) {
+  if (!telegramId) return false;
+  return ADMIN_TELEGRAM_IDS.includes(String(telegramId));
 }
 
 async function handleMessage(message) {
@@ -428,52 +438,6 @@ async function handleMessage(message) {
     return;
   }
 
-  if (await isAdmin(telegramId)) {
-    if (normalizedText.startsWith('/pending')) {
-      // DEBUG: Log admin check and query
-      console.log('ADMIN CHECK PASSED:', telegramId);
-      const { data: pending, count, error } = await supabase
-        .from('pending_prices')
-        .select('*, products(name_uz, unit)', { count: 'exact' })
-        .eq('status', 'pending')
-        .order('created_at', { ascending: true })
-        .limit(10);
-      console.log('PENDING QUERY RESULT:', { pending, count, error });
-
-      if (!pending || pending.length === 0) {
-        console.log('NO PENDING ITEMS FOUND');
-        await sendTelegramMessage(chatId, { text: BOT_COPY[lang].pendingEmpty });
-        return;
-      }
-
-      for (const item of pending) {
-        console.log('PENDING ITEM:', item);
-        const matchedName = item.products?.name_uz || null;
-        const unitLabel = item.products?.unit || 'dona';
-        const textBlock = formatPendingItem(item, matchedName, unitLabel);
-        const keyboard = {
-          inline_keyboard: [
-            [
-              { text: '\u2705 Tasdiqlash', callback_data: `approve_${item.id}` },
-              { text: '\u274c Rad etish', callback_data: `reject_${item.id}` },
-              { text: '\ud83d\udeab Bloklash', callback_data: `block_${item.submitted_by}_${item.id}` },
-            ],
-          ],
-        };
-
-        if (item.photo_url) {
-          await sendTelegramPhoto(chatId, item.photo_url, textBlock, keyboard);
-        } else {
-          await sendTelegramMessage(chatId, { text: textBlock, reply_markup: keyboard });
-        }
-      }
-
-      const remaining = (count || 0) - pending.length;
-      if (remaining > 0) {
-        await sendTelegramMessage(chatId, { text: BOT_COPY[lang].pendingMore(remaining) });
-      }
-      return;
-    }
   if (normalizedText.startsWith('/appeal')) {
     const appealText = normalizedText.replace('/appeal', '').trim();
     const { data: blocked } = await supabase
@@ -506,6 +470,129 @@ async function handleMessage(message) {
   }
 
   if (await isAdmin(telegramId)) {
+    if (command === '/setname') {
+      const parts = text.trim().split(' ');
+      const pendingId = parts[1];
+      const newName = parts.slice(2).join(' ').trim();
+
+      if (!pendingId || !newName) {
+        await sendTelegramMessage(chatId, { text: 'Format: /setname <pending_id> <new product name>' });
+        return;
+      }
+
+      await supabase
+        .from('pending_prices')
+        .update({ product_name_raw: newName, product_id: null, match_confidence: 0 })
+        .eq('id', pendingId)
+        .eq('status', 'pending');
+
+      await sendTelegramMessage(chatId, { text: `✅ Updated name for pending ${pendingId}` });
+      return;
+    }
+
+    if (command === '/setprice') {
+      const parts = text.trim().split(' ');
+      const pendingId = parts[1];
+      const priceValue = Number.parseFloat(parts[2]);
+
+      if (!pendingId || Number.isNaN(priceValue) || priceValue <= 0) {
+        await sendTelegramMessage(chatId, { text: 'Format: /setprice <pending_id> <total_price>' });
+        return;
+      }
+
+      const { data: current } = await supabase
+        .from('pending_prices')
+        .select('quantity')
+        .eq('id', pendingId)
+        .eq('status', 'pending')
+        .maybeSingle();
+
+      const quantity = current?.quantity && current.quantity > 0 ? current.quantity : 1;
+      const unitPrice = Math.round(priceValue / quantity);
+
+      await supabase
+        .from('pending_prices')
+        .update({ price: priceValue, unit_price: unitPrice })
+        .eq('id', pendingId)
+        .eq('status', 'pending');
+
+      await sendTelegramMessage(chatId, { text: `✅ Updated total price for pending ${pendingId}` });
+      return;
+    }
+
+    if (command === '/setqty') {
+      const parts = text.trim().split(' ');
+      const pendingId = parts[1];
+      const quantityValue = Number.parseFloat(parts[2]);
+
+      if (!pendingId || Number.isNaN(quantityValue) || quantityValue <= 0) {
+        await sendTelegramMessage(chatId, { text: 'Format: /setqty <pending_id> <quantity>' });
+        return;
+      }
+
+      const { data: current } = await supabase
+        .from('pending_prices')
+        .select('price')
+        .eq('id', pendingId)
+        .eq('status', 'pending')
+        .maybeSingle();
+
+      const price = current?.price && current.price > 0 ? current.price : 0;
+      const unitPrice = price > 0 ? Math.round(price / quantityValue) : 0;
+
+      await supabase
+        .from('pending_prices')
+        .update({ quantity: quantityValue, unit_price: unitPrice })
+        .eq('id', pendingId)
+        .eq('status', 'pending');
+
+      await sendTelegramMessage(chatId, { text: `✅ Updated quantity for pending ${pendingId}` });
+      return;
+    }
+
+    if (command === '/setunit') {
+      const parts = text.trim().split(' ');
+      const pendingId = parts[1];
+      const unitPriceValue = Number.parseFloat(parts[2]);
+
+      if (!pendingId || Number.isNaN(unitPriceValue) || unitPriceValue <= 0) {
+        await sendTelegramMessage(chatId, { text: 'Format: /setunit <pending_id> <unit_price>' });
+        return;
+      }
+
+      const { data: current } = await supabase
+        .from('pending_prices')
+        .select('quantity')
+        .eq('id', pendingId)
+        .eq('status', 'pending')
+        .maybeSingle();
+
+      const quantity = current?.quantity && current.quantity > 0 ? current.quantity : 1;
+      const totalPrice = Math.round(unitPriceValue * quantity);
+
+      await supabase
+        .from('pending_prices')
+        .update({ unit_price: unitPriceValue, price: totalPrice })
+        .eq('id', pendingId)
+        .eq('status', 'pending');
+
+      await sendTelegramMessage(chatId, { text: `✅ Updated unit price for pending ${pendingId}` });
+      return;
+    }
+
+    if (command === '/edithelp') {
+      await sendTelegramMessage(chatId, {
+        text:
+          'Admin edit commands:\n' +
+          '/pending\n' +
+          '/setname <pending_id> <new product name>\n' +
+          '/setprice <pending_id> <total_price>\n' +
+          '/setqty <pending_id> <quantity>\n' +
+          '/setunit <pending_id> <unit_price>',
+      });
+      return;
+    }
+
     if (normalizedText.startsWith('/pending')) {
       const { data: pending, count } = await supabase
         .from('pending_prices')
@@ -733,8 +820,6 @@ async function handleMessage(message) {
   await sendMenu(chatId, lang);
 }
 
-}
-
 async function handleCallback(callbackQuery) {
   const chatId = callbackQuery?.message?.chat?.id;
   const telegramId = callbackQuery?.from?.id?.toString();
@@ -824,7 +909,7 @@ async function handleCallback(callbackQuery) {
 
     await supabase.from('blocked_users').upsert({
       telegram_id: targetId,
-      blocked_by: ADMIN_TELEGRAM_ID,
+      blocked_by: PRIMARY_ADMIN_TELEGRAM_ID,
       reason: 'Admin tomonidan bloklandi',
       can_appeal: true,
     });
