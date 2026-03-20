@@ -335,8 +335,8 @@ export default function App() {
       });
       await fetchModerationItems();
       window.Telegram?.WebApp?.showAlert(t.moderationSaved);
-    } catch {
-      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } catch (error) {
+      window.Telegram?.WebApp?.showAlert(`${t.moderationError}: ${(error as Error).message}`);
     } finally {
       setModerationSavingId(null);
     }
@@ -374,8 +374,8 @@ export default function App() {
       }
 
       window.Telegram?.WebApp?.showAlert(t.moderationApproved);
-    } catch {
-      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } catch (error) {
+      window.Telegram?.WebApp?.showAlert(`${t.moderationError}: ${(error as Error).message}`);
     } finally {
       setModerationSavingId(null);
     }
@@ -387,8 +387,8 @@ export default function App() {
       await callModerationApi('reject', { id: item.id });
       await fetchModerationItems();
       window.Telegram?.WebApp?.showAlert(t.moderationRejected);
-    } catch {
-      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } catch (error) {
+      window.Telegram?.WebApp?.showAlert(`${t.moderationError}: ${(error as Error).message}`);
     } finally {
       setModerationSavingId(null);
     }

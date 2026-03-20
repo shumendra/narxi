@@ -121,12 +121,25 @@ async function approvePending(id) {
   }
 
   let productId = pending.product_id;
+  const quantity = Number(pending.quantity) > 0 ? Number(pending.quantity) : 1;
+  const unitPrice = Number(pending.unit_price) > 0
+    ? Math.round(Number(pending.unit_price))
+    : Number(pending.price) > 0
+      ? Math.round(Number(pending.price) / quantity)
+      : 0;
+
+  if (!unitPrice) {
+    const invalid = new Error('Invalid pending price');
+    invalid.statusCode = 400;
+    throw invalid;
+  }
 
   if (!productId) {
     const { data: existingProduct } = await supabase
       .from('products')
       .select('id')
       .eq('name_uz', pending.product_name_raw)
+      .limit(1)
       .maybeSingle();
 
     if (existingProduct?.id) {
@@ -149,21 +162,20 @@ async function approvePending(id) {
     }
   }
 
-  const unitPrice = pending.unit_price || pending.price;
   const { error: insertError } = await supabase.from('prices').insert({
     product_id: productId,
     product_name_raw: pending.product_name_raw,
     price: unitPrice,
-    quantity: pending.quantity,
+    quantity,
     unit_price: unitPrice,
-    place_name: pending.place_name,
-    place_address: pending.place_address,
-    latitude: pending.latitude,
-    longitude: pending.longitude,
-    receipt_date: pending.receipt_date,
-    submitted_by: pending.submitted_by,
-    source: pending.source,
-    photo_url: pending.photo_url,
+    place_name: pending.place_name || 'Unknown store',
+    place_address: pending.place_address || '',
+    latitude: pending.latitude ?? null,
+    longitude: pending.longitude ?? null,
+    receipt_date: pending.receipt_date || new Date().toISOString(),
+    submitted_by: pending.submitted_by || 'unknown',
+    source: pending.source || 'manual',
+    photo_url: pending.photo_url || null,
   });
 
   if (insertError) throw insertError;

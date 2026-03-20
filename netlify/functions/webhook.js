@@ -64,6 +64,7 @@ const BOT_COPY = {
     appealRejectedText: '❌ Rad etildi',
     btnFind: 'Narx topish 🔍',
     btnReport: "Narx kiritish ➕",
+    btnModerate: 'Tasdiqlash ✅',
     btnAdminPending: 'Kutilayotganlar 📥',
     btnAdminStats: 'Statistika 📊',
     btnAdminAppeals: 'Murojaatlar 📨',
@@ -134,6 +135,7 @@ const BOT_COPY = {
     appealRejectedText: '❌ Отклонено',
     btnFind: 'Найти цену 🔍',
     btnReport: 'Добавить цену ➕',
+    btnModerate: 'Модерация ✅',
     btnAdminPending: 'Ожидающие 📥',
     btnAdminStats: 'Статистика 📊',
     btnAdminAppeals: 'Обращения 📨',
@@ -204,6 +206,7 @@ const BOT_COPY = {
     appealRejectedText: '❌ Rejected',
     btnFind: 'Find price 🔍',
     btnReport: 'Add price ➕',
+    btnModerate: 'Moderate ✅',
     btnAdminPending: 'Pending 📥',
     btnAdminStats: 'Stats 📊',
     btnAdminAppeals: 'Appeals 📨',
@@ -469,19 +472,9 @@ async function sendMenu(chatId, lang, telegramId = null) {
   ];
 
   if (isAdminUser) {
-    inline_keyboard.push(
-      [
-        { text: BOT_COPY[lang].btnAdminPending, callback_data: 'menu:pending' },
-        { text: BOT_COPY[lang].btnAdminStats, callback_data: 'menu:stats' },
-      ],
-      [
-        { text: BOT_COPY[lang].btnAdminAppeals, callback_data: 'menu:appeals' },
-        { text: BOT_COPY[lang].btnAdminBlocked, callback_data: 'menu:blocked' },
-      ],
-      [
-        { text: BOT_COPY[lang].btnAdminEdit, callback_data: 'menu:edithelp' },
-      ],
-    );
+    inline_keyboard.push([
+      { text: BOT_COPY[lang].btnModerate, web_app: { url: `${miniAppUrl}?mode=moderate&lang=${lang}` } },
+    ]);
   }
 
   await sendTelegramMessage(chatId, {
