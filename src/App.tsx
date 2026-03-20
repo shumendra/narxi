@@ -20,6 +20,10 @@ function cn(...inputs: ClassValue[]) {
 // Supabase Client
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+const adminTelegramIds = (import.meta.env.VITE_ADMIN_TELEGRAM_IDS || import.meta.env.VITE_ADMIN_TELEGRAM_ID || '7240925672')
+  .split(',')
+  .map((id: string) => id.trim())
+  .filter(Boolean);
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Types
@@ -42,6 +46,21 @@ interface PriceRecord {
   product_id: string;
 }
 
+interface PendingModerationItem {
+  id: string;
+  product_name_raw: string;
+  product_id: string | null;
+  price: number;
+  quantity: number;
+  unit_price: number;
+  submitted_by: string;
+  source: string;
+  status?: string | null;
+  created_at: string;
+  place_name: string | null;
+  place_address: string | null;
+}
+
 // Map Updater Component
 function ChangeView({ center, zoom }: { center: [number, number]; zoom: number }) {
   const map = useMap();
@@ -59,15 +78,21 @@ function ReportMapPicker({ onPick }: { onPick: (lat: number, lng: number) => voi
 }
 
 export default function App() {
-  const [mode, setMode] = useState<'find' | 'report'>('find');
+  const [mode, setMode] = useState<'find' | 'report' | 'moderate'>('find');
   const [lang, setLang] = useState<'uz' | 'ru' | 'en'>('uz');
   const [searchQuery, setSearchQuery] = useState('');
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [prices, setPrices] = useState<PriceRecord[]>([]);
+  const [moderationItems, setModerationItems] = useState<PendingModerationItem[]>([]);
+  const [moderationLoading, setModerationLoading] = useState(false);
+  const [moderationSavingId, setModerationSavingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const priceFormatter = useMemo(() => new Intl.NumberFormat('en-US'), []);
+  const telegramUserId = window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || '';
+  const telegramInitData = window.Telegram?.WebApp?.initData || '';
+  const isAdminUser = adminTelegramIds.includes(telegramUserId);
 
   const copy = useMemo(
     () => ({
@@ -75,6 +100,7 @@ export default function App() {
         appName: 'Narxi',
         modeFind: 'Topish',
         modeReport: "Qo'shish",
+        modeModerate: 'Tasdiqlash',
         searchPlaceholder: 'Mahsulot nomi (masalan: Shakar)',
         emptyTitle: 'Narxlarni qidirish',
         emptyHint: "Toshkent bo'ylab eng arzon narxlarni topish uchun mahsulot nomini kiriting",
@@ -97,11 +123,29 @@ export default function App() {
         locationHint: "Joylashuv tanlanmagan",
         photoLabel: "Chek rasmi (ixtiyoriy)",
         sumLabel: "so'm",
+        moderationTitle: 'Kutilayotgan narxlar',
+        moderationEmpty: 'Kutilayotgan narxlar yo‘q',
+        moderationRefresh: 'Yangilash',
+        moderationSave: 'Saqlash',
+        moderationApprove: 'Tasdiqlash',
+        moderationReject: 'Rad etish',
+        moderationName: 'Mahsulot nomi',
+        moderationPrice: 'Jami narx',
+        moderationQty: 'Miqdor',
+        moderationUnitPrice: 'Birlik narxi',
+        moderationSource: 'Manba',
+        moderationUser: 'Foydalanuvchi',
+        moderationDate: 'Sana',
+        moderationSaved: 'O‘zgarishlar saqlandi ✅',
+        moderationApproved: 'Tasdiqlandi ✅',
+        moderationRejected: 'Rad etildi ✅',
+        moderationError: 'Moderatsiya amalida xatolik yuz berdi',
       },
       ru: {
         appName: 'Narxi',
         modeFind: 'Поиск',
         modeReport: 'Добавить',
+        modeModerate: 'Модерация',
         searchPlaceholder: 'Название товара (например: Сахар)',
         emptyTitle: 'Поиск цен',
         emptyHint: 'Введите название товара, чтобы найти самые дешевые цены по Ташкенту',
@@ -124,11 +168,29 @@ export default function App() {
         locationHint: 'Локация не выбрана',
         photoLabel: 'Фото чека (необязательно)',
         sumLabel: 'сум',
+        moderationTitle: 'Ожидающие цены',
+        moderationEmpty: 'Нет ожидающих цен',
+        moderationRefresh: 'Обновить',
+        moderationSave: 'Сохранить',
+        moderationApprove: 'Одобрить',
+        moderationReject: 'Отклонить',
+        moderationName: 'Название товара',
+        moderationPrice: 'Общая цена',
+        moderationQty: 'Количество',
+        moderationUnitPrice: 'Цена за единицу',
+        moderationSource: 'Источник',
+        moderationUser: 'Пользователь',
+        moderationDate: 'Дата',
+        moderationSaved: 'Изменения сохранены ✅',
+        moderationApproved: 'Одобрено ✅',
+        moderationRejected: 'Отклонено ✅',
+        moderationError: 'Ошибка во время модерации',
       },
       en: {
         appName: 'Narxi',
         modeFind: 'Find',
         modeReport: 'Add',
+        modeModerate: 'Moderate',
         searchPlaceholder: 'Product name (e.g., Sugar)',
         emptyTitle: 'Find prices',
         emptyHint: 'Type a product name to find the cheapest prices across Tashkent',
@@ -151,6 +213,23 @@ export default function App() {
         locationHint: 'Location not selected',
         photoLabel: 'Receipt photo (optional)',
         sumLabel: 'sum',
+        moderationTitle: 'Pending prices',
+        moderationEmpty: 'No pending prices',
+        moderationRefresh: 'Refresh',
+        moderationSave: 'Save',
+        moderationApprove: 'Approve',
+        moderationReject: 'Reject',
+        moderationName: 'Product name',
+        moderationPrice: 'Total price',
+        moderationQty: 'Quantity',
+        moderationUnitPrice: 'Unit price',
+        moderationSource: 'Source',
+        moderationUser: 'User',
+        moderationDate: 'Date',
+        moderationSaved: 'Changes saved ✅',
+        moderationApproved: 'Approved ✅',
+        moderationRejected: 'Rejected ✅',
+        moderationError: 'Moderation action failed',
       },
     }),
     []
@@ -166,18 +245,160 @@ export default function App() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const initialMode = params.get('mode') as 'find' | 'report';
+    const initialMode = params.get('mode') as 'find' | 'report' | 'moderate';
     const initialLang = params.get('lang') as 'uz' | 'ru' | 'en';
-    if (initialMode) setMode(initialMode);
+    if (initialMode && (initialMode !== 'moderate' || isAdminUser)) setMode(initialMode);
     if (initialLang) setLang(initialLang);
 
     fetchProducts();
-  }, []);
+  }, [isAdminUser]);
 
   const fetchProducts = async () => {
     const { data } = await supabase.from('products').select('*').order('name_uz');
-    if (data) setProducts(data);
+    if (data) {
+      setProducts(data);
+      return data as Product[];
+    }
+    return [] as Product[];
   };
+
+  const loadPricesForProduct = async (productId: string) => {
+    setLoading(true);
+    const { data } = await supabase
+      .from('prices')
+      .select('*')
+      .eq('product_id', productId)
+      .order('price', { ascending: true })
+      .limit(20);
+
+    if (data) setPrices(data);
+    setLoading(false);
+  };
+
+  const normalizePendingItem = (item: any): PendingModerationItem => ({
+    ...item,
+    price: Number(item.price) || 0,
+    quantity: Number(item.quantity) || 1,
+    unit_price: Number(item.unit_price) || Number(item.price) || 0,
+  });
+
+  const callModerationApi = async (action: string, payload: Record<string, unknown> = {}) => {
+    const response = await fetch('/api/moderation', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, initData: telegramInitData, ...payload }),
+    });
+
+    const json = await response.json();
+    if (!response.ok || !json.ok) {
+      throw new Error(json.error || 'Moderation request failed');
+    }
+
+    return json;
+  };
+
+  const fetchModerationItems = async () => {
+    if (!isAdminUser || !telegramInitData) return;
+    setModerationLoading(true);
+    try {
+      const result = await callModerationApi('list');
+      setModerationItems((result.items || []).map(normalizePendingItem));
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } finally {
+      setModerationLoading(false);
+    }
+  };
+
+  const updateModerationField = (id: string, field: keyof PendingModerationItem, value: string) => {
+    setModerationItems(items => items.map(item => {
+      if (item.id !== id) return item;
+      if (field === 'price' || field === 'quantity' || field === 'unit_price') {
+        const numericValue = Number(value);
+        return { ...item, [field]: Number.isFinite(numericValue) ? numericValue : 0 };
+      }
+      return { ...item, [field]: value };
+    }));
+  };
+
+  const saveModerationItem = async (item: PendingModerationItem) => {
+    setModerationSavingId(item.id);
+    try {
+      await callModerationApi('update', {
+        id: item.id,
+        changes: {
+          product_name_raw: item.product_name_raw,
+          price: item.price,
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+        },
+      });
+      await fetchModerationItems();
+      window.Telegram?.WebApp?.showAlert(t.moderationSaved);
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } finally {
+      setModerationSavingId(null);
+    }
+  };
+
+  const approveModerationItem = async (item: PendingModerationItem) => {
+    setModerationSavingId(item.id);
+    try {
+      const updated = await callModerationApi('update', {
+        id: item.id,
+        changes: {
+          product_name_raw: item.product_name_raw,
+          price: item.price,
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+        },
+      });
+      const result = await callModerationApi('approve', { id: item.id });
+      const refreshedProducts = await fetchProducts();
+      await fetchModerationItems();
+
+      const approvedProduct = refreshedProducts.find(product => product.id === result.productId);
+      if (approvedProduct) {
+        setMode('find');
+        setSelectedProduct(approvedProduct);
+        setSearchQuery(getProductName(approvedProduct, lang));
+        setShowDropdown(false);
+        await loadPricesForProduct(approvedProduct.id);
+      } else if (selectedProduct) {
+        await loadPricesForProduct(selectedProduct.id);
+      }
+
+      if (updated?.item?.product_name_raw) {
+        setSearchQuery(updated.item.product_name_raw);
+      }
+
+      window.Telegram?.WebApp?.showAlert(t.moderationApproved);
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } finally {
+      setModerationSavingId(null);
+    }
+  };
+
+  const rejectModerationItem = async (item: PendingModerationItem) => {
+    setModerationSavingId(item.id);
+    try {
+      await callModerationApi('reject', { id: item.id });
+      await fetchModerationItems();
+      window.Telegram?.WebApp?.showAlert(t.moderationRejected);
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } finally {
+      setModerationSavingId(null);
+    }
+  };
+
+  useEffect(() => {
+    if (mode === 'moderate' && isAdminUser) {
+      fetchModerationItems();
+    }
+  }, [mode, isAdminUser]);
 
   const filteredProducts = useMemo(() => {
     if (!searchQuery) return [];
@@ -204,18 +425,9 @@ export default function App() {
     setSelectedProduct(product);
     setSearchQuery(getProductName(product, lang));
     setShowDropdown(false);
-    
+
     if (mode === 'find') {
-      setLoading(true);
-      const { data } = await supabase
-        .from('prices')
-        .select('*')
-        .eq('product_id', product.id)
-        .order('price', { ascending: true })
-        .limit(20);
-      
-      if (data) setPrices(data);
-      setLoading(false);
+      await loadPricesForProduct(product.id);
     }
   };
 
@@ -341,12 +553,23 @@ export default function App() {
               >
                 {t.modeReport}
               </button>
+              {isAdminUser && (
+                <button 
+                  onClick={() => setMode('moderate')}
+                  className={cn(
+                    "px-4 py-1.5 rounded-md text-sm font-medium transition-all",
+                    mode === 'moderate' ? "bg-white shadow-sm text-emerald-600" : "text-stone-500"
+                  )}
+                >
+                  {t.modeModerate}
+                </button>
+              )}
             </div>
           </div>
         </div>
 
         {/* Search Bar */}
-        <div className="relative">
+        {mode !== 'moderate' && <div className="relative">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 w-4 h-4" />
             <input 
@@ -380,7 +603,7 @@ export default function App() {
               ))}
             </div>
           )}
-        </div>
+        </div>}
       </header>
 
       <main className="p-4">
@@ -480,7 +703,7 @@ export default function App() {
               </>
             )}
           </div>
-        ) : (
+        ) : mode === 'report' ? (
           <div className="space-y-6">
             <section className="bg-white p-6 rounded-2xl border border-stone-200 shadow-sm space-y-4">
               <div>
@@ -581,6 +804,108 @@ export default function App() {
               </div>
             </section>
           </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">{t.moderationTitle}</h2>
+              <button
+                onClick={fetchModerationItems}
+                className="rounded-xl border border-stone-200 bg-white px-4 py-2 text-sm font-medium text-stone-700"
+              >
+                {t.moderationRefresh}
+              </button>
+            </div>
+
+            {moderationLoading ? (
+              <div className="animate-pulse space-y-3">
+                {[1, 2, 3].map(i => <div key={i} className="h-44 bg-stone-200 rounded-xl" />)}
+              </div>
+            ) : moderationItems.length === 0 ? (
+              <div className="rounded-2xl border border-stone-200 bg-white p-8 text-center text-stone-500">
+                {t.moderationEmpty}
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {moderationItems.map(item => (
+                  <div key={item.id} className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm space-y-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-wider text-stone-400">ID</div>
+                        <div className="text-sm font-medium text-stone-700">{item.id}</div>
+                      </div>
+                      <div className="text-right text-xs text-stone-500">
+                        <div>{t.moderationUser}: {item.submitted_by}</div>
+                        <div>{t.moderationDate}: {formatDistanceToNow(new Date(item.created_at), { addSuffix: true, locale: reportLocale })}</div>
+                        <div>{t.moderationSource}: {item.source}</div>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">{t.moderationName}</label>
+                        <input
+                          value={item.product_name_raw}
+                          onChange={(e) => updateModerationField(item.id, 'product_name_raw', e.target.value)}
+                          className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">{t.moderationPrice}</label>
+                        <input
+                          type="number"
+                          value={item.price}
+                          onChange={(e) => updateModerationField(item.id, 'price', e.target.value)}
+                          className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">{t.moderationQty}</label>
+                        <input
+                          type="number"
+                          value={item.quantity}
+                          onChange={(e) => updateModerationField(item.id, 'quantity', e.target.value)}
+                          className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">{t.moderationUnitPrice}</label>
+                        <input
+                          type="number"
+                          value={item.unit_price}
+                          onChange={(e) => updateModerationField(item.id, 'unit_price', e.target.value)}
+                          className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      <button
+                        onClick={() => saveModerationItem(item)}
+                        disabled={moderationSavingId === item.id}
+                        className="rounded-xl border border-stone-200 bg-stone-100 px-4 py-3 text-sm font-semibold text-stone-700 disabled:opacity-50"
+                      >
+                        {t.moderationSave}
+                      </button>
+                      <button
+                        onClick={() => approveModerationItem(item)}
+                        disabled={moderationSavingId === item.id}
+                        className="rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
+                      >
+                        {t.moderationApprove}
+                      </button>
+                      <button
+                        onClick={() => rejectModerationItem(item)}
+                        disabled={moderationSavingId === item.id}
+                        className="rounded-xl bg-rose-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
+                      >
+                        {t.moderationReject}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         )}
       </main>
 
@@ -600,6 +925,15 @@ export default function App() {
           <Plus className="w-6 h-6" />
           <span className="text-[10px] font-bold uppercase tracking-widest">{t.modeReport}</span>
         </button>
+        {isAdminUser && (
+          <button 
+            onClick={() => setMode('moderate')}
+            className={cn("flex flex-col items-center gap-1", mode === 'moderate' ? "text-emerald-600" : "text-stone-400")}
+          >
+            <Check className="w-6 h-6" />
+            <span className="text-[10px] font-bold uppercase tracking-widest">{t.modeModerate}</span>
+          </button>
+        )}
       </nav>
     </div>
   );
@@ -613,6 +947,7 @@ declare global {
         ready: () => void;
         expand: () => void;
         showAlert: (message: string) => void;
+        initData: string;
         initDataUnsafe: {
           user?: {
             id: number;
