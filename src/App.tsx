@@ -61,6 +61,20 @@ interface PendingModerationItem {
   place_address: string | null;
 }
 
+interface ApprovedModerationItem {
+  id: string;
+  product_id: string;
+  product_name_raw: string;
+  price: number;
+  quantity: number;
+  unit_price: number;
+  place_name: string | null;
+  place_address: string | null;
+  receipt_date: string;
+  submitted_by: string;
+  source: string;
+}
+
 // Map Updater Component
 function ChangeView({ center, zoom }: { center: [number, number]; zoom: number }) {
   const map = useMap();
@@ -85,6 +99,7 @@ export default function App() {
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [prices, setPrices] = useState<PriceRecord[]>([]);
   const [moderationItems, setModerationItems] = useState<PendingModerationItem[]>([]);
+  const [approvedItems, setApprovedItems] = useState<ApprovedModerationItem[]>([]);
   const [moderationLoading, setModerationLoading] = useState(false);
   const [moderationSavingId, setModerationSavingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -140,6 +155,10 @@ export default function App() {
         moderationApproved: 'Tasdiqlandi ✅',
         moderationRejected: 'Rad etildi ✅',
         moderationError: 'Moderatsiya amalida xatolik yuz berdi',
+        approvedTitle: 'Tasdiqlangan narxlar',
+        approvedEmpty: 'Tasdiqlangan narxlar yo‘q',
+        moderationDelete: 'O‘chirish',
+        moderationDeleted: 'O‘chirildi ✅',
       },
       ru: {
         appName: 'Narxi',
@@ -185,6 +204,10 @@ export default function App() {
         moderationApproved: 'Одобрено ✅',
         moderationRejected: 'Отклонено ✅',
         moderationError: 'Ошибка во время модерации',
+        approvedTitle: 'Одобренные цены',
+        approvedEmpty: 'Нет одобренных цен',
+        moderationDelete: 'Удалить',
+        moderationDeleted: 'Удалено ✅',
       },
       en: {
         appName: 'Narxi',
@@ -230,6 +253,10 @@ export default function App() {
         moderationApproved: 'Approved ✅',
         moderationRejected: 'Rejected ✅',
         moderationError: 'Moderation action failed',
+        approvedTitle: 'Approved prices',
+        approvedEmpty: 'No approved prices',
+        moderationDelete: 'Delete',
+        moderationDeleted: 'Deleted ✅',
       },
     }),
     []
@@ -282,6 +309,13 @@ export default function App() {
     unit_price: Number(item.unit_price) || Number(item.price) || 0,
   });
 
+  const normalizeApprovedItem = (item: any): ApprovedModerationItem => ({
+    ...item,
+    price: Number(item.price) || 0,
+    quantity: Number(item.quantity) || 1,
+    unit_price: Number(item.unit_price) || Number(item.price) || 0,
+  });
+
   const callModerationApi = async (action: string, payload: Record<string, unknown> = {}) => {
     const response = await fetch('/api/moderation', {
       method: 'POST',
@@ -301,10 +335,14 @@ export default function App() {
     if (!isAdminUser || !telegramInitData) return;
     setModerationLoading(true);
     try {
-      const result = await callModerationApi('list');
-      setModerationItems((result.items || []).map(normalizePendingItem));
-    } catch {
-      window.Telegram?.WebApp?.showAlert(t.moderationError);
+      const [pendingResult, approvedResult] = await Promise.all([
+        callModerationApi('list'),
+        callModerationApi('listApproved'),
+      ]);
+      setModerationItems((pendingResult.items || []).map(normalizePendingItem));
+      setApprovedItems((approvedResult.items || []).map(normalizeApprovedItem));
+    } catch (error) {
+      window.Telegram?.WebApp?.showAlert(`${t.moderationError}: ${(error as Error).message}`);
     } finally {
       setModerationLoading(false);
     }
@@ -387,6 +425,35 @@ export default function App() {
       await callModerationApi('reject', { id: item.id });
       await fetchModerationItems();
       window.Telegram?.WebApp?.showAlert(t.moderationRejected);
+    } catch (error) {
+      window.Telegram?.WebApp?.showAlert(`${t.moderationError}: ${(error as Error).message}`);
+    } finally {
+      setModerationSavingId(null);
+    }
+  };
+
+  const deletePendingItem = async (item: PendingModerationItem) => {
+    setModerationSavingId(item.id);
+    try {
+      await callModerationApi('deletePending', { id: item.id });
+      await fetchModerationItems();
+      window.Telegram?.WebApp?.showAlert(t.moderationDeleted);
+    } catch (error) {
+      window.Telegram?.WebApp?.showAlert(`${t.moderationError}: ${(error as Error).message}`);
+    } finally {
+      setModerationSavingId(null);
+    }
+  };
+
+  const deleteApprovedItem = async (item: ApprovedModerationItem) => {
+    setModerationSavingId(item.id);
+    try {
+      await callModerationApi('deleteApproved', { id: item.id });
+      await fetchModerationItems();
+      if (selectedProduct?.id === item.product_id) {
+        await loadPricesForProduct(item.product_id);
+      }
+      window.Telegram?.WebApp?.showAlert(t.moderationDeleted);
     } catch (error) {
       window.Telegram?.WebApp?.showAlert(`${t.moderationError}: ${(error as Error).message}`);
     } finally {
@@ -820,89 +887,81 @@ export default function App() {
               <div className="animate-pulse space-y-3">
                 {[1, 2, 3].map(i => <div key={i} className="h-44 bg-stone-200 rounded-xl" />)}
               </div>
-            ) : moderationItems.length === 0 ? (
-              <div className="rounded-2xl border border-stone-200 bg-white p-8 text-center text-stone-500">
-                {t.moderationEmpty}
-              </div>
             ) : (
-              <div className="space-y-4">
-                {moderationItems.map(item => (
-                  <div key={item.id} className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm space-y-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-xs font-semibold uppercase tracking-wider text-stone-400">ID</div>
-                        <div className="text-sm font-medium text-stone-700">{item.id}</div>
+              <div className="space-y-6">
+                <section className="space-y-4">
+                  <h3 className="text-sm font-semibold uppercase tracking-wider text-stone-500">{t.moderationTitle}</h3>
+                  {moderationItems.length === 0 ? (
+                    <div className="rounded-2xl border border-stone-200 bg-white p-8 text-center text-stone-500">
+                      {t.moderationEmpty}
+                    </div>
+                  ) : moderationItems.map(item => (
+                    <div key={item.id} className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm space-y-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-wider text-stone-400">ID</div>
+                          <div className="text-sm font-medium text-stone-700">{item.id}</div>
+                        </div>
+                        <div className="text-right text-xs text-stone-500">
+                          <div>{t.moderationUser}: {item.submitted_by}</div>
+                          <div>{t.moderationDate}: {formatDistanceToNow(new Date(item.created_at), { addSuffix: true, locale: reportLocale })}</div>
+                          <div>{t.moderationSource}: {item.source}</div>
+                        </div>
                       </div>
-                      <div className="text-right text-xs text-stone-500">
+
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <div>
+                          <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">{t.moderationName}</label>
+                          <input value={item.product_name_raw} onChange={(e) => updateModerationField(item.id, 'product_name_raw', e.target.value)} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm" />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">{t.moderationPrice}</label>
+                          <input type="number" value={item.price} onChange={(e) => updateModerationField(item.id, 'price', e.target.value)} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm" />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">{t.moderationQty}</label>
+                          <input type="number" value={item.quantity} onChange={(e) => updateModerationField(item.id, 'quantity', e.target.value)} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm" />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">{t.moderationUnitPrice}</label>
+                          <input type="number" value={item.unit_price} onChange={(e) => updateModerationField(item.id, 'unit_price', e.target.value)} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm" />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-4 gap-2">
+                        <button onClick={() => saveModerationItem(item)} disabled={moderationSavingId === item.id} className="rounded-xl border border-stone-200 bg-stone-100 px-4 py-3 text-sm font-semibold text-stone-700 disabled:opacity-50">{t.moderationSave}</button>
+                        <button onClick={() => approveModerationItem(item)} disabled={moderationSavingId === item.id} className="rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">{t.moderationApprove}</button>
+                        <button onClick={() => rejectModerationItem(item)} disabled={moderationSavingId === item.id} className="rounded-xl bg-amber-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">{t.moderationReject}</button>
+                        <button onClick={() => deletePendingItem(item)} disabled={moderationSavingId === item.id} className="rounded-xl bg-rose-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">{t.moderationDelete}</button>
+                      </div>
+                    </div>
+                  ))}
+                </section>
+
+                <section className="space-y-4">
+                  <h3 className="text-sm font-semibold uppercase tracking-wider text-stone-500">{t.approvedTitle}</h3>
+                  {approvedItems.length === 0 ? (
+                    <div className="rounded-2xl border border-stone-200 bg-white p-8 text-center text-stone-500">
+                      {t.approvedEmpty}
+                    </div>
+                  ) : approvedItems.map(item => (
+                    <div key={item.id} className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-semibold text-stone-900">{item.product_name_raw}</div>
+                          <div className="text-xs text-stone-500">{priceFormatter.format(item.price)} {t.sumLabel}</div>
+                        </div>
+                        <button onClick={() => deleteApprovedItem(item)} disabled={moderationSavingId === item.id} className="rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{t.moderationDelete}</button>
+                      </div>
+                      <div className="text-xs text-stone-500">
                         <div>{t.moderationUser}: {item.submitted_by}</div>
-                        <div>{t.moderationDate}: {formatDistanceToNow(new Date(item.created_at), { addSuffix: true, locale: reportLocale })}</div>
+                        <div>{t.moderationDate}: {formatDistanceToNow(new Date(item.receipt_date), { addSuffix: true, locale: reportLocale })}</div>
                         <div>{t.moderationSource}: {item.source}</div>
+                        <div>{item.place_name || t.unknownStore}</div>
                       </div>
                     </div>
-
-                    <div className="grid gap-3 md:grid-cols-2">
-                      <div>
-                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">{t.moderationName}</label>
-                        <input
-                          value={item.product_name_raw}
-                          onChange={(e) => updateModerationField(item.id, 'product_name_raw', e.target.value)}
-                          className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
-                        />
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">{t.moderationPrice}</label>
-                        <input
-                          type="number"
-                          value={item.price}
-                          onChange={(e) => updateModerationField(item.id, 'price', e.target.value)}
-                          className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
-                        />
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">{t.moderationQty}</label>
-                        <input
-                          type="number"
-                          value={item.quantity}
-                          onChange={(e) => updateModerationField(item.id, 'quantity', e.target.value)}
-                          className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
-                        />
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">{t.moderationUnitPrice}</label>
-                        <input
-                          type="number"
-                          value={item.unit_price}
-                          onChange={(e) => updateModerationField(item.id, 'unit_price', e.target.value)}
-                          className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-2">
-                      <button
-                        onClick={() => saveModerationItem(item)}
-                        disabled={moderationSavingId === item.id}
-                        className="rounded-xl border border-stone-200 bg-stone-100 px-4 py-3 text-sm font-semibold text-stone-700 disabled:opacity-50"
-                      >
-                        {t.moderationSave}
-                      </button>
-                      <button
-                        onClick={() => approveModerationItem(item)}
-                        disabled={moderationSavingId === item.id}
-                        className="rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
-                      >
-                        {t.moderationApprove}
-                      </button>
-                      <button
-                        onClick={() => rejectModerationItem(item)}
-                        disabled={moderationSavingId === item.id}
-                        className="rounded-xl bg-rose-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
-                      >
-                        {t.moderationReject}
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  ))}
+                </section>
               </div>
             )}
           </div>

@@ -65,6 +65,17 @@ async function listPending() {
   return data || [];
 }
 
+async function listApproved() {
+  const { data, error } = await supabase
+    .from('prices')
+    .select('*')
+    .order('receipt_date', { ascending: false })
+    .limit(100);
+
+  if (error) throw error;
+  return data || [];
+}
+
 async function updatePending(id, changes) {
   const payload = {};
 
@@ -175,7 +186,6 @@ async function approvePending(id) {
     receipt_date: pending.receipt_date || new Date().toISOString(),
     submitted_by: pending.submitted_by || 'unknown',
     source: pending.source || 'manual',
-    photo_url: pending.photo_url || null,
   });
 
   if (insertError) throw insertError;
@@ -192,6 +202,16 @@ async function approvePending(id) {
 
 async function rejectPending(id) {
   const { error } = await supabase.from('pending_prices').update({ status: 'rejected' }).eq('id', id);
+  if (error) throw error;
+}
+
+async function deletePending(id) {
+  const { error } = await supabase.from('pending_prices').delete().eq('id', id);
+  if (error) throw error;
+}
+
+async function deleteApproved(id) {
+  const { error } = await supabase.from('prices').delete().eq('id', id);
   if (error) throw error;
 }
 
@@ -217,6 +237,10 @@ export default async function moderation(req, res) {
         const items = await listPending();
         return send(res, 200, { ok: true, items });
       }
+      case 'listApproved': {
+        const items = await listApproved();
+        return send(res, 200, { ok: true, items });
+      }
       case 'update': {
         const item = await updatePending(body.id, body.changes || {});
         return send(res, 200, { ok: true, item });
@@ -227,6 +251,14 @@ export default async function moderation(req, res) {
       }
       case 'reject': {
         await rejectPending(body.id);
+        return send(res, 200, { ok: true });
+      }
+      case 'deletePending': {
+        await deletePending(body.id);
+        return send(res, 200, { ok: true });
+      }
+      case 'deleteApproved': {
+        await deleteApproved(body.id);
         return send(res, 200, { ok: true });
       }
       default:

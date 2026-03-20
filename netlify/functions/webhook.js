@@ -1147,7 +1147,6 @@ async function handleCallback(callbackQuery) {
       receipt_date: pending.receipt_date,
       submitted_by: pending.submitted_by,
       source: pending.source,
-      photo_url: pending.photo_url,
     });
 
     await supabase.from('pending_prices').update({ status: 'approved' }).eq('id', id);
