@@ -425,7 +425,7 @@ async function getPendingItems(limit = 10) {
   const { data: pending, count, error } = await supabase
     .from('pending_prices')
     .select('*', { count: 'exact' })
-    .eq('status', 'pending')
+    .or('status.eq.pending,status.is.null')
     .order('created_at', { ascending: true })
     .limit(limit);
 
@@ -533,8 +533,7 @@ async function handleMessage(message) {
       await supabase
         .from('pending_prices')
         .update({ product_name_raw: newName, product_id: null, match_confidence: 0 })
-        .eq('id', pendingId)
-        .eq('status', 'pending');
+        .eq('id', pendingId);
 
       await sendTelegramMessage(chatId, { text: `✅ Updated name for pending ${pendingId}` });
       return;
@@ -554,7 +553,6 @@ async function handleMessage(message) {
         .from('pending_prices')
         .select('quantity')
         .eq('id', pendingId)
-        .eq('status', 'pending')
         .maybeSingle();
 
       const quantity = current?.quantity && current.quantity > 0 ? current.quantity : 1;
@@ -563,8 +561,7 @@ async function handleMessage(message) {
       await supabase
         .from('pending_prices')
         .update({ price: priceValue, unit_price: unitPrice })
-        .eq('id', pendingId)
-        .eq('status', 'pending');
+        .eq('id', pendingId);
 
       await sendTelegramMessage(chatId, { text: `✅ Updated total price for pending ${pendingId}` });
       return;
@@ -584,7 +581,6 @@ async function handleMessage(message) {
         .from('pending_prices')
         .select('price')
         .eq('id', pendingId)
-        .eq('status', 'pending')
         .maybeSingle();
 
       const price = current?.price && current.price > 0 ? current.price : 0;
@@ -593,8 +589,7 @@ async function handleMessage(message) {
       await supabase
         .from('pending_prices')
         .update({ quantity: quantityValue, unit_price: unitPrice })
-        .eq('id', pendingId)
-        .eq('status', 'pending');
+        .eq('id', pendingId);
 
       await sendTelegramMessage(chatId, { text: `✅ Updated quantity for pending ${pendingId}` });
       return;
@@ -614,7 +609,6 @@ async function handleMessage(message) {
         .from('pending_prices')
         .select('quantity')
         .eq('id', pendingId)
-        .eq('status', 'pending')
         .maybeSingle();
 
       const quantity = current?.quantity && current.quantity > 0 ? current.quantity : 1;
@@ -623,8 +617,7 @@ async function handleMessage(message) {
       await supabase
         .from('pending_prices')
         .update({ unit_price: unitPriceValue, price: totalPrice })
-        .eq('id', pendingId)
-        .eq('status', 'pending');
+        .eq('id', pendingId);
 
       await sendTelegramMessage(chatId, { text: `✅ Updated unit price for pending ${pendingId}` });
       return;
@@ -690,7 +683,7 @@ async function handleMessage(message) {
     if (normalizedText.startsWith('/stats')) {
       const [{ count: pricesCount }, { count: pendingCount }, { count: rejectedCount }, { count: productsCount }, { count: blockedCount }, { count: appealsCount }] = await Promise.all([
         supabase.from('prices').select('id', { count: 'exact', head: true }),
-        supabase.from('pending_prices').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
+        supabase.from('pending_prices').select('id', { count: 'exact', head: true }).or('status.eq.pending,status.is.null'),
         supabase.from('pending_prices').select('id', { count: 'exact', head: true }).eq('status', 'rejected'),
         supabase.from('products').select('id', { count: 'exact', head: true }),
         supabase.from('blocked_users').select('telegram_id', { count: 'exact', head: true }),
@@ -831,6 +824,7 @@ async function handleMessage(message) {
             product_name_raw: item.name,
             product_id: bestMatch?.id || null,
             match_confidence: highestScore,
+            status: 'pending',
             price: item.totalPrice,
             quantity: item.quantity,
             unit_price: item.unitPrice,

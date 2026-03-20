@@ -264,6 +264,7 @@ export default function App() {
       product_id: selectedProduct?.id || null,
       product_name_raw: manualName || searchQuery.trim(),
       match_confidence: selectedProduct ? 100 : 0,
+      status: 'pending',
       price: parseInt(reportPrice),
       quantity: 1,
       unit_price: parseInt(reportPrice),
