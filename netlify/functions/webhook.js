@@ -68,11 +68,7 @@ const BOT_COPY = {
     appealRejectedText: '❌ Rad etildi',
     btnFind: 'Narx topish 🔍',
     btnReport: "Narx kiritish ➕",
-    btnAdminPending: 'Kutilayotganlar 📥',
-    btnAdminStats: 'Statistika 📊',
-    btnAdminAppeals: 'Murojaatlar 📨',
-    btnAdminBlocked: 'Bloklar 🚫',
-    btnAdminEdit: 'Tahrir yordami ✏️',
+    btnModerate: 'Tasdiqlash ✅',
     btnApprove: '✅ Tasdiqlash',
     btnReject: '❌ Rad etish',
     btnBlock: '🚫 Bloklash',
@@ -142,11 +138,7 @@ const BOT_COPY = {
     appealRejectedText: '❌ Отклонено',
     btnFind: 'Найти цену 🔍',
     btnReport: 'Добавить цену ➕',
-    btnAdminPending: 'Ожидающие 📥',
-    btnAdminStats: 'Статистика 📊',
-    btnAdminAppeals: 'Обращения 📨',
-    btnAdminBlocked: 'Блокировки 🚫',
-    btnAdminEdit: 'Помощь по правке ✏️',
+    btnModerate: 'Модерация ✅',
     btnApprove: '✅ Одобрить',
     btnReject: '❌ Отклонить',
     btnBlock: '🚫 Блокировать',
@@ -216,11 +208,7 @@ const BOT_COPY = {
     appealRejectedText: '❌ Rejected',
     btnFind: 'Find price 🔍',
     btnReport: 'Add price ➕',
-    btnAdminPending: 'Pending 📥',
-    btnAdminStats: 'Stats 📊',
-    btnAdminAppeals: 'Appeals 📨',
-    btnAdminBlocked: 'Blocked 🚫',
-    btnAdminEdit: 'Edit help ✏️',
+    btnModerate: 'Moderate ✅',
     btnApprove: '✅ Approve',
     btnReject: '❌ Reject',
     btnBlock: '🚫 Block',
@@ -534,19 +522,9 @@ async function sendMenu(chatId, lang, telegramId = null) {
   ];
 
   if (isAdminUser) {
-    inline_keyboard.push(
-      [
-        { text: BOT_COPY[lang].btnAdminPending, callback_data: 'menu:pending' },
-        { text: BOT_COPY[lang].btnAdminStats, callback_data: 'menu:stats' },
-      ],
-      [
-        { text: BOT_COPY[lang].btnAdminAppeals, callback_data: 'menu:appeals' },
-        { text: BOT_COPY[lang].btnAdminBlocked, callback_data: 'menu:blocked' },
-      ],
-      [
-        { text: BOT_COPY[lang].btnAdminEdit, callback_data: 'menu:edithelp' },
-      ],
-    );
+    inline_keyboard.push([
+      { text: BOT_COPY[lang].btnModerate, web_app: { url: `${miniAppUrl}?mode=moderate&lang=${lang}` } },
+    ]);
   }
 
   await sendTelegramMessage(chatId, {
@@ -1136,31 +1114,6 @@ async function handleCallback(callbackQuery) {
   }
 
   const adminLang = getUserLang(callbackQuery?.from?.language_code);
-
-  if (data === 'menu:pending') {
-    await sendPendingQueue(chatId, adminLang);
-    return;
-  }
-
-  if (data === 'menu:stats') {
-    await sendAdminStats(chatId, adminLang);
-    return;
-  }
-
-  if (data === 'menu:appeals') {
-    await sendAppealsQueue(chatId, adminLang);
-    return;
-  }
-
-  if (data === 'menu:blocked') {
-    await sendBlockedUsers(chatId, adminLang);
-    return;
-  }
-
-  if (data === 'menu:edithelp') {
-    await sendAdminEditHelp(chatId);
-    return;
-  }
 
   if (data.startsWith('editname_')) {
     const pendingId = data.replace('editname_', '');
