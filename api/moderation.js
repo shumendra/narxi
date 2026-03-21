@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
+import { extractCityFromAddress, normalizeCityName } from '../src/constants/cities.js';
 
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
@@ -53,24 +54,64 @@ function isAdminUser(telegramId) {
   return Boolean(telegramId) && adminTelegramIds.includes(String(telegramId));
 }
 
-async function listPending() {
-  const { data, error } = await supabase
+async function syncProductAvailableCities(productId, city) {
+  const normalizedCity = normalizeCityName(city || '');
+  if (!productId || !normalizedCity) return;
+
+  const { data: product, error: fetchError } = await supabase
+    .from('products')
+    .select('available_cities')
+    .eq('id', productId)
+    .maybeSingle();
+
+  if (fetchError) throw fetchError;
+
+  const availableCities = Array.isArray(product?.available_cities)
+    ? product.available_cities.filter(Boolean)
+    : [];
+
+  if (availableCities.includes(normalizedCity)) return;
+
+  const { error: updateError } = await supabase
+    .from('products')
+    .update({ available_cities: [...availableCities, normalizedCity] })
+    .eq('id', productId);
+
+  if (updateError) throw updateError;
+}
+
+async function listPending(city) {
+  let query = supabase
     .from('pending_prices')
     .select('*')
     .or('status.eq.pending,status.is.null')
     .order('created_at', { ascending: true })
     .limit(100);
 
+  const normalizedCity = normalizeCityName(city || '');
+  if (normalizedCity) {
+    query = query.eq('city', normalizedCity);
+  }
+
+  const { data, error } = await query;
+
   if (error) throw error;
   return data || [];
 }
 
-async function listApproved() {
-  const { data, error } = await supabase
+async function listApproved(city) {
+  let query = supabase
     .from('prices')
     .select('*')
     .order('receipt_date', { ascending: false })
     .limit(100);
+
+  const normalizedCity = normalizeCityName(city || '');
+  if (normalizedCity) {
+    query = query.eq('city', normalizedCity);
+  }
+
+  const { data, error } = await query;
 
   if (error) throw error;
   return data || [];
@@ -132,6 +173,7 @@ async function approvePending(id) {
   }
 
   let productId = pending.product_id;
+  const city = normalizeCityName(pending.city || '') || extractCityFromAddress(pending.place_address || '');
 
   if (!productId) {
     const { data: existingProduct } = await supabase
@@ -151,6 +193,7 @@ async function approvePending(id) {
           name_en: pending.product_name_raw,
           category: 'Boshqa',
           unit: 'dona',
+          available_cities: city ? [city] : [],
         })
         .select('id')
         .single();
@@ -166,6 +209,7 @@ async function approvePending(id) {
     product_name_raw: pending.product_name_raw,
     price: unitPrice,
     quantity: pending.quantity,
+    city,
     place_name: pending.place_name,
     place_address: pending.place_address,
     latitude: pending.latitude,
@@ -177,9 +221,11 @@ async function approvePending(id) {
 
   if (insertError) throw insertError;
 
+  await syncProductAvailableCities(productId, city);
+
   const { error: updateError } = await supabase
     .from('pending_prices')
-    .update({ status: 'approved', product_id: productId })
+    .update({ status: 'approved', product_id: productId, city })
     .eq('id', id);
 
   if (updateError) throw updateError;
@@ -216,11 +262,11 @@ export default async function moderation(req, res) {
   try {
     switch (body.action) {
       case 'list': {
-        const items = await listPending();
+        const items = await listPending(body.city);
         return send(res, 200, { ok: true, items });
       }
       case 'listApproved': {
-        const items = await listApproved();
+        const items = await listApproved(body.city);
         return send(res, 200, { ok: true, items });
       }
       case 'update': {

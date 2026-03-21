@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 import * as fuzzball from 'fuzzball';
 import dotenv from 'dotenv';
 import dns from 'node:dns';
+import { extractCityFromAddress, getCityLabel, normalizeCityName } from '../../src/constants/cities.js';
 
 dotenv.config();
 dotenv.config({ path: '.env.local', override: true });
@@ -37,6 +38,8 @@ const BOT_COPY = {
     missingReceipt: "Kechirasiz, chek havolasi topilmadi. ❌",
     processing: 'Chek tekshirilmoqda... ⏳',
     saved: (count, store) => `✅ ${count} ta mahsulot saqlandi!\n📍 Do'kon: ${store}`,
+    receiptAccepted: (store, address, city, count) =>
+      `✅ Chek qabul qilindi!\n\n🏪 Do'kon: ${store}\n📍 Manzil: ${address}\n🏙️ Shahar: ${city}\n📦 Mahsulotlar: ${count} ta\n⏳ Ko'rib chiqilmoqda...\n\nRahmat! Siz narxlarni yangilashga yordam berdingiz 🙌`,
     unreadable: "Kechirasiz, chek ma'lumotlarini o'qib bo'lmadi. ❌",
     alreadyAdded: "Bu chek allaqachon qo'shilgan. ✅",
     serverError: "Server sozlamalarida xatolik. Keyinroq urinib ko'ring.",
@@ -53,6 +56,7 @@ const BOT_COPY = {
     pendingEmpty: "Hech qanday taklif yo'q ✅",
     pendingMore: (count) => `Yana ${count} ta taklif bor. /pending buyrug'ini qayta yuboring.`,
     statsTitle: '📊 Narxi statistikasi:',
+    statsCities: '🏙️ Shaharlar:',
     blockedEmpty: "Bloklangan foydalanuvchilar yo'q",
     unblockOk: (id) => `✅ ${id} blokdan chiqarildi`,
     appealsEmpty: "Hech qanday murojaat yo'q ✅",
@@ -64,7 +68,6 @@ const BOT_COPY = {
     appealRejectedText: '❌ Rad etildi',
     btnFind: 'Narx topish 🔍',
     btnReport: "Narx kiritish ➕",
-    btnModerate: 'Tasdiqlash ✅',
     btnAdminPending: 'Kutilayotganlar 📥',
     btnAdminStats: 'Statistika 📊',
     btnAdminAppeals: 'Murojaatlar 📨',
@@ -90,6 +93,7 @@ const BOT_COPY = {
         `💰 Narx: ${unitPrice} so'm/${unitLabel} (jami: ${total} so'm x ${quantity})\n` +
         `🏪 Do'kon: ${item.place_name || '-'}\n` +
         `📍 Manzil: ${item.place_address || '-'}\n` +
+        `🏙️ Shahar: ${getCityLabel(item.city || 'Tashkent', 'uz')}\n` +
         `📅 Sana: ${dateText || '-'}\n` +
         `🔗 Manba: ${sourceLabel}\n` +
         `👤 Foydalanuvchi ID: ${item.submitted_by}\n` +
@@ -108,6 +112,8 @@ const BOT_COPY = {
     missingReceipt: "Не удалось найти ссылку на чек. ❌",
     processing: 'Проверяем чек... ⏳',
     saved: (count, store) => `✅ Сохранено товаров: ${count}\n📍 Магазин: ${store}`,
+    receiptAccepted: (store, address, city, count) =>
+      `✅ Чек принят!\n\n🏪 Магазин: ${store}\n📍 Адрес: ${address}\n🏙️ Город: ${city}\n📦 Товаров: ${count}\n⏳ Идет модерация...\n\nСпасибо! Вы помогаете обновлять цены 🙌`,
     unreadable: "Не удалось прочитать данные чека. ❌",
     alreadyAdded: "Этот чек уже был добавлен. ✅",
     serverError: "Ошибка настроек сервера. Попробуйте позже.",
@@ -124,6 +130,7 @@ const BOT_COPY = {
     pendingEmpty: 'Нет предложений ✅',
     pendingMore: (count) => `Осталось ${count} предложений. Отправьте /pending снова.`,
     statsTitle: '📊 Статистика Narxi:',
+    statsCities: '🏙️ Города:',
     blockedEmpty: 'Нет заблокированных пользователей',
     unblockOk: (id) => `✅ ${id} разблокирован`,
     appealsEmpty: 'Нет обращений ✅',
@@ -135,7 +142,6 @@ const BOT_COPY = {
     appealRejectedText: '❌ Отклонено',
     btnFind: 'Найти цену 🔍',
     btnReport: 'Добавить цену ➕',
-    btnModerate: 'Модерация ✅',
     btnAdminPending: 'Ожидающие 📥',
     btnAdminStats: 'Статистика 📊',
     btnAdminAppeals: 'Обращения 📨',
@@ -161,6 +167,7 @@ const BOT_COPY = {
         `💰 Цена: ${unitPrice} сум/${unitLabel} (всего: ${total} сум x ${quantity})\n` +
         `🏪 Магазин: ${item.place_name || '-'}\n` +
         `📍 Адрес: ${item.place_address || '-'}\n` +
+        `🏙️ Город: ${getCityLabel(item.city || 'Tashkent', 'ru')}\n` +
         `📅 Дата: ${dateText || '-'}\n` +
         `🔗 Источник: ${sourceLabel}\n` +
         `👤 ID пользователя: ${item.submitted_by}\n` +
@@ -179,6 +186,8 @@ const BOT_COPY = {
     missingReceipt: 'Receipt link not found. ❌',
     processing: 'Checking receipt... ⏳',
     saved: (count, store) => `✅ Items saved: ${count}\n📍 Store: ${store}`,
+    receiptAccepted: (store, address, city, count) =>
+      `✅ Receipt accepted!\n\n🏪 Store: ${store}\n📍 Address: ${address}\n🏙️ City: ${city}\n📦 Items: ${count}\n⏳ Waiting for moderation...\n\nThank you for helping keep prices current 🙌`,
     unreadable: 'Could not read the receipt data. ❌',
     alreadyAdded: 'This receipt was already added. ✅',
     serverError: 'Server configuration error. Please try again later.',
@@ -195,6 +204,7 @@ const BOT_COPY = {
     pendingEmpty: 'No pending submissions ✅',
     pendingMore: (count) => `There are ${count} more submissions. Send /pending again.`,
     statsTitle: '📊 Narxi statistics:',
+    statsCities: '🏙️ Cities:',
     blockedEmpty: 'No blocked users',
     unblockOk: (id) => `✅ ${id} unblocked`,
     appealsEmpty: 'No appeals ✅',
@@ -206,7 +216,6 @@ const BOT_COPY = {
     appealRejectedText: '❌ Rejected',
     btnFind: 'Find price 🔍',
     btnReport: 'Add price ➕',
-    btnModerate: 'Moderate ✅',
     btnAdminPending: 'Pending 📥',
     btnAdminStats: 'Stats 📊',
     btnAdminAppeals: 'Appeals 📨',
@@ -232,6 +241,7 @@ const BOT_COPY = {
         `💰 Price: ${unitPrice} so'm/${unitLabel} (total: ${total} so'm x ${quantity})\n` +
         `🏪 Store: ${item.place_name || '-'}\n` +
         `📍 Address: ${item.place_address || '-'}\n` +
+        `🏙️ City: ${getCityLabel(item.city || 'Tashkent', 'en')}\n` +
         `📅 Date: ${dateText || '-'}\n` +
         `🔗 Source: ${sourceLabel}\n` +
         `👤 User ID: ${item.submitted_by}\n` +
@@ -344,6 +354,7 @@ async function scrapeSoliq(url) {
       .text()
       .replace(/\s+/g, ' ')
       .trim() || $('.address, .company-address').first().text().trim() || 'Toshkent sh.';
+    const city = extractCityFromAddress(storeAddress);
     const receiptDateRaw = extractReceiptDate($);
     const parsedDate = receiptDateRaw ? new Date(receiptDateRaw) : null;
     const receiptDate = parsedDate && !Number.isNaN(parsedDate.getTime())
@@ -379,11 +390,62 @@ async function scrapeSoliq(url) {
       });
     }
 
-    return { storeName, storeAddress, items, receiptDate };
+    return { storeName, storeAddress, city, items, receiptDate };
   } catch (error) {
     console.error('Scraping error:', error);
     return null;
   }
+}
+
+async function syncProductAvailableCities(productId, city) {
+  const normalizedCity = normalizeCityName(city || '');
+  if (!productId || !normalizedCity) return;
+
+  const { data: product, error: fetchError } = await supabase
+    .from('products')
+    .select('available_cities')
+    .eq('id', productId)
+    .maybeSingle();
+
+  if (fetchError) {
+    throw fetchError;
+  }
+
+  const availableCities = Array.isArray(product?.available_cities)
+    ? product.available_cities.filter(Boolean)
+    : [];
+
+  if (availableCities.includes(normalizedCity)) {
+    return;
+  }
+
+  const { error: updateError } = await supabase
+    .from('products')
+    .update({ available_cities: [...availableCities, normalizedCity] })
+    .eq('id', productId);
+
+  if (updateError) {
+    throw updateError;
+  }
+}
+
+function formatCityBreakdown(rows, lang) {
+  const counts = new Map();
+
+  for (const row of rows || []) {
+    const city = normalizeCityName(row?.city || '') || 'Tashkent';
+    counts.set(city, (counts.get(city) || 0) + 1);
+  }
+
+  if (counts.size === 0) {
+    return '-';
+  }
+
+  return [...counts.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 8)
+    .map(([city, count]) => `${getCityLabel(city, lang)} — ${count}`)
+    .join('\n');
 }
 
 async function findProductMatch(rawName) {
@@ -472,9 +534,19 @@ async function sendMenu(chatId, lang, telegramId = null) {
   ];
 
   if (isAdminUser) {
-    inline_keyboard.push([
-      { text: BOT_COPY[lang].btnModerate, web_app: { url: `${miniAppUrl}?mode=moderate&lang=${lang}` } },
-    ]);
+    inline_keyboard.push(
+      [
+        { text: BOT_COPY[lang].btnAdminPending, callback_data: 'menu:pending' },
+        { text: BOT_COPY[lang].btnAdminStats, callback_data: 'menu:stats' },
+      ],
+      [
+        { text: BOT_COPY[lang].btnAdminAppeals, callback_data: 'menu:appeals' },
+        { text: BOT_COPY[lang].btnAdminBlocked, callback_data: 'menu:blocked' },
+      ],
+      [
+        { text: BOT_COPY[lang].btnAdminEdit, callback_data: 'menu:edithelp' },
+      ],
+    );
   }
 
   await sendTelegramMessage(chatId, {
@@ -623,14 +695,19 @@ async function sendPendingQueue(chatId, lang) {
 }
 
 async function sendAdminStats(chatId, lang) {
-  const [{ count: pricesCount }, { count: pendingCount }, { count: rejectedCount }, { count: productsCount }, { count: blockedCount }, { count: appealsCount }] = await Promise.all([
+  const [{ count: pricesCount }, { count: pendingCount }, { count: rejectedCount }, { count: productsCount }, { count: blockedCount }, { count: appealsCount }, { data: approvedCities }, { data: pendingCities }] = await Promise.all([
     supabase.from('prices').select('id', { count: 'exact', head: true }),
     supabase.from('pending_prices').select('id', { count: 'exact', head: true }).or('status.eq.pending,status.is.null'),
     supabase.from('pending_prices').select('id', { count: 'exact', head: true }).eq('status', 'rejected'),
     supabase.from('products').select('id', { count: 'exact', head: true }),
     supabase.from('blocked_users').select('telegram_id', { count: 'exact', head: true }),
     supabase.from('appeals').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
+    supabase.from('prices').select('city').limit(5000),
+    supabase.from('pending_prices').select('city').or('status.eq.pending,status.is.null').limit(5000),
   ]);
+
+  const approvedCitySummary = formatCityBreakdown(approvedCities, lang);
+  const pendingCitySummary = formatCityBreakdown(pendingCities, lang);
 
   await sendTelegramMessage(chatId, {
     text:
@@ -640,7 +717,10 @@ async function sendAdminStats(chatId, lang) {
       `❌ Rejected: ${rejectedCount || 0}\n` +
       `📦 Products: ${productsCount || 0}\n` +
       `🚫 Blocked: ${blockedCount || 0}\n` +
-      `📨 Appeals: ${appealsCount || 0}`,
+      `📨 Appeals: ${appealsCount || 0}\n\n` +
+      `${BOT_COPY[lang].statsCities}\n` +
+      `✅ Approved\n${approvedCitySummary}\n\n` +
+      `⏳ Pending\n${pendingCitySummary}`,
   });
 }
 
@@ -993,6 +1073,7 @@ async function handleMessage(message) {
             price: item.totalPrice,
             quantity: item.quantity,
             unit_price: item.unitPrice,
+            city: receiptData.city,
             place_name: receiptData.storeName,
             place_address: receiptData.storeAddress,
             receipt_url: receiptUrl,
@@ -1011,13 +1092,12 @@ async function handleMessage(message) {
         });
 
         await sendTelegramMessage(chatId, {
-          text:
-            `✅ Chek qabul qilindi!\n\n` +
-            `🏪 Do'kon: ${receiptData.storeName}\n` +
-            `📍 Manzil: ${receiptData.storeAddress}\n` +
-            `📦 Mahsulotlar: ${receiptData.items.length} ta\n` +
-            `⏳ Ko'rib chiqilmoqda...\n\n` +
-            `Rahmat! Siz Toshkent aholisiga narxlarni bilishga yordam berdingiz 🙌`,
+          text: BOT_COPY[lang].receiptAccepted(
+            receiptData.storeName,
+            receiptData.storeAddress,
+            getCityLabel(receiptData.city, lang),
+            receiptData.items.length,
+          ),
         });
       } catch (error) {
         console.error('Supabase insert error:', error);
@@ -1125,10 +1205,18 @@ async function handleCallback(callbackQuery) {
     if (!pending) return;
 
     let productId = pending.product_id;
+    const city = normalizeCityName(pending.city || '') || extractCityFromAddress(pending.place_address || '');
     if (!productId) {
       const { data: created } = await supabase
         .from('products')
-        .insert({ name_uz: pending.product_name_raw, name_ru: '', name_en: '', category: 'Boshqa', unit: 'dona' })
+        .insert({
+          name_uz: pending.product_name_raw,
+          name_ru: '',
+          name_en: '',
+          category: 'Boshqa',
+          unit: 'dona',
+          available_cities: city ? [city] : [],
+        })
         .select('id')
         .single();
       productId = created?.id || null;
@@ -1137,8 +1225,9 @@ async function handleCallback(callbackQuery) {
     await supabase.from('prices').insert({
       product_id: productId,
       product_name_raw: pending.product_name_raw,
-      price: pending.price,
+      price: pending.unit_price || pending.price,
       quantity: pending.quantity,
+      city,
       place_name: pending.place_name,
       place_address: pending.place_address,
       latitude: pending.latitude,
@@ -1148,7 +1237,9 @@ async function handleCallback(callbackQuery) {
       source: pending.source,
     });
 
-    await supabase.from('pending_prices').update({ status: 'approved' }).eq('id', id);
+    await syncProductAvailableCities(productId, city);
+
+    await supabase.from('pending_prices').update({ status: 'approved', product_id: productId, city }).eq('id', id);
 
     const adminLang = getUserLang(callbackQuery?.from?.language_code);
     await axios.post(`${TELEGRAM_API}/editMessageText`, {

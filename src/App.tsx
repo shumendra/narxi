@@ -11,6 +11,8 @@ import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { formatDistanceToNow } from 'date-fns';
 import { enUS, ru, uz } from 'date-fns/locale';
+import { CITY_OPTIONS, DEFAULT_CITY, getCityLabel, getCityOption } from './constants/cities.js';
+import { haversineDistanceKm } from './utils/haversine.js';
 
 // Utility for Tailwind classes
 function cn(...inputs: ClassValue[]) {
@@ -33,6 +35,8 @@ interface Product {
   name_ru: string;
   name_en?: string | null;
   category: string;
+  unit?: string | null;
+  available_cities?: string[] | null;
 }
 
 interface PriceRecord {
@@ -44,6 +48,7 @@ interface PriceRecord {
   longitude: number | null;
   receipt_date: string;
   product_id: string;
+  city?: string | null;
 }
 
 interface PendingModerationItem {
@@ -59,6 +64,7 @@ interface PendingModerationItem {
   created_at: string;
   place_name: string | null;
   place_address: string | null;
+  city?: string | null;
 }
 
 interface ApprovedModerationItem {
@@ -72,6 +78,7 @@ interface ApprovedModerationItem {
   receipt_date: string;
   submitted_by: string;
   source: string;
+  city?: string | null;
 }
 
 // Map Updater Component
@@ -103,10 +110,15 @@ export default function App() {
   const [moderationSavingId, setModerationSavingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
+  const [selectedCity, setSelectedCity] = useState(DEFAULT_CITY);
+  const [nearbyEnabled, setNearbyEnabled] = useState(false);
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [geoError, setGeoError] = useState('');
   const priceFormatter = useMemo(() => new Intl.NumberFormat('en-US'), []);
   const telegramUserId = window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || '';
   const telegramInitData = window.Telegram?.WebApp?.initData || '';
   const isAdminUser = adminTelegramIds.includes(telegramUserId);
+  const selectedCityOption = useMemo(() => getCityOption(selectedCity), [selectedCity]);
 
   const copy = useMemo(
     () => ({
@@ -115,9 +127,14 @@ export default function App() {
         modeFind: 'Topish',
         modeReport: "Qo'shish",
         modeModerate: 'Tasdiqlash',
+        cityTitle: 'Shahar',
+        nearbyToggle: 'Yaqin joylar',
+        nearbyHint: 'Avval yaqin do‘konlar ko‘rsatiladi',
+        nearbyDistance: 'masofa',
+        nearbyError: 'Joylashuvni olishga ruxsat berilmadi',
         searchPlaceholder: 'Mahsulot nomi (masalan: Shakar)',
         emptyTitle: 'Narxlarni qidirish',
-        emptyHint: "Toshkent bo'ylab eng arzon narxlarni topish uchun mahsulot nomini kiriting",
+        emptyHint: 'Tanlangan shaharda eng arzon narxlarni topish uchun mahsulot nomini kiriting',
         cheapestTitle: 'Eng arzon 5 ta joy',
         mapTitle: 'Xarita',
         noData: "Hali narx kiritilmagan",
@@ -135,8 +152,11 @@ export default function App() {
         alertSuccess: "Narxingiz yuborildi va ko'rib chiqilgandan so'ng qo'shiladi ✅",
         alertError: "Xatolik yuz berdi. Qayta urinib ko'ring.",
         locationHint: "Joylashuv tanlanmagan",
+        reportCityConfirm: 'Hisobot aynan shu shahar uchun yuboriladi.',
+        scrapeLinkHint: 'Soliq.uz chek havolasini botga yuborsangiz, ma’lumot avtomatik o‘qiladi.',
         photoLabel: "Chek rasmi (ixtiyoriy)",
         sumLabel: "so'm",
+        cityLabel: 'Shahar',
         moderationTitle: 'Kutilayotgan narxlar',
         moderationEmpty: 'Kutilayotgan narxlar yo‘q',
         moderationRefresh: 'Yangilash',
@@ -164,9 +184,14 @@ export default function App() {
         modeFind: 'Поиск',
         modeReport: 'Добавить',
         modeModerate: 'Модерация',
+        cityTitle: 'Город',
+        nearbyToggle: 'Рядом',
+        nearbyHint: 'Сначала показывать ближайшие магазины',
+        nearbyDistance: 'расстояние',
+        nearbyError: 'Не удалось получить геолокацию',
         searchPlaceholder: 'Название товара (например: Сахар)',
         emptyTitle: 'Поиск цен',
-        emptyHint: 'Введите название товара, чтобы найти самые дешевые цены по Ташкенту',
+        emptyHint: 'Введите название товара, чтобы найти самые дешевые цены в выбранном городе',
         cheapestTitle: 'Топ 5 самых дешевых мест',
         mapTitle: 'Карта',
         noData: 'Цен пока нет',
@@ -184,8 +209,11 @@ export default function App() {
         alertSuccess: 'Цена отправлена и будет добавлена после проверки ✅',
         alertError: 'Произошла ошибка. Попробуйте еще раз.',
         locationHint: 'Локация не выбрана',
+        reportCityConfirm: 'Отчет будет отправлен именно для этого города.',
+        scrapeLinkHint: 'Если отправить боту ссылку на чек soliq.uz, данные заполнятся автоматически.',
         photoLabel: 'Фото чека (необязательно)',
         sumLabel: 'сум',
+        cityLabel: 'Город',
         moderationTitle: 'Ожидающие цены',
         moderationEmpty: 'Нет ожидающих цен',
         moderationRefresh: 'Обновить',
@@ -213,9 +241,14 @@ export default function App() {
         modeFind: 'Find',
         modeReport: 'Add',
         modeModerate: 'Moderate',
+        cityTitle: 'City',
+        nearbyToggle: 'Nearby',
+        nearbyHint: 'Show the closest stores first',
+        nearbyDistance: 'distance',
+        nearbyError: 'Location access was not granted',
         searchPlaceholder: 'Product name (e.g., Sugar)',
         emptyTitle: 'Find prices',
-        emptyHint: 'Type a product name to find the cheapest prices across Tashkent',
+        emptyHint: 'Type a product name to find the cheapest prices in the selected city',
         cheapestTitle: 'Top 5 cheapest places',
         mapTitle: 'Map',
         noData: 'No prices yet',
@@ -233,8 +266,11 @@ export default function App() {
         alertSuccess: 'Your price was submitted and will be added after review ✅',
         alertError: 'Something went wrong. Please try again.',
         locationHint: 'Location not selected',
+        reportCityConfirm: 'The submission will be saved for this city.',
+        scrapeLinkHint: 'Send the bot a soliq.uz receipt link to scrape the data automatically.',
         photoLabel: 'Receipt photo (optional)',
         sumLabel: 'sum',
+        cityLabel: 'City',
         moderationTitle: 'Pending prices',
         moderationEmpty: 'No pending prices',
         moderationRefresh: 'Refresh',
@@ -262,6 +298,7 @@ export default function App() {
   );
 
   const t = copy[lang];
+  const selectedCityLabel = getCityLabel(selectedCity, lang);
 
   // Report Form State
   const [reportPrice, setReportPrice] = useState('');
@@ -273,8 +310,13 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const initialMode = params.get('mode') as 'find' | 'report' | 'moderate';
     const initialLang = params.get('lang') as 'uz' | 'ru' | 'en';
+    const initialCity = params.get('city');
     if (initialMode && (initialMode !== 'moderate' || isAdminUser)) setMode(initialMode);
     if (initialLang) setLang(initialLang);
+    if (initialCity) {
+      const normalizedCity = CITY_OPTIONS.find(city => city.value === initialCity)?.value;
+      if (normalizedCity) setSelectedCity(normalizedCity);
+    }
 
     fetchProducts();
   }, [isAdminUser]);
@@ -294,10 +336,11 @@ export default function App() {
       .from('prices')
       .select('*')
       .eq('product_id', productId)
+      .eq('city', selectedCity)
       .order('price', { ascending: true })
-      .limit(20);
+      .limit(100);
 
-    if (data) setPrices(data);
+    setPrices((data || []) as PriceRecord[]);
     setLoading(false);
   };
 
@@ -334,8 +377,8 @@ export default function App() {
     setModerationLoading(true);
     try {
       const [pendingResult, approvedResult] = await Promise.all([
-        callModerationApi('list'),
-        callModerationApi('listApproved'),
+        callModerationApi('list', { city: selectedCity }),
+        callModerationApi('listApproved', { city: selectedCity }),
       ]);
       setModerationItems((pendingResult.items || []).map(normalizePendingItem));
       setApprovedItems((approvedResult.items || []).map(normalizeApprovedItem));
@@ -450,16 +493,31 @@ export default function App() {
     if (mode === 'moderate' && isAdminUser) {
       fetchModerationItems();
     }
-  }, [mode, isAdminUser]);
+  }, [mode, isAdminUser, selectedCity]);
+
+  useEffect(() => {
+    if (mode === 'find' && selectedProduct) {
+      loadPricesForProduct(selectedProduct.id);
+    }
+  }, [mode, selectedProduct, selectedCity]);
+
+  const cityProducts = useMemo(() => {
+    return products.filter(product => {
+      const availableCities = Array.isArray(product.available_cities)
+        ? product.available_cities.filter(Boolean)
+        : [];
+      return availableCities.length === 0 || availableCities.includes(selectedCity);
+    });
+  }, [products, selectedCity]);
 
   const filteredProducts = useMemo(() => {
     if (!searchQuery) return [];
-    return products.filter(p => 
+    return cityProducts.filter(p => 
       p.name_uz.toLowerCase().includes(searchQuery.toLowerCase()) ||
       p.name_ru.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (p.name_en || '').toLowerCase().includes(searchQuery.toLowerCase())
     );
-  }, [searchQuery, products]);
+  }, [searchQuery, cityProducts]);
 
   const getProductName = (product: Product, selectedLang: 'uz' | 'ru' | 'en') => {
     if (selectedLang === 'ru') return product.name_ru;
@@ -477,15 +535,34 @@ export default function App() {
     setSelectedProduct(product);
     setSearchQuery(getProductName(product, lang));
     setShowDropdown(false);
-
-    if (mode === 'find') {
-      await loadPricesForProduct(product.id);
-    }
   };
 
+  const sortedPrices = useMemo(() => {
+    const withDistance = prices.map(price => ({
+      ...price,
+      distanceKm:
+        nearbyEnabled && userLocation && price.latitude !== null && price.longitude !== null
+          ? haversineDistanceKm(userLocation, { lat: price.latitude, lng: price.longitude })
+          : null,
+    }));
+
+    if (nearbyEnabled && userLocation) {
+      return withDistance.sort((left, right) => {
+        const leftDistance = left.distanceKm ?? Number.POSITIVE_INFINITY;
+        const rightDistance = right.distanceKm ?? Number.POSITIVE_INFINITY;
+        if (leftDistance !== rightDistance) {
+          return leftDistance - rightDistance;
+        }
+        return left.price - right.price;
+      });
+    }
+
+    return withDistance.sort((left, right) => left.price - right.price);
+  }, [prices, nearbyEnabled, userLocation]);
+
   const mapPrices = useMemo(
-    () => prices.filter(p => p.latitude !== null && p.longitude !== null),
-    [prices]
+    () => sortedPrices.filter(p => p.latitude !== null && p.longitude !== null),
+    [sortedPrices]
   );
 
   const minMapPrice = useMemo(
@@ -516,6 +593,52 @@ export default function App() {
     return interpolateColor(yellow, red, (ratio - 0.5) / 0.5);
   };
 
+  const findMapCenter = useMemo<[number, number]>(() => {
+    if (nearbyEnabled && userLocation) {
+      return [userLocation.lat, userLocation.lng];
+    }
+    return selectedCityOption.center;
+  }, [nearbyEnabled, userLocation, selectedCityOption]);
+
+  const findMapZoom = nearbyEnabled && userLocation ? 13 : selectedCityOption.zoom;
+
+  const requestUserLocation = (onSuccess?: (coords: { lat: number; lng: number }) => void) => {
+    if (!navigator.geolocation) {
+      setGeoError(t.nearbyError);
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setUserLocation(coords);
+        setGeoError('');
+        onSuccess?.(coords);
+      },
+      () => {
+        setGeoError(t.nearbyError);
+        setNearbyEnabled(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 300000 }
+    );
+  };
+
+  const toggleNearby = () => {
+    if (nearbyEnabled) {
+      setNearbyEnabled(false);
+      setGeoError('');
+      return;
+    }
+
+    if (userLocation) {
+      setNearbyEnabled(true);
+      setGeoError('');
+      return;
+    }
+
+    requestUserLocation(() => setNearbyEnabled(true));
+  };
+
   const handleReportSubmit = async () => {
     if (!reportPrice || (!selectedProduct && !searchQuery.trim())) {
       window.Telegram?.WebApp?.showAlert(t.alertFill);
@@ -534,6 +657,7 @@ export default function App() {
       unit_price: parseInt(reportPrice),
       latitude: reportLocation?.lat ?? null,
       longitude: reportLocation?.lng ?? null,
+      city: selectedCity,
       source: 'manual',
       submitted_by: window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || 'unknown',
       photo_url: null,
@@ -552,11 +676,9 @@ export default function App() {
   };
 
   const getCurrentLocation = () => {
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition((pos) => {
-        setReportLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-      });
-    }
+    requestUserLocation((coords) => {
+      setReportLocation(coords);
+    });
   };
 
   const reportLocale = useMemo(() => {
@@ -620,6 +742,26 @@ export default function App() {
           </div>
         </div>
 
+        <div className="mb-4">
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-stone-500">{t.cityTitle}</div>
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {CITY_OPTIONS.map(city => (
+              <button
+                key={city.value}
+                onClick={() => setSelectedCity(city.value)}
+                className={cn(
+                  'whitespace-nowrap rounded-full border px-3 py-2 text-sm font-medium transition-all',
+                  selectedCity === city.value
+                    ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
+                    : 'border-stone-200 bg-stone-50 text-stone-600'
+                )}
+              >
+                {city.labels[lang]}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {/* Search Bar */}
         {mode !== 'moderate' && <div className="relative">
           <div className="relative">
@@ -661,6 +803,29 @@ export default function App() {
       <main className="p-4">
         {mode === 'find' ? (
           <div className="space-y-6">
+            <section className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-wider text-stone-500">{t.cityLabel}</div>
+                  <div className="text-base font-semibold text-stone-900">{selectedCityLabel}</div>
+                </div>
+                <button
+                  onClick={toggleNearby}
+                  className={cn(
+                    'inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition-all',
+                    nearbyEnabled
+                      ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
+                      : 'border-stone-200 bg-stone-50 text-stone-600'
+                  )}
+                >
+                  <Navigation className="h-4 w-4" />
+                  {t.nearbyToggle}
+                </button>
+              </div>
+              <div className="mt-2 text-xs text-stone-500">{t.nearbyHint}</div>
+              {geoError && <div className="mt-2 text-xs font-medium text-rose-600">{geoError}</div>}
+            </section>
+
             {!selectedProduct ? (
               <div className="text-center py-20">
                 <div className="bg-emerald-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -681,8 +846,8 @@ export default function App() {
                       <div className="animate-pulse space-y-3">
                         {[1, 2, 3].map(i => <div key={i} className="h-20 bg-stone-200 rounded-xl" />)}
                       </div>
-                    ) : prices.length > 0 ? (
-                      prices.slice(0, 5).map((p, i) => (
+                    ) : sortedPrices.length > 0 ? (
+                      sortedPrices.slice(0, 5).map((p, i) => (
                         <div key={p.id} className="bg-white p-4 rounded-xl border border-stone-200 shadow-sm flex items-center justify-between">
                           <div className="flex-1">
                             <div className="flex items-center gap-2 mb-1">
@@ -695,12 +860,18 @@ export default function App() {
                               <h4 className="font-bold text-stone-900">{priceFormatter.format(p.price)} {t.sumLabel}</h4>
                             </div>
                             <p className="text-sm text-stone-600 truncate">{p.place_name || t.unknownStore}</p>
+                            <p className="text-xs text-stone-400 truncate">{p.city || selectedCityLabel}</p>
                             <p className="text-xs text-stone-400">
                               {formatDistanceToNow(new Date(p.receipt_date), { addSuffix: true, locale: reportLocale })}
                             </p>
+                            {nearbyEnabled && userLocation && p.distanceKm !== null && p.distanceKm !== undefined && Number.isFinite(p.distanceKm) && (
+                              <p className="text-xs font-medium text-emerald-700">
+                                {t.nearbyDistance}: {p.distanceKm.toFixed(1)} km
+                              </p>
+                            )}
                           </div>
                           <div className="text-right">
-                            <button className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors">
+                            <button title={t.mapTitle} className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors">
                               <Navigation className="w-5 h-5" />
                             </button>
                           </div>
@@ -715,14 +886,15 @@ export default function App() {
                 {/* Map */}
                 <section>
                   <h3 className="text-sm font-semibold text-stone-500 uppercase tracking-wider mb-3">{t.mapTitle}</h3>
-                  <div className="h-[300px] rounded-2xl overflow-hidden border border-stone-200 shadow-inner relative z-0">
+                  <div className="h-75 rounded-2xl overflow-hidden border border-stone-200 shadow-inner relative z-0">
                     <MapContainer 
-                      center={[41.2995, 69.2401]} 
-                      zoom={12} 
+                      center={findMapCenter}
+                      zoom={findMapZoom}
                       style={{ height: '100%', width: '100%' }}
                       zoomControl={false}
                     >
                       <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                      <ChangeView center={findMapCenter} zoom={findMapZoom} />
                       {mapPrices.map(p => (
                         <CircleMarker
                           key={p.id}
@@ -737,12 +909,20 @@ export default function App() {
                             <div className="p-1">
                               <div className="font-bold text-lg">{priceFormatter.format(p.price)} {t.sumLabel}</div>
                               <div className="text-sm text-stone-600">{p.place_name || t.unknownStore}</div>
+                              <div className="text-xs text-stone-500">{p.city || selectedCityLabel}</div>
                             </div>
                           </Popup>
                         </CircleMarker>
                       ))}
-                      {mapPrices.length > 0 && (
-                        <ChangeView center={[mapPrices[0].latitude!, mapPrices[0].longitude!]} zoom={13} />
+                      {nearbyEnabled && userLocation && (
+                        <CircleMarker
+                          center={[userLocation.lat, userLocation.lng]}
+                          radius={11}
+                          fillColor="#0f766e"
+                          color="white"
+                          weight={2}
+                          fillOpacity={0.9}
+                        />
                       )}
                     </MapContainer>
                     {mapPrices.length === 0 && (
@@ -758,6 +938,12 @@ export default function App() {
         ) : mode === 'report' ? (
           <div className="space-y-6">
             <section className="bg-white p-6 rounded-2xl border border-stone-200 shadow-sm space-y-4">
+              <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
+                <div className="text-xs font-semibold uppercase tracking-wider text-emerald-700">{t.cityLabel}</div>
+                <div className="mt-1 text-lg font-bold text-emerald-900">{selectedCityLabel}</div>
+                <div className="mt-1 text-xs text-emerald-700">{t.reportCityConfirm}</div>
+              </div>
+
               <div>
                 <label className="block text-xs font-semibold text-stone-500 uppercase tracking-wider mb-2">{t.priceLabel}</label>
                 <input 
@@ -787,14 +973,18 @@ export default function App() {
                     {t.mapPick}
                   </button>
                 </div>
-                <div className="mt-3 h-[200px] rounded-xl overflow-hidden border border-stone-200 relative">
+                {geoError && (
+                  <div className="mt-2 text-xs font-medium text-rose-600">{geoError}</div>
+                )}
+                <div className="mt-3 h-50 rounded-xl overflow-hidden border border-stone-200 relative">
                   <MapContainer
-                    center={reportLocation ? [reportLocation.lat, reportLocation.lng] : [41.2995, 69.2401]}
-                    zoom={reportLocation ? 15 : 12}
+                    center={reportLocation ? [reportLocation.lat, reportLocation.lng] : selectedCityOption.center}
+                    zoom={reportLocation ? 15 : selectedCityOption.zoom}
                     style={{ height: '100%', width: '100%' }}
                     zoomControl={false}
                   >
                     <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                    <ChangeView center={reportLocation ? [reportLocation.lat, reportLocation.lng] : selectedCityOption.center} zoom={reportLocation ? 15 : selectedCityOption.zoom} />
                     <ReportMapPicker
                       onPick={(lat, lng) => {
                         setReportLocation({ lat, lng });
@@ -829,6 +1019,7 @@ export default function App() {
                 <input
                   type="file"
                   accept="image/*"
+                  title={t.photoLabel}
                   onChange={(e) => setReportPhoto(e.target.files?.[0] || null)}
                   className="w-full text-sm text-stone-600 file:mr-3 file:rounded-lg file:border-0 file:bg-stone-100 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-stone-700 hover:file:bg-stone-200"
                 />
@@ -852,6 +1043,9 @@ export default function App() {
                 <h4 className="text-sm font-bold text-emerald-800">{t.tipTitle}</h4>
                 <p className="text-xs text-emerald-700 leading-relaxed">
                   {t.tipBody}
+                </p>
+                <p className="mt-2 text-xs text-emerald-700 leading-relaxed">
+                  {t.scrapeLinkHint}
                 </p>
               </div>
             </section>
@@ -885,6 +1079,7 @@ export default function App() {
                       <div>
                         <div className="text-xs font-semibold uppercase tracking-wider text-stone-400">ID</div>
                         <div className="text-sm font-medium text-stone-700">{item.id}</div>
+                        <div className="mt-1 text-xs text-stone-500">{t.cityLabel}: {item.city || selectedCityLabel}</div>
                       </div>
                       <div className="text-right text-xs text-stone-500">
                         <div>{t.moderationUser}: {item.submitted_by}</div>
@@ -898,6 +1093,7 @@ export default function App() {
                         <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">{t.moderationName}</label>
                         <input
                           value={item.product_name_raw}
+                          title={t.moderationName}
                           onChange={(e) => updateModerationField(item.id, 'product_name_raw', e.target.value)}
                           className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
                         />
@@ -907,6 +1103,7 @@ export default function App() {
                         <input
                           type="number"
                           value={item.price}
+                          title={t.moderationPrice}
                           onChange={(e) => updateModerationField(item.id, 'price', e.target.value)}
                           className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
                         />
@@ -916,6 +1113,7 @@ export default function App() {
                         <input
                           type="number"
                           value={item.quantity}
+                          title={t.moderationQty}
                           onChange={(e) => updateModerationField(item.id, 'quantity', e.target.value)}
                           className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
                         />
@@ -925,6 +1123,7 @@ export default function App() {
                         <input
                           type="number"
                           value={item.unit_price}
+                          title={t.moderationUnitPrice}
                           onChange={(e) => updateModerationField(item.id, 'unit_price', e.target.value)}
                           className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
                         />
@@ -983,6 +1182,7 @@ export default function App() {
                         <div>{t.moderationUser}: {item.submitted_by}</div>
                         <div>{t.moderationDate}: {formatDistanceToNow(new Date(item.receipt_date), { addSuffix: true, locale: reportLocale })}</div>
                         <div>{t.moderationSource}: {item.source}</div>
+                        <div>{t.cityLabel}: {item.city || selectedCityLabel}</div>
                         <div>{item.place_name || t.unknownStore}</div>
                       </div>
                     </div>
