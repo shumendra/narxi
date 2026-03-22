@@ -254,6 +254,44 @@ function fallbackExtractItemsFromProductBlocks($) {
   return items;
 }
 
+function fallbackExtractItemsFromAnyThreeColumnRows($) {
+  const items = [];
+  const seen = new Set();
+
+  $('table tr').each((_, row) => {
+    const cols = $(row).find('td');
+    if (cols.length < 3) return;
+
+    const first = $(cols[0]).text().replace(/\s+/g, ' ').trim();
+    const second = $(cols[1]).text().replace(/\s+/g, ' ').trim();
+    const third = $(cols[2]).text().replace(/\s+/g, ' ').trim();
+
+    if (!first || !second || !third) return;
+
+    const quantity = Math.max(1, parseNumericValue(second) || 1);
+    const totalPrice = parseNumericValue(third);
+    if (totalPrice <= 0) return;
+
+    const lowerName = first.toLowerCase();
+    const blockedNameKeys = ['qqs', 'mxik', 'shtrix', 'chegirma', 'naqd pul', 'bank kartalari', 'jami to`lov', 'jami to\'lov'];
+    if (blockedNameKeys.some(key => lowerName.includes(key))) return;
+
+    const unitPrice = quantity > 0 ? Math.round(totalPrice / quantity) : totalPrice;
+    const fingerprint = `${lowerName}|${quantity}|${totalPrice}`;
+    if (seen.has(fingerprint)) return;
+    seen.add(fingerprint);
+
+    items.push({
+      name: first,
+      quantity,
+      totalPrice,
+      unitPrice,
+    });
+  });
+
+  return items;
+}
+
 async function fetchWithRetry(url, attempts = 1) {
   let lastError = null;
   for (let i = 0; i < attempts; i += 1) {
@@ -345,6 +383,10 @@ function parseReceiptFromHtml(html) {
 
   if (items.length === 0) {
     items.push(...fallbackExtractItemsFromProductBlocks($));
+  }
+
+  if (items.length === 0) {
+    items.push(...fallbackExtractItemsFromAnyThreeColumnRows($));
   }
 
   return {
