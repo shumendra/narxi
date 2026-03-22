@@ -5,14 +5,12 @@
 
 import React, { useEffect, useState, useMemo } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Search, MapPin, Plus, ChevronRight, Navigation, Camera, Check, QrCode, PencilLine, Loader2 } from 'lucide-react';
+import { Search, MapPin, Plus, ChevronRight, Navigation, Camera, Check } from 'lucide-react';
 import { MapContainer, TileLayer, CircleMarker, Popup, useMap, useMapEvents } from 'react-leaflet';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { formatDistanceToNow } from 'date-fns';
 import { enUS, ru, uz } from 'date-fns/locale';
-import { CITY_OPTIONS, DEFAULT_CITY, getCityLabel, getCityOption } from './constants/cities.js';
-import { haversineDistanceKm } from './utils/haversine.js';
 
 // Utility for Tailwind classes
 function cn(...inputs: ClassValue[]) {
@@ -35,8 +33,6 @@ interface Product {
   name_ru: string;
   name_en?: string | null;
   category: string;
-  unit?: string | null;
-  available_cities?: string[] | null;
 }
 
 interface PriceRecord {
@@ -48,7 +44,6 @@ interface PriceRecord {
   longitude: number | null;
   receipt_date: string;
   product_id: string;
-  city?: string | null;
 }
 
 interface PendingModerationItem {
@@ -64,7 +59,6 @@ interface PendingModerationItem {
   created_at: string;
   place_name: string | null;
   place_address: string | null;
-  city?: string | null;
 }
 
 interface ApprovedModerationItem {
@@ -78,7 +72,6 @@ interface ApprovedModerationItem {
   receipt_date: string;
   submitted_by: string;
   source: string;
-  city?: string | null;
 }
 
 // Map Updater Component
@@ -110,15 +103,10 @@ export default function App() {
   const [moderationSavingId, setModerationSavingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
-  const [selectedCity, setSelectedCity] = useState(DEFAULT_CITY);
-  const [nearbyEnabled, setNearbyEnabled] = useState(false);
-  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
-  const [geoError, setGeoError] = useState('');
   const priceFormatter = useMemo(() => new Intl.NumberFormat('en-US'), []);
   const telegramUserId = window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || '';
   const telegramInitData = window.Telegram?.WebApp?.initData || '';
   const isAdminUser = adminTelegramIds.includes(telegramUserId);
-  const selectedCityOption = useMemo(() => getCityOption(selectedCity), [selectedCity]);
 
   const copy = useMemo(
     () => ({
@@ -127,14 +115,9 @@ export default function App() {
         modeFind: 'Topish',
         modeReport: "Qo'shish",
         modeModerate: 'Tasdiqlash',
-        cityTitle: 'Shahar',
-        nearbyToggle: 'Yaqin joylar',
-        nearbyHint: 'Avval yaqin do‘konlar ko‘rsatiladi',
-        nearbyDistance: 'masofa',
-        nearbyError: 'Joylashuvni olishga ruxsat berilmadi',
         searchPlaceholder: 'Mahsulot nomi (masalan: Shakar)',
         emptyTitle: 'Narxlarni qidirish',
-        emptyHint: 'Tanlangan shaharda eng arzon narxlarni topish uchun mahsulot nomini kiriting',
+        emptyHint: "Toshkent bo'ylab eng arzon narxlarni topish uchun mahsulot nomini kiriting",
         cheapestTitle: 'Eng arzon 5 ta joy',
         mapTitle: 'Xarita',
         noData: "Hali narx kiritilmagan",
@@ -148,44 +131,12 @@ export default function App() {
         submitting: 'Yuborilmoqda...',
         tipTitle: 'Maslahat',
         tipBody: "Chekni skanerlash orqali narxlarni avtomatik qo'shishingiz mumkin. Buning uchun chekdagi QR kodni botga yuboring.",
-        qrCardTitle: '📷 QR kod skanerlash',
-        qrCardBody: 'Chekdagi QR kodni skaner qiling',
-        qrCardHint: 'Tez va oson',
-        manualCardTitle: "✏️ Qo'lda kiritish",
-        manualCardBody: "Narxni o'zingiz kiriting",
-        scanPopupText: 'Chekdagi QR kodni skaner qiling',
-        scanLoadingTitle: "⏳ Chek o'qilmoqda...",
-        scanLoadingHint: 'Iltimos kuting',
-        scanSuccessTitle: '✅ Chek qabul qilindi!',
-        scanSuccessQueued: 'Chek qabul qilindi va moderatsiyaga yuborildi. Mahsulotlar administrator tomonidan qo‘lda tekshiriladi.',
-        scanItemsSubmitted: "ta mahsulot yuborildi",
-        scanThanks: 'Rahmat! 🙌',
-        scanDuplicateTitle: 'ℹ️ Bu chek avval yuborilgan',
-        scanErrorTitle: "❌ Chekni o'qishda xatolik",
-        scanErrorBody: 'QR kod soliq.uz ga tegishli emas\nyoki server xatosi yuz berdi.',
-        scanErrorNotSoliq: 'QR kod soliq.uz havolasiga mos kelmadi.',
-        scanErrorBlocked: 'Siz vaqtincha bloklangansiz.',
-        scanErrorScrape: "Chek topildi, lekin server uni hozir o'qiy olmadi.\nIltimos qayta urinib ko'ring yoki havolani botga yuboring.",
-        scanErrorParseEmpty: "Chek ochildi, lekin mahsulotlar ro'yxati topilmadi.\nIltimos qayta urinib ko'ring yoki havolani botga yuboring.",
-        scanErrorTimeout: "Serverdan javob kutish vaqti tugadi.\nIltimos yana urinib ko'ring.",
-        scanErrorGenerating: "Chek hali tayyorlanmoqda.\n1-2 daqiqadan so'ng qayta urinib ko'ring.",
-        scanErrorNetwork: 'Tarmoq xatosi yuz berdi. Internetni tekshirib qayta urinib ko‘ring.',
-        scanAgain: 'Yana skanerlash',
-        goHome: 'Bosh sahifaga',
-        retry: 'Qayta urinish',
-        switchManual: "Qo'lda kiritish",
-        urlFallbackPlaceholder: 'soliq.uz havolasini kiriting',
-        urlFallbackSubmit: 'Yuborish',
-        scannerInvalidAlert: "QR kod soliq.uz havolasi bo'lishi kerak",
         alertFill: "Iltimos, barcha maydonlarni to'ldiring",
         alertSuccess: "Narxingiz yuborildi va ko'rib chiqilgandan so'ng qo'shiladi ✅",
         alertError: "Xatolik yuz berdi. Qayta urinib ko'ring.",
         locationHint: "Joylashuv tanlanmagan",
-        reportCityConfirm: 'Hisobot aynan shu shahar uchun yuboriladi.',
-        scrapeLinkHint: 'Soliq.uz chek havolasini botga yuborsangiz, ma’lumot avtomatik o‘qiladi.',
         photoLabel: "Chek rasmi (ixtiyoriy)",
         sumLabel: "so'm",
-        cityLabel: 'Shahar',
         moderationTitle: 'Kutilayotgan narxlar',
         moderationEmpty: 'Kutilayotgan narxlar yo‘q',
         moderationRefresh: 'Yangilash',
@@ -213,14 +164,9 @@ export default function App() {
         modeFind: 'Поиск',
         modeReport: 'Добавить',
         modeModerate: 'Модерация',
-        cityTitle: 'Город',
-        nearbyToggle: 'Рядом',
-        nearbyHint: 'Сначала показывать ближайшие магазины',
-        nearbyDistance: 'расстояние',
-        nearbyError: 'Не удалось получить геолокацию',
         searchPlaceholder: 'Название товара (например: Сахар)',
         emptyTitle: 'Поиск цен',
-        emptyHint: 'Введите название товара, чтобы найти самые дешевые цены в выбранном городе',
+        emptyHint: 'Введите название товара, чтобы найти самые дешевые цены по Ташкенту',
         cheapestTitle: 'Топ 5 самых дешевых мест',
         mapTitle: 'Карта',
         noData: 'Цен пока нет',
@@ -234,46 +180,12 @@ export default function App() {
         submitting: 'Отправка...',
         tipTitle: 'Совет',
         tipBody: 'Можно автоматически добавлять цены через чек. Отправьте QR-код чека боту.',
-        qrCardTitle: '📷 Сканировать QR код',
-        qrCardBody: 'Отсканируйте QR код на чеке',
-        qrCardHint: 'Быстро и удобно',
-        manualCardTitle: '✏️ Ввести вручную',
-        manualCardBody: 'Введите цену самостоятельно',
-        scanPopupText: 'Отсканируйте QR код на чеке',
-        scanLoadingTitle: '⏳ Чтение чека...',
-        scanLoadingHint: 'Пожалуйста, подождите',
-        scanSuccessTitle: '✅ Чек принят!',
-        scanSuccessQueued: 'Чек принят и отправлен на модерацию. Товары будут проверены администратором вручную.',
-        scanItemsSubmitted: 'товаров отправлено',
-        scanThanks: 'Спасибо! 🙌',
-        scanDuplicateTitle: 'ℹ️ Этот чек уже отправляли',
-        scanErrorTitle: '❌ Ошибка чтения чека',
-        scanErrorBody: 'QR код не относится к soliq.uz\nили произошла ошибка сервера.',
-        scanErrorNotSoliq: 'QR код не содержит корректную ссылку soliq.uz.',
-        scanErrorBlocked: 'Вы временно заблокированы.',
-        scanErrorScrape: 'Чек найден, но сервер пока не смог его прочитать.\nПовторите попытку или отправьте ссылку боту.',
-        scanErrorParseEmpty: 'Чек открыт, но список товаров не найден.\nПовторите попытку или отправьте ссылку боту.',
-        scanErrorTimeout: 'Истекло время ожидания ответа сервера.\nПопробуйте снова.',
-        scanErrorGenerating: 'Чек ещё формируется.\nПовторите через 1-2 минуты.',
-        scanErrorNetwork: 'Сетевая ошибка. Проверьте интернет и повторите попытку.',
-        scanFetchingPage: 'Загрузка страницы чека...',
-        scanBrowserFetchFailed: 'Не удалось загрузить страницу чека.\nПроверьте интернет и попробуйте снова.',
-        scanAgain: 'Сканировать снова',
-        goHome: 'На главную',
-        retry: 'Повторить',
-        switchManual: 'Ввести вручную',
-        urlFallbackPlaceholder: 'введите ссылку soliq.uz',
-        urlFallbackSubmit: 'Отправить',
-        scannerInvalidAlert: 'QR код должен содержать ссылку soliq.uz',
         alertFill: 'Пожалуйста, заполните все поля',
         alertSuccess: 'Цена отправлена и будет добавлена после проверки ✅',
         alertError: 'Произошла ошибка. Попробуйте еще раз.',
         locationHint: 'Локация не выбрана',
-        reportCityConfirm: 'Отчет будет отправлен именно для этого города.',
-        scrapeLinkHint: 'Если отправить боту ссылку на чек soliq.uz, данные заполнятся автоматически.',
         photoLabel: 'Фото чека (необязательно)',
         sumLabel: 'сум',
-        cityLabel: 'Город',
         moderationTitle: 'Ожидающие цены',
         moderationEmpty: 'Нет ожидающих цен',
         moderationRefresh: 'Обновить',
@@ -301,14 +213,9 @@ export default function App() {
         modeFind: 'Find',
         modeReport: 'Add',
         modeModerate: 'Moderate',
-        cityTitle: 'City',
-        nearbyToggle: 'Nearby',
-        nearbyHint: 'Show the closest stores first',
-        nearbyDistance: 'distance',
-        nearbyError: 'Location access was not granted',
         searchPlaceholder: 'Product name (e.g., Sugar)',
         emptyTitle: 'Find prices',
-        emptyHint: 'Type a product name to find the cheapest prices in the selected city',
+        emptyHint: 'Type a product name to find the cheapest prices across Tashkent',
         cheapestTitle: 'Top 5 cheapest places',
         mapTitle: 'Map',
         noData: 'No prices yet',
@@ -322,46 +229,12 @@ export default function App() {
         submitting: 'Submitting...',
         tipTitle: 'Tip',
         tipBody: 'You can auto-add prices by scanning receipts. Send the QR code to the bot.',
-        qrCardTitle: '📷 Scan QR code',
-        qrCardBody: 'Scan the QR code on the receipt',
-        qrCardHint: 'Fast and easy',
-        manualCardTitle: '✏️ Manual entry',
-        manualCardBody: 'Enter the price yourself',
-        scanPopupText: 'Scan the QR code on the receipt',
-        scanLoadingTitle: '⏳ Reading receipt...',
-        scanLoadingHint: 'Please wait',
-        scanSuccessTitle: '✅ Receipt accepted!',
-        scanSuccessQueued: 'Receipt accepted and queued for moderation. Products will be verified manually by an admin.',
-        scanItemsSubmitted: 'products submitted',
-        scanThanks: 'Thanks! 🙌',
-        scanDuplicateTitle: 'ℹ️ This receipt was already submitted',
-        scanErrorTitle: '❌ Receipt read error',
-        scanErrorBody: 'QR code is not a soliq.uz link\nor a server error occurred.',
-        scanErrorNotSoliq: 'QR code does not contain a valid soliq.uz URL.',
-        scanErrorBlocked: 'You are temporarily blocked.',
-        scanErrorScrape: 'Receipt was detected, but the server could not read it right now.\nTry again or send the link to the bot.',
-        scanErrorParseEmpty: 'Receipt opened, but no product list was found.\nTry again or send the link to the bot.',
-        scanErrorTimeout: 'Server response timed out.\nPlease try again.',
-        scanErrorGenerating: 'Receipt is still being generated.\nPlease try again in 1-2 minutes.',
-        scanErrorNetwork: 'Network error. Check internet connection and try again.',
-        scanFetchingPage: 'Loading receipt page...',
-        scanBrowserFetchFailed: 'Could not load the receipt page.\nPlease check your internet and try again.',
-        scanAgain: 'Scan again',
-        goHome: 'Home',
-        retry: 'Retry',
-        switchManual: 'Manual entry',
-        urlFallbackPlaceholder: 'enter soliq.uz link',
-        urlFallbackSubmit: 'Submit',
-        scannerInvalidAlert: 'QR code must contain a soliq.uz URL',
         alertFill: 'Please fill in all fields',
         alertSuccess: 'Your price was submitted and will be added after review ✅',
         alertError: 'Something went wrong. Please try again.',
         locationHint: 'Location not selected',
-        reportCityConfirm: 'The submission will be saved for this city.',
-        scrapeLinkHint: 'Send the bot a soliq.uz receipt link to scrape the data automatically.',
         photoLabel: 'Receipt photo (optional)',
         sumLabel: 'sum',
-        cityLabel: 'City',
         moderationTitle: 'Pending prices',
         moderationEmpty: 'No pending prices',
         moderationRefresh: 'Refresh',
@@ -389,37 +262,19 @@ export default function App() {
   );
 
   const t = copy[lang];
-  const selectedCityLabel = getCityLabel(selectedCity, lang);
 
   // Report Form State
   const [reportPrice, setReportPrice] = useState('');
   const [reportLocation, setReportLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [reportPhoto, setReportPhoto] = useState<File | null>(null);
-  const [reportEntryStep, setReportEntryStep] = useState<'entry' | 'manual' | 'loading' | 'result'>('entry');
-  const [showUrlInput, setShowUrlInput] = useState(false);
-  const [scanUrlInput, setScanUrlInput] = useState('');
-  const [scanResult, setScanResult] = useState<{
-    status: 'success' | 'duplicate' | 'error';
-    storeName?: string;
-    storeAddress?: string;
-    city?: string;
-    itemCount?: number;
-    queuedWithoutParse?: boolean;
-    errorCode?: string;
-  } | null>(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const initialMode = params.get('mode') as 'find' | 'report' | 'moderate';
     const initialLang = params.get('lang') as 'uz' | 'ru' | 'en';
-    const initialCity = params.get('city');
     if (initialMode && (initialMode !== 'moderate' || isAdminUser)) setMode(initialMode);
     if (initialLang) setLang(initialLang);
-    if (initialCity) {
-      const normalizedCity = CITY_OPTIONS.find(city => city.value === initialCity)?.value;
-      if (normalizedCity) setSelectedCity(normalizedCity);
-    }
 
     fetchProducts();
   }, [isAdminUser]);
@@ -439,25 +294,18 @@ export default function App() {
       .from('prices')
       .select('*')
       .eq('product_id', productId)
-      .eq('city', selectedCity)
       .order('price', { ascending: true })
-      .limit(100);
+      .limit(20);
 
-    setPrices((data || []) as PriceRecord[]);
+    if (data) setPrices(data);
     setLoading(false);
   };
 
   const normalizePendingItem = (item: any): PendingModerationItem => ({
     ...item,
-    product_name_raw:
-      String(item.product_name_raw || '').trim() ||
-      (String(item.source || '').startsWith('soliq_qr_unparsed') ? 'RECEIPT_PARSE_REVIEW' : 'UNKNOWN_PRODUCT'),
-    price: Number(item.price) || (String(item.source || '').startsWith('soliq_qr_unparsed') ? 1 : 0),
+    price: Number(item.price) || 0,
     quantity: Number(item.quantity) || 1,
-    unit_price:
-      Number(item.unit_price) ||
-      Number(item.price) ||
-      (String(item.source || '').startsWith('soliq_qr_unparsed') ? 1 : 0),
+    unit_price: Number(item.unit_price) || Number(item.price) || 0,
   });
 
   const normalizeApprovedItem = (item: any): ApprovedModerationItem => ({
@@ -486,8 +334,8 @@ export default function App() {
     setModerationLoading(true);
     try {
       const [pendingResult, approvedResult] = await Promise.all([
-        callModerationApi('list', { city: selectedCity }),
-        callModerationApi('listApproved', { city: selectedCity }),
+        callModerationApi('list'),
+        callModerationApi('listApproved'),
       ]);
       setModerationItems((pendingResult.items || []).map(normalizePendingItem));
       setApprovedItems((approvedResult.items || []).map(normalizeApprovedItem));
@@ -602,40 +450,16 @@ export default function App() {
     if (mode === 'moderate' && isAdminUser) {
       fetchModerationItems();
     }
-  }, [mode, isAdminUser, selectedCity]);
-
-  useEffect(() => {
-    if (mode === 'find' && selectedProduct) {
-      loadPricesForProduct(selectedProduct.id);
-    }
-  }, [mode, selectedProduct, selectedCity]);
-
-  useEffect(() => {
-    if (mode !== 'report') {
-      setReportEntryStep('entry');
-      setShowUrlInput(false);
-      setScanUrlInput('');
-      setScanResult(null);
-    }
-  }, [mode]);
-
-  const cityProducts = useMemo(() => {
-    return products.filter(product => {
-      const availableCities = Array.isArray(product.available_cities)
-        ? product.available_cities.filter(Boolean)
-        : [];
-      return availableCities.length === 0 || availableCities.includes(selectedCity);
-    });
-  }, [products, selectedCity]);
+  }, [mode, isAdminUser]);
 
   const filteredProducts = useMemo(() => {
     if (!searchQuery) return [];
-    return cityProducts.filter(p => 
+    return products.filter(p => 
       p.name_uz.toLowerCase().includes(searchQuery.toLowerCase()) ||
       p.name_ru.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (p.name_en || '').toLowerCase().includes(searchQuery.toLowerCase())
     );
-  }, [searchQuery, cityProducts]);
+  }, [searchQuery, products]);
 
   const getProductName = (product: Product, selectedLang: 'uz' | 'ru' | 'en') => {
     if (selectedLang === 'ru') return product.name_ru;
@@ -653,34 +477,15 @@ export default function App() {
     setSelectedProduct(product);
     setSearchQuery(getProductName(product, lang));
     setShowDropdown(false);
+
+    if (mode === 'find') {
+      await loadPricesForProduct(product.id);
+    }
   };
 
-  const sortedPrices = useMemo(() => {
-    const withDistance = prices.map(price => ({
-      ...price,
-      distanceKm:
-        nearbyEnabled && userLocation && price.latitude !== null && price.longitude !== null
-          ? haversineDistanceKm(userLocation, { lat: price.latitude, lng: price.longitude })
-          : null,
-    }));
-
-    if (nearbyEnabled && userLocation) {
-      return withDistance.sort((left, right) => {
-        const leftDistance = left.distanceKm ?? Number.POSITIVE_INFINITY;
-        const rightDistance = right.distanceKm ?? Number.POSITIVE_INFINITY;
-        if (leftDistance !== rightDistance) {
-          return leftDistance - rightDistance;
-        }
-        return left.price - right.price;
-      });
-    }
-
-    return withDistance.sort((left, right) => left.price - right.price);
-  }, [prices, nearbyEnabled, userLocation]);
-
   const mapPrices = useMemo(
-    () => sortedPrices.filter(p => p.latitude !== null && p.longitude !== null),
-    [sortedPrices]
+    () => prices.filter(p => p.latitude !== null && p.longitude !== null),
+    [prices]
   );
 
   const minMapPrice = useMemo(
@@ -711,52 +516,6 @@ export default function App() {
     return interpolateColor(yellow, red, (ratio - 0.5) / 0.5);
   };
 
-  const findMapCenter = useMemo<[number, number]>(() => {
-    if (nearbyEnabled && userLocation) {
-      return [userLocation.lat, userLocation.lng];
-    }
-    return selectedCityOption.center;
-  }, [nearbyEnabled, userLocation, selectedCityOption]);
-
-  const findMapZoom = nearbyEnabled && userLocation ? 13 : selectedCityOption.zoom;
-
-  const requestUserLocation = (onSuccess?: (coords: { lat: number; lng: number }) => void) => {
-    if (!navigator.geolocation) {
-      setGeoError(t.nearbyError);
-      return;
-    }
-
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        setUserLocation(coords);
-        setGeoError('');
-        onSuccess?.(coords);
-      },
-      () => {
-        setGeoError(t.nearbyError);
-        setNearbyEnabled(false);
-      },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 300000 }
-    );
-  };
-
-  const toggleNearby = () => {
-    if (nearbyEnabled) {
-      setNearbyEnabled(false);
-      setGeoError('');
-      return;
-    }
-
-    if (userLocation) {
-      setNearbyEnabled(true);
-      setGeoError('');
-      return;
-    }
-
-    requestUserLocation(() => setNearbyEnabled(true));
-  };
-
   const handleReportSubmit = async () => {
     if (!reportPrice || (!selectedProduct && !searchQuery.trim())) {
       window.Telegram?.WebApp?.showAlert(t.alertFill);
@@ -775,7 +534,6 @@ export default function App() {
       unit_price: parseInt(reportPrice),
       latitude: reportLocation?.lat ?? null,
       longitude: reportLocation?.lng ?? null,
-      city: selectedCity,
       source: 'manual',
       submitted_by: window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || 'unknown',
       photo_url: null,
@@ -794,183 +552,11 @@ export default function App() {
   };
 
   const getCurrentLocation = () => {
-    requestUserLocation((coords) => {
-      setReportLocation(coords);
-    });
-  };
-
-  const goToManualEntry = () => {
-    setReportEntryStep('manual');
-    setShowUrlInput(false);
-    setScanResult(null);
-  };
-
-  const goToReportHome = () => {
-    setMode('find');
-    setReportEntryStep('entry');
-    setShowUrlInput(false);
-    setScanResult(null);
-    setScanUrlInput('');
-  };
-
-  const extractSoliqUrlFromText = (input: string) => {
-    const raw = String(input || '').trim();
-    if (!raw) return null;
-
-    const buildCheckFromParams = (paramsSource: string) => {
-      const params = new URLSearchParams(paramsSource);
-      const t = params.get('t');
-      if (!t) return null;
-      const r = params.get('r');
-      const c = params.get('c');
-      const s = params.get('s');
-
-      const check = new URL('https://ofd.soliq.uz/check');
-      check.searchParams.set('t', t);
-      if (r) check.searchParams.set('r', r);
-      if (c) check.searchParams.set('c', c);
-      if (s) check.searchParams.set('s', s);
-      return check.toString();
-    };
-
-    const directMatch = raw.match(/https?:\/\/[^\s"']+/i);
-    if (directMatch && /soliq\.uz/i.test(directMatch[0])) {
-      try {
-        const parsed = new URL(directMatch[0]);
-        return buildCheckFromParams(parsed.search) || parsed.toString();
-      } catch {
-        return directMatch[0];
-      }
-    }
-
-    if (/^ofd\.soliq\.uz\//i.test(raw)) {
-      try {
-        const parsed = new URL(`https://${raw}`);
-        return buildCheckFromParams(parsed.search) || parsed.toString();
-      } catch {
-        return `https://${raw}`;
-      }
-    }
-
-    const fromLooseParams = buildCheckFromParams(raw);
-    if (fromLooseParams) {
-      return fromLooseParams;
-    }
-
-    return null;
-  };
-
-  const getScanErrorBody = (errorCode?: string) => {
-    if (errorCode === 'not_soliq_url') {
-      return t.scanErrorNotSoliq;
-    }
-    if (errorCode === 'blocked') {
-      return t.scanErrorBlocked;
-    }
-    if (errorCode === 'scan_timeout') {
-      return t.scanErrorTimeout;
-    }
-    if (errorCode === 'receipt_generating') {
-      return t.scanErrorGenerating;
-    }
-    if (errorCode === 'scrape_failed') {
-      return t.scanErrorScrape;
-    }
-    if (errorCode === 'parse_empty') {
-      return t.scanErrorParseEmpty;
-    }
-    if (errorCode === 'network_error') {
-      return t.scanErrorNetwork;
-    }
-    if (errorCode === 'browser_fetch_failed') {
-      return t.scanBrowserFetchFailed;
-    }
-    return t.scanErrorBody;
-  };
-
-  const handleSoliqUrl = async (url: string) => {
-    const scannedUrl = extractSoliqUrlFromText(url);
-    if (!scannedUrl) {
-      setScanResult({ status: 'error', errorCode: 'not_soliq_url' });
-      setReportEntryStep('result');
-      return;
-    }
-
-    setShowUrlInput(false);
-    setScanResult(null);
-    setReportEntryStep('loading');
-
-    // Step 1: Browser fetches the receipt HTML (server can't reach soliq.uz)
-    let html: string;
-    try {
-      const pageResp = await fetch(scannedUrl);
-      if (!pageResp.ok) throw new Error(`HTTP ${pageResp.status}`);
-      html = await pageResp.text();
-      if (!html || html.length < 200) throw new Error('empty page');
-    } catch {
-      setScanResult({ status: 'error', errorCode: 'browser_fetch_failed' });
-      setReportEntryStep('result');
-      return;
-    }
-
-    // Step 2: Send the HTML to backend for parsing + DB insertion
-    try {
-      const response = await fetch('/api/scan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          html,
-          url: scannedUrl,
-          telegram_id: window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || 'anonymous',
-          city: selectedCity,
-        }),
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition((pos) => {
+        setReportLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
       });
-
-      const result = await response.json();
-
-      if (result?.ok) {
-        setScanResult({
-          status: 'success',
-          storeName: result.store_name,
-          storeAddress: result.store_address,
-          city: result.city,
-          itemCount: result.item_count,
-        });
-      } else if (result?.error === 'duplicate') {
-        setScanResult({ status: 'duplicate', errorCode: 'duplicate' });
-      } else {
-        setScanResult({ status: 'error', errorCode: result?.error || 'scan_failed' });
-      }
-    } catch {
-      setScanResult({ status: 'error', errorCode: 'network_error' });
-    } finally {
-      setReportEntryStep('result');
     }
-  };
-
-  const openNativeQrScanner = () => {
-    const scanner = window.Telegram?.WebApp?.showScanQrPopup;
-    if (typeof scanner === 'function') {
-      scanner({ text: t.scanPopupText }, (scannedText: string) => {
-        const value = extractSoliqUrlFromText(scannedText || '');
-        if (value) {
-          window.Telegram?.WebApp?.closeScanQrPopup?.();
-          handleSoliqUrl(value);
-          return true;
-        }
-        window.Telegram?.WebApp?.showAlert(t.scannerInvalidAlert);
-        return false;
-      });
-      return;
-    }
-
-    setShowUrlInput(true);
-  };
-
-  const retryScan = () => {
-    setScanResult(null);
-    setReportEntryStep('entry');
-    openNativeQrScanner();
   };
 
   const reportLocale = useMemo(() => {
@@ -1034,28 +620,8 @@ export default function App() {
           </div>
         </div>
 
-        <div className="mb-4">
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-stone-500">{t.cityTitle}</div>
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            {CITY_OPTIONS.map(city => (
-              <button
-                key={city.value}
-                onClick={() => setSelectedCity(city.value)}
-                className={cn(
-                  'whitespace-nowrap rounded-full border px-3 py-2 text-sm font-medium transition-all',
-                  selectedCity === city.value
-                    ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
-                    : 'border-stone-200 bg-stone-50 text-stone-600'
-                )}
-              >
-                {city.labels[lang]}
-              </button>
-            ))}
-          </div>
-        </div>
-
         {/* Search Bar */}
-        {(mode === 'find' || (mode === 'report' && reportEntryStep === 'manual')) && <div className="relative">
+        {mode !== 'moderate' && <div className="relative">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 w-4 h-4" />
             <input 
@@ -1095,29 +661,6 @@ export default function App() {
       <main className="p-4">
         {mode === 'find' ? (
           <div className="space-y-6">
-            <section className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <div className="text-xs font-semibold uppercase tracking-wider text-stone-500">{t.cityLabel}</div>
-                  <div className="text-base font-semibold text-stone-900">{selectedCityLabel}</div>
-                </div>
-                <button
-                  onClick={toggleNearby}
-                  className={cn(
-                    'inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition-all',
-                    nearbyEnabled
-                      ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
-                      : 'border-stone-200 bg-stone-50 text-stone-600'
-                  )}
-                >
-                  <Navigation className="h-4 w-4" />
-                  {t.nearbyToggle}
-                </button>
-              </div>
-              <div className="mt-2 text-xs text-stone-500">{t.nearbyHint}</div>
-              {geoError && <div className="mt-2 text-xs font-medium text-rose-600">{geoError}</div>}
-            </section>
-
             {!selectedProduct ? (
               <div className="text-center py-20">
                 <div className="bg-emerald-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -1138,8 +681,8 @@ export default function App() {
                       <div className="animate-pulse space-y-3">
                         {[1, 2, 3].map(i => <div key={i} className="h-20 bg-stone-200 rounded-xl" />)}
                       </div>
-                    ) : sortedPrices.length > 0 ? (
-                      sortedPrices.slice(0, 5).map((p, i) => (
+                    ) : prices.length > 0 ? (
+                      prices.slice(0, 5).map((p, i) => (
                         <div key={p.id} className="bg-white p-4 rounded-xl border border-stone-200 shadow-sm flex items-center justify-between">
                           <div className="flex-1">
                             <div className="flex items-center gap-2 mb-1">
@@ -1152,18 +695,12 @@ export default function App() {
                               <h4 className="font-bold text-stone-900">{priceFormatter.format(p.price)} {t.sumLabel}</h4>
                             </div>
                             <p className="text-sm text-stone-600 truncate">{p.place_name || t.unknownStore}</p>
-                            <p className="text-xs text-stone-400 truncate">{p.city || selectedCityLabel}</p>
                             <p className="text-xs text-stone-400">
                               {formatDistanceToNow(new Date(p.receipt_date), { addSuffix: true, locale: reportLocale })}
                             </p>
-                            {nearbyEnabled && userLocation && p.distanceKm !== null && p.distanceKm !== undefined && Number.isFinite(p.distanceKm) && (
-                              <p className="text-xs font-medium text-emerald-700">
-                                {t.nearbyDistance}: {p.distanceKm.toFixed(1)} km
-                              </p>
-                            )}
                           </div>
                           <div className="text-right">
-                            <button title={t.mapTitle} className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors">
+                            <button className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors">
                               <Navigation className="w-5 h-5" />
                             </button>
                           </div>
@@ -1178,15 +715,14 @@ export default function App() {
                 {/* Map */}
                 <section>
                   <h3 className="text-sm font-semibold text-stone-500 uppercase tracking-wider mb-3">{t.mapTitle}</h3>
-                  <div className="h-75 rounded-2xl overflow-hidden border border-stone-200 shadow-inner relative z-0">
+                  <div className="h-[300px] rounded-2xl overflow-hidden border border-stone-200 shadow-inner relative z-0">
                     <MapContainer 
-                      center={findMapCenter}
-                      zoom={findMapZoom}
+                      center={[41.2995, 69.2401]} 
+                      zoom={12} 
                       style={{ height: '100%', width: '100%' }}
                       zoomControl={false}
                     >
                       <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-                      <ChangeView center={findMapCenter} zoom={findMapZoom} />
                       {mapPrices.map(p => (
                         <CircleMarker
                           key={p.id}
@@ -1201,20 +737,12 @@ export default function App() {
                             <div className="p-1">
                               <div className="font-bold text-lg">{priceFormatter.format(p.price)} {t.sumLabel}</div>
                               <div className="text-sm text-stone-600">{p.place_name || t.unknownStore}</div>
-                              <div className="text-xs text-stone-500">{p.city || selectedCityLabel}</div>
                             </div>
                           </Popup>
                         </CircleMarker>
                       ))}
-                      {nearbyEnabled && userLocation && (
-                        <CircleMarker
-                          center={[userLocation.lat, userLocation.lng]}
-                          radius={11}
-                          fillColor="#0f766e"
-                          color="white"
-                          weight={2}
-                          fillOpacity={0.9}
-                        />
+                      {mapPrices.length > 0 && (
+                        <ChangeView center={[mapPrices[0].latitude!, mapPrices[0].longitude!]} zoom={13} />
                       )}
                     </MapContainer>
                     {mapPrices.length === 0 && (
@@ -1229,232 +757,104 @@ export default function App() {
           </div>
         ) : mode === 'report' ? (
           <div className="space-y-6">
-            {reportEntryStep === 'entry' && (
-              <section className="space-y-4">
-                <button
-                  onClick={openNativeQrScanner}
-                  className="w-full rounded-2xl border-2 border-emerald-300 bg-emerald-50 p-6 text-left transition-all hover:border-emerald-400"
-                >
-                  <div className="flex items-start gap-4">
-                    <div className="rounded-xl bg-emerald-100 p-3 text-emerald-700">
-                      <QrCode className="h-6 w-6" />
-                    </div>
-                    <div>
-                      <div className="text-lg font-bold text-emerald-900">{t.qrCardTitle}</div>
-                      <div className="mt-1 text-sm text-emerald-800">{t.qrCardBody}</div>
-                      <div className="mt-2 text-xs font-semibold text-emerald-700">[{t.qrCardHint}]</div>
-                    </div>
-                  </div>
-                </button>
+            <section className="bg-white p-6 rounded-2xl border border-stone-200 shadow-sm space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-stone-500 uppercase tracking-wider mb-2">{t.priceLabel}</label>
+                <input 
+                  type="number"
+                  placeholder={t.pricePlaceholder}
+                  className="w-full bg-stone-50 border border-stone-200 rounded-xl py-3 px-4 text-lg font-bold focus:ring-2 focus:ring-emerald-500 outline-none"
+                  value={reportPrice}
+                  onChange={(e) => setReportPrice(e.target.value)}
+                />
+              </div>
 
-                <button
-                  onClick={goToManualEntry}
-                  className="w-full rounded-2xl border-2 border-stone-200 bg-white p-6 text-left transition-all hover:border-stone-300"
-                >
-                  <div className="flex items-start gap-4">
-                    <div className="rounded-xl bg-stone-100 p-3 text-stone-700">
-                      <PencilLine className="h-6 w-6" />
-                    </div>
-                    <div>
-                      <div className="text-lg font-bold text-stone-900">{t.manualCardTitle}</div>
-                      <div className="mt-1 text-sm text-stone-700">{t.manualCardBody}</div>
-                    </div>
-                  </div>
-                </button>
-
-                {showUrlInput && (
-                  <div className="rounded-2xl border border-stone-200 bg-white p-4 space-y-3">
-                    <input
-                      type="text"
-                      placeholder={t.urlFallbackPlaceholder}
-                      value={scanUrlInput}
-                      onChange={(e) => setScanUrlInput(e.target.value)}
-                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
-                    />
-                    <button
-                      onClick={() => handleSoliqUrl(scanUrlInput)}
-                      disabled={!scanUrlInput.trim()}
-                      className="w-full rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
-                    >
-                      {t.urlFallbackSubmit}
-                    </button>
-                  </div>
-                )}
-              </section>
-            )}
-
-            {reportEntryStep === 'loading' && (
-              <section className="rounded-2xl border border-stone-200 bg-white p-10 text-center">
-                <div className="text-xl font-bold text-stone-900">{t.scanLoadingTitle}</div>
-                <div className="mt-4 flex justify-center">
-                  <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
-                </div>
-                <div className="mt-4 text-sm text-stone-600">{t.scanLoadingHint}</div>
-              </section>
-            )}
-
-            {reportEntryStep === 'result' && scanResult?.status === 'success' && (
-              <section className="rounded-2xl border border-emerald-200 bg-emerald-50 p-6 space-y-4">
-                <div className="text-xl font-bold text-emerald-900">{t.scanSuccessTitle}</div>
-                <div className="space-y-1 text-sm text-emerald-900">
-                  <div>🏪 {scanResult.storeName || '-'}</div>
-                  <div>📍 {scanResult.storeAddress || '-'}</div>
-                  <div>🌆 {scanResult.city || selectedCityLabel}</div>
-                  <div>📦 {scanResult.itemCount || 0} {t.scanItemsSubmitted}</div>
-                </div>
-                {scanResult.queuedWithoutParse && (
-                  <div className="rounded-xl border border-emerald-200 bg-white/70 px-3 py-2 text-sm text-emerald-800">
-                    {t.scanSuccessQueued}
-                  </div>
-                )}
-                <div className="text-sm text-emerald-800">{t.scanThanks}</div>
-                <div className="grid grid-cols-2 gap-2">
-                  <button onClick={retryScan} className="rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white">{t.scanAgain}</button>
-                  <button onClick={goToReportHome} className="rounded-xl border border-emerald-300 bg-white px-4 py-3 text-sm font-semibold text-emerald-700">{t.goHome}</button>
-                </div>
-              </section>
-            )}
-
-            {reportEntryStep === 'result' && scanResult?.status === 'duplicate' && (
-              <section className="rounded-2xl border border-stone-200 bg-white p-6 space-y-4">
-                <div className="text-xl font-bold text-stone-900">{t.scanDuplicateTitle}</div>
-                <div className="grid grid-cols-2 gap-2">
-                  <button onClick={retryScan} className="rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white">{t.scanAgain}</button>
-                  <button onClick={goToReportHome} className="rounded-xl border border-stone-300 bg-stone-50 px-4 py-3 text-sm font-semibold text-stone-700">{t.goHome}</button>
-                </div>
-              </section>
-            )}
-
-            {reportEntryStep === 'result' && scanResult?.status === 'error' && (
-              <section className="rounded-2xl border border-rose-200 bg-rose-50 p-6 space-y-4">
-                <div className="text-xl font-bold text-rose-900">{t.scanErrorTitle}</div>
-                <div className="whitespace-pre-line text-sm text-rose-800">{getScanErrorBody(scanResult.errorCode)}</div>
-                {scanResult.errorCode && (
-                  <div className="text-xs text-rose-700/80">Code: {scanResult.errorCode}</div>
-                )}
-                <div className="grid grid-cols-2 gap-2">
-                  <button onClick={retryScan} className="rounded-xl bg-rose-600 px-4 py-3 text-sm font-semibold text-white">{t.retry}</button>
-                  <button onClick={goToManualEntry} className="rounded-xl border border-rose-300 bg-white px-4 py-3 text-sm font-semibold text-rose-700">{t.switchManual}</button>
-                </div>
-              </section>
-            )}
-
-            {reportEntryStep === 'manual' && (
-              <>
-                <section className="bg-white p-6 rounded-2xl border border-stone-200 shadow-sm space-y-4">
-                  <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
-                    <div className="text-xs font-semibold uppercase tracking-wider text-emerald-700">{t.cityLabel}</div>
-                    <div className="mt-1 text-lg font-bold text-emerald-900">{selectedCityLabel}</div>
-                    <div className="mt-1 text-xs text-emerald-700">{t.reportCityConfirm}</div>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-stone-500 uppercase tracking-wider mb-2">{t.priceLabel}</label>
-                    <input
-                      type="number"
-                      placeholder={t.pricePlaceholder}
-                      className="w-full bg-stone-50 border border-stone-200 rounded-xl py-3 px-4 text-lg font-bold focus:ring-2 focus:ring-emerald-500 outline-none"
-                      value={reportPrice}
-                      onChange={(e) => setReportPrice(e.target.value)}
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-stone-500 uppercase tracking-wider mb-2">{t.locationLabel}</label>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={getCurrentLocation}
-                        className={cn(
-                          "flex-1 flex items-center justify-center gap-2 py-3 rounded-xl border transition-all",
-                          reportLocation ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-stone-50 border-stone-200 text-stone-600"
-                        )}
-                      >
-                        {reportLocation ? <Check className="w-4 h-4" /> : <Navigation className="w-4 h-4" />}
-                        GPS
-                      </button>
-                      <button className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl border border-stone-200 bg-stone-50 text-stone-600">
-                        <MapPin className="w-4 h-4" />
-                        {t.mapPick}
-                      </button>
-                    </div>
-                    {geoError && (
-                      <div className="mt-2 text-xs font-medium text-rose-600">{geoError}</div>
+              <div>
+                <label className="block text-xs font-semibold text-stone-500 uppercase tracking-wider mb-2">{t.locationLabel}</label>
+                <div className="flex gap-2">
+                  <button 
+                    onClick={getCurrentLocation}
+                    className={cn(
+                      "flex-1 flex items-center justify-center gap-2 py-3 rounded-xl border transition-all",
+                      reportLocation ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-stone-50 border-stone-200 text-stone-600"
                     )}
-                    <div className="mt-3 h-50 rounded-xl overflow-hidden border border-stone-200 relative">
-                      <MapContainer
-                        center={reportLocation ? [reportLocation.lat, reportLocation.lng] : selectedCityOption.center}
-                        zoom={reportLocation ? 15 : selectedCityOption.zoom}
-                        style={{ height: '100%', width: '100%' }}
-                        zoomControl={false}
-                      >
-                        <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-                        <ChangeView center={reportLocation ? [reportLocation.lat, reportLocation.lng] : selectedCityOption.center} zoom={reportLocation ? 15 : selectedCityOption.zoom} />
-                        <ReportMapPicker
-                          onPick={(lat, lng) => {
-                            setReportLocation({ lat, lng });
-                          }}
-                        />
-                        {reportLocation && (
-                          <CircleMarker
-                            center={[reportLocation.lat, reportLocation.lng]}
-                            radius={10}
-                            fillColor="#22c55e"
-                            color="white"
-                            weight={2}
-                            fillOpacity={0.9}
-                          />
-                        )}
-                      </MapContainer>
-                      {!reportLocation && (
-                        <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-stone-500 bg-white/70">
-                          {t.locationHint}
-                        </div>
-                      )}
-                    </div>
-                    {reportLocation && (
-                      <div className="mt-2 text-xs text-stone-500">
-                        {reportLocation.lat.toFixed(5)}, {reportLocation.lng.toFixed(5)}
-                      </div>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-stone-500 uppercase tracking-wider mb-2">{t.photoLabel}</label>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      title={t.photoLabel}
-                      onChange={(e) => setReportPhoto(e.target.files?.[0] || null)}
-                      className="w-full text-sm text-stone-600 file:mr-3 file:rounded-lg file:border-0 file:bg-stone-100 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-stone-700 hover:file:bg-stone-200"
-                    />
-                    {reportPhoto && (
-                      <div className="mt-2 text-xs text-stone-500">{reportPhoto.name}</div>
-                    )}
-                  </div>
-
-                  <button
-                    disabled={submitting || !reportPrice || (!selectedProduct && !searchQuery.trim())}
-                    onClick={handleReportSubmit}
-                    className="w-full bg-emerald-600 text-white py-4 rounded-xl font-bold text-lg shadow-lg shadow-emerald-200 active:scale-95 transition-all disabled:opacity-50 disabled:shadow-none"
                   >
-                    {submitting ? t.submitting : t.submit}
+                    {reportLocation ? <Check className="w-4 h-4" /> : <Navigation className="w-4 h-4" />}
+                    GPS
                   </button>
-                </section>
-
-                <section className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100 flex items-start gap-3">
-                  <Camera className="text-emerald-600 w-5 h-5 mt-0.5" />
-                  <div>
-                    <h4 className="text-sm font-bold text-emerald-800">{t.tipTitle}</h4>
-                    <p className="text-xs text-emerald-700 leading-relaxed">
-                      {t.tipBody}
-                    </p>
-                    <p className="mt-2 text-xs text-emerald-700 leading-relaxed">
-                      {t.scrapeLinkHint}
-                    </p>
+                  <button className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl border border-stone-200 bg-stone-50 text-stone-600">
+                    <MapPin className="w-4 h-4" />
+                    {t.mapPick}
+                  </button>
+                </div>
+                <div className="mt-3 h-[200px] rounded-xl overflow-hidden border border-stone-200 relative">
+                  <MapContainer
+                    center={reportLocation ? [reportLocation.lat, reportLocation.lng] : [41.2995, 69.2401]}
+                    zoom={reportLocation ? 15 : 12}
+                    style={{ height: '100%', width: '100%' }}
+                    zoomControl={false}
+                  >
+                    <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                    <ReportMapPicker
+                      onPick={(lat, lng) => {
+                        setReportLocation({ lat, lng });
+                      }}
+                    />
+                    {reportLocation && (
+                      <CircleMarker
+                        center={[reportLocation.lat, reportLocation.lng]}
+                        radius={10}
+                        fillColor="#22c55e"
+                        color="white"
+                        weight={2}
+                        fillOpacity={0.9}
+                      />
+                    )}
+                  </MapContainer>
+                  {!reportLocation && (
+                    <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-stone-500 bg-white/70">
+                      {t.locationHint}
+                    </div>
+                  )}
+                </div>
+                {reportLocation && (
+                  <div className="mt-2 text-xs text-stone-500">
+                    {reportLocation.lat.toFixed(5)}, {reportLocation.lng.toFixed(5)}
                   </div>
-                </section>
-              </>
-            )}
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-stone-500 uppercase tracking-wider mb-2">{t.photoLabel}</label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => setReportPhoto(e.target.files?.[0] || null)}
+                  className="w-full text-sm text-stone-600 file:mr-3 file:rounded-lg file:border-0 file:bg-stone-100 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-stone-700 hover:file:bg-stone-200"
+                />
+                {reportPhoto && (
+                  <div className="mt-2 text-xs text-stone-500">{reportPhoto.name}</div>
+                )}
+              </div>
+
+              <button 
+                disabled={submitting || !reportPrice || (!selectedProduct && !searchQuery.trim())}
+                onClick={handleReportSubmit}
+                className="w-full bg-emerald-600 text-white py-4 rounded-xl font-bold text-lg shadow-lg shadow-emerald-200 active:scale-95 transition-all disabled:opacity-50 disabled:shadow-none"
+              >
+                {submitting ? t.submitting : t.submit}
+              </button>
+            </section>
+
+            <section className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100 flex items-start gap-3">
+              <Camera className="text-emerald-600 w-5 h-5 mt-0.5" />
+              <div>
+                <h4 className="text-sm font-bold text-emerald-800">{t.tipTitle}</h4>
+                <p className="text-xs text-emerald-700 leading-relaxed">
+                  {t.tipBody}
+                </p>
+              </div>
+            </section>
           </div>
         ) : (
           <div className="space-y-4">
@@ -1485,7 +885,6 @@ export default function App() {
                       <div>
                         <div className="text-xs font-semibold uppercase tracking-wider text-stone-400">ID</div>
                         <div className="text-sm font-medium text-stone-700">{item.id}</div>
-                        <div className="mt-1 text-xs text-stone-500">{t.cityLabel}: {item.city || selectedCityLabel}</div>
                       </div>
                       <div className="text-right text-xs text-stone-500">
                         <div>{t.moderationUser}: {item.submitted_by}</div>
@@ -1499,7 +898,6 @@ export default function App() {
                         <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">{t.moderationName}</label>
                         <input
                           value={item.product_name_raw}
-                          title={t.moderationName}
                           onChange={(e) => updateModerationField(item.id, 'product_name_raw', e.target.value)}
                           className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
                         />
@@ -1509,7 +907,6 @@ export default function App() {
                         <input
                           type="number"
                           value={item.price}
-                          title={t.moderationPrice}
                           onChange={(e) => updateModerationField(item.id, 'price', e.target.value)}
                           className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
                         />
@@ -1519,7 +916,6 @@ export default function App() {
                         <input
                           type="number"
                           value={item.quantity}
-                          title={t.moderationQty}
                           onChange={(e) => updateModerationField(item.id, 'quantity', e.target.value)}
                           className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
                         />
@@ -1529,7 +925,6 @@ export default function App() {
                         <input
                           type="number"
                           value={item.unit_price}
-                          title={t.moderationUnitPrice}
                           onChange={(e) => updateModerationField(item.id, 'unit_price', e.target.value)}
                           className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
                         />
@@ -1588,7 +983,6 @@ export default function App() {
                         <div>{t.moderationUser}: {item.submitted_by}</div>
                         <div>{t.moderationDate}: {formatDistanceToNow(new Date(item.receipt_date), { addSuffix: true, locale: reportLocale })}</div>
                         <div>{t.moderationSource}: {item.source}</div>
-                        <div>{t.cityLabel}: {item.city || selectedCityLabel}</div>
                         <div>{item.place_name || t.unknownStore}</div>
                       </div>
                     </div>
@@ -1638,8 +1032,6 @@ declare global {
         ready: () => void;
         expand: () => void;
         showAlert: (message: string) => void;
-        showScanQrPopup?: (params: { text?: string }, callback: (scannedText: string) => boolean) => void;
-        closeScanQrPopup?: () => void;
         initData: string;
         initDataUnsafe: {
           user?: {

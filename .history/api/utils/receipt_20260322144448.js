@@ -1,3 +1,4 @@
+import axios from 'axios';
 import * as cheerio from 'cheerio';
 import * as fuzzball from 'fuzzball';
 import { extractCityFromAddress as extractCityFromAddressBase, normalizeCityName } from '../../src/constants/cities.js';
@@ -6,46 +7,18 @@ export function extractSoliqUrlFromText(input) {
   const raw = String(input || '').trim();
   if (!raw) return null;
 
-  const buildCheckFromParams = (paramsSource) => {
-    const search = new URLSearchParams(paramsSource);
-    const t = search.get('t');
-    if (!t) return null;
-    const r = search.get('r');
-    const c = search.get('c');
-    const s = search.get('s');
-
-    const check = new URL('https://ofd.soliq.uz/check');
-    check.searchParams.set('t', t);
-    if (r) check.searchParams.set('r', r);
-    if (c) check.searchParams.set('c', c);
-    if (s) check.searchParams.set('s', s);
-    return check.toString();
-  };
-
   const directMatch = raw.match(/https?:\/\/[^\s"']+/i);
   if (directMatch && /soliq\.uz/i.test(directMatch[0])) {
-    try {
-      const parsed = new URL(directMatch[0]);
-      const fromDirectParams = buildCheckFromParams(parsed.search);
-      return fromDirectParams || parsed.toString();
-    } catch {
-      return directMatch[0];
-    }
+    return directMatch[0];
   }
 
   if (/^ofd\.soliq\.uz\//i.test(raw)) {
-    try {
-      const parsed = new URL(`https://${raw}`);
-      const fromRawParams = buildCheckFromParams(parsed.search);
-      return fromRawParams || parsed.toString();
-    } catch {
-      return `https://${raw}`;
-    }
+    return `https://${raw}`;
   }
 
-  const fromLooseParams = buildCheckFromParams(raw);
-  if (fromLooseParams) {
-    return fromLooseParams;
+  const tParamMatch = raw.match(/(?:^|[?&])t=([^&\s]+)/i);
+  if (tParamMatch?.[1]) {
+    return `https://ofd.soliq.uz/epi?t=${encodeURIComponent(tParamMatch[1])}`;
   }
 
   return null;
@@ -64,6 +37,25 @@ export function normalizeSoliqUrl(input) {
   } catch {
     return null;
   }
+}
+
+function buildReceiptUrlCandidates(rawUrl) {
+  const normalized = normalizeSoliqUrl(rawUrl);
+  if (!normalized) return [];
+
+  const candidates = [normalized];
+  try {
+    const parsed = new URL(normalized);
+    const ticket = parsed.searchParams.get('t');
+    if (ticket) {
+      candidates.push(`https://ofd.soliq.uz/epi?t=${encodeURIComponent(ticket)}`);
+      candidates.push(`https://ofd.soliq.uz/check?t=${encodeURIComponent(ticket)}`);
+    }
+  } catch {
+    return candidates;
+  }
+
+  return [...new Set(candidates)];
 }
 
 function extractReceiptDate($) {
@@ -154,106 +146,6 @@ function parseNumericValue(input) {
 
   const value = Number.parseFloat(cleaned);
   return Number.isFinite(value) ? value : 0;
-}
-
-function extractReceiptTotal($) {
-  const keys = ['jami to\'lov', 'jami to`lov', 'итого', 'total', 'к оплате', 'summa'];
-  const bodyText = $('body').text().replace(/\s+/g, ' ').trim();
-
-  for (const key of keys) {
-    const pattern = new RegExp(`${key}[^\\d]{0,40}([\\d\\s.,]+)`, 'i');
-    const match = bodyText.match(pattern);
-    if (match?.[1]) {
-      const value = parseNumericValue(match[1]);
-      if (value > 0) return Math.round(value);
-    }
-  }
-
-  return null;
-}
-
-function fallbackExtractItemsFromJsonScripts($) {
-  const scripts = $('script[type*="json"], script')
-    .toArray()
-    .map(script => $(script).html() || '')
-    .filter(Boolean);
-
-  const items = [];
-  const seen = new Set();
-
-  const nameKeys = ['name', 'product', 'product_name', 'good_name', 'товар', 'наименование', 'nomi'];
-  const qtyKeys = ['qty', 'quantity', 'count', 'soni', 'кол'];
-  const priceKeys = ['price', 'sum', 'total', 'amount', 'narx', 'стоим', 'цена'];
-
-  const getValueByKeys = (obj, keys) => {
-    if (!obj || typeof obj !== 'object') return null;
-    const entries = Object.entries(obj);
-    for (const [key, value] of entries) {
-      const normalized = String(key).toLowerCase();
-      if (keys.some(k => normalized.includes(k))) {
-        return value;
-      }
-    }
-    return null;
-  };
-
-  const tryPush = (nameRaw, totalRaw, qtyRaw) => {
-    const name = String(nameRaw || '').replace(/\s+/g, ' ').trim();
-    const totalPrice = parseNumericValue(totalRaw);
-    const quantity = Math.max(1, parseNumericValue(qtyRaw) || 1);
-    if (!name || totalPrice <= 0) return;
-    const unitPrice = quantity > 0 ? Math.round(totalPrice / quantity) : totalPrice;
-    const key = `${name.toLowerCase()}|${quantity}|${totalPrice}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    items.push({ name, quantity, totalPrice, unitPrice });
-  };
-
-  const walk = (node) => {
-    if (Array.isArray(node)) {
-      for (const entry of node) walk(entry);
-      return;
-    }
-
-    if (!node || typeof node !== 'object') return;
-
-    const name = getValueByKeys(node, nameKeys);
-    const total = getValueByKeys(node, priceKeys);
-    const qty = getValueByKeys(node, qtyKeys);
-    if (name && total) {
-      tryPush(name, total, qty);
-    }
-
-    for (const value of Object.values(node)) {
-      walk(value);
-    }
-  };
-
-  for (const scriptText of scripts) {
-    const trimmed = scriptText.trim();
-    if (!trimmed) continue;
-
-    try {
-      const parsed = JSON.parse(trimmed);
-      walk(parsed);
-      continue;
-    } catch {
-      // ignore, try pattern extraction below
-    }
-
-    const objectPattern = /\{[\s\S]{10,600}\}/g;
-    const blocks = trimmed.match(objectPattern) || [];
-    for (const block of blocks) {
-      try {
-        const parsed = JSON.parse(block);
-        walk(parsed);
-      } catch {
-        // ignore malformed blocks
-      }
-    }
-  }
-
-  return items;
 }
 
 function tryParseCoordinatePair(latRaw, lonRaw) {
@@ -446,7 +338,34 @@ function fallbackExtractItemsFromAnyThreeColumnRows($) {
   return items;
 }
 
-export function parseReceiptFromHtml(html) {
+async function fetchWithRetry(url, attempts = 3) {
+  let lastError = null;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      return await axios.get(url, {
+        timeout: 10000,
+        maxRedirects: 5,
+        validateStatus: (status) => status >= 200 && status < 400,
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'uz,ru;q=0.9,en;q=0.8',
+          'Referer': 'https://ofd.soliq.uz/',
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache',
+        },
+      });
+    } catch (error) {
+      lastError = error;
+      if (i === attempts - 1) break;
+      await new Promise(resolve => setTimeout(resolve, 500 * (i + 1)));
+    }
+  }
+  throw lastError;
+}
+
+function parseReceiptFromHtml(html) {
   const $ = cheerio.load(html);
 
   const storeHeader = $('h3')
@@ -468,7 +387,6 @@ export function parseReceiptFromHtml(html) {
       .trim() || $('.address, .company-address').first().text().trim() || 'Toshkent sh.';
 
   const detectedCity = extractCityFromAddress(storeAddress);
-  const totalAmount = extractReceiptTotal($);
   const receiptDateRaw = extractReceiptDate($);
   const parsedDate = receiptDateRaw ? new Date(receiptDateRaw) : null;
   const receiptDate = parsedDate && !Number.isNaN(parsedDate.getTime())
@@ -477,7 +395,6 @@ export function parseReceiptFromHtml(html) {
   const coordinates = extractCoordinatesFromHtml(html, $);
 
   const items = [];
-  let parseStage = null;
   const itemsTable = findItemsTable($);
   if (itemsTable) {
     const { table, headers } = itemsTable;
@@ -502,48 +419,22 @@ export function parseReceiptFromHtml(html) {
         items.push({ name, quantity, totalPrice, unitPrice });
       }
     });
-    if (items.length > 0) {
-      parseStage = 'table';
-    }
   }
 
   if (items.length === 0) {
     items.push(...fallbackExtractItems($));
-    if (items.length > 0) {
-      parseStage = 'generic_table';
-    }
   }
 
   if (items.length === 0) {
     items.push(...fallbackExtractItemsFromScripts($));
-    if (items.length > 0) {
-      parseStage = 'script_regex';
-    }
-  }
-
-  if (items.length === 0) {
-    items.push(...fallbackExtractItemsFromJsonScripts($));
-    if (items.length > 0) {
-      parseStage = 'script_json';
-    }
   }
 
   if (items.length === 0) {
     items.push(...fallbackExtractItemsFromProductBlocks($));
-    if (items.length > 0) {
-      parseStage = 'product_blocks';
-    }
   }
 
   if (items.length === 0) {
     items.push(...fallbackExtractItemsFromAnyThreeColumnRows($));
-    if (items.length > 0) {
-      parseStage = 'three_columns';
-    }
-  }
-
-  if (!parseStage) {
-    parseStage = 'metadata_only';
   }
 
   return {
@@ -553,15 +444,37 @@ export function parseReceiptFromHtml(html) {
     detectedCity,
     latitude: coordinates?.latitude ?? null,
     longitude: coordinates?.longitude ?? null,
-    totalAmount,
-    parseStage,
     receiptDate,
     items,
   };
 }
 
+async function scrapeCandidateUrl(candidateUrl) {
+  try {
+    const { data } = await fetchWithRetry(candidateUrl);
+    const parsed = parseReceiptFromHtml(data);
+    if (parsed.items.length === 0) {
+      return null;
+    }
+    return parsed;
+  } catch (error) {
+    return null;
+  }
+}
+
 export function extractCityFromAddress(address) {
   return extractCityFromAddressBase(address || '');
+}
+
+export async function scrapesoliqReceipt(url) {
+  const candidateUrls = buildReceiptUrlCandidates(url);
+  if (candidateUrls.length === 0) {
+    return null;
+  }
+
+  const results = await Promise.all(candidateUrls.map(candidateUrl => scrapeCandidateUrl(candidateUrl)));
+  const success = results.find(result => result && Array.isArray(result.items) && result.items.length > 0);
+  return success || null;
 }
 
 export async function fetchProductsIndex(supabase) {
@@ -598,7 +511,6 @@ export async function insertPendingPrice({
   city,
   receiptUrl,
   products,
-  source = 'soliq_qr',
   latitude = null,
   longitude = null,
 }) {
@@ -622,7 +534,7 @@ export async function insertPendingPrice({
     place_address: receiptData.storeAddress,
     receipt_url: receiptUrl,
     receipt_date: receiptData.receiptDate,
-    source,
+    source: 'soliq_qr',
     submitted_by: telegramId,
     latitude,
     longitude,

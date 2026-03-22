@@ -1,9 +1,10 @@
 import axios from 'axios';
+import * as cheerio from 'cheerio';
 import { createClient } from '@supabase/supabase-js';
+import * as fuzzball from 'fuzzball';
 import dotenv from 'dotenv';
 import dns from 'node:dns';
 import { extractCityFromAddress, getCityLabel, normalizeCityName } from '../../src/constants/cities.js';
-import { insertPendingPrice, fetchProductsIndex } from '../../api/utils/receipt.js';
 
 dotenv.config();
 dotenv.config({ path: '.env.local', override: true });
@@ -45,7 +46,6 @@ const BOT_COPY = {
     saveFailed: "Hozircha saqlab bo'lmadi. Keyinroq urinib ko'ring.",
     scrapeFailed: "Chekni o'qishda xatolik yuz berdi. Iltimos, havolani tekshirib qayta yuboring 🔄",
     noItems: "Chekda mahsulotlar topilmadi. Bu chek bo'sh yoki format qo'llab-quvvatlanmaydi.",
-    useMiniApp: "Chekni skanerlash uchun ilovadan foydalaning 👇",
     rateLimited: "Juda ko'p ma'lumot yuborildi. Iltimos keyinroq urinib ko'ring 🕐",
     blocked: "Siz tizimdan bloklangansiz.",
     blockedAppeal: "Siz takliflar yuborishdan vaqtincha bloklangansiz.\n\nAgar bu xato deb hisoblasangiz, /appeal buyrug'i orqali murojaat yuboring.",
@@ -116,7 +116,6 @@ const BOT_COPY = {
     saveFailed: "Сейчас не удалось сохранить. Попробуйте позже.",
     scrapeFailed: "Не удалось прочитать чек. Проверьте ссылку и отправьте снова 🔄",
     noItems: "В чеке нет товаров. Возможно, чек пустой или формат не поддерживается.",
-    useMiniApp: "Для сканирования чека используйте приложение 👇",
     rateLimited: "Слишком много данных. Попробуйте позже 🕐",
     blocked: "Вы заблокированы.",
     blockedAppeal: "Вы временно заблокированы от отправки.\n\nЕсли это ошибка, отправьте /appeal.",
@@ -187,7 +186,6 @@ const BOT_COPY = {
     saveFailed: 'Could not save right now. Please try again later.',
     scrapeFailed: 'Could not read the receipt. Please check the link and resend 🔄',
     noItems: 'No items found on the receipt. It may be empty or unsupported.',
-    useMiniApp: 'To scan a receipt, please use the app 👇',
     rateLimited: 'Too much data sent. Please try again later 🕐',
     blocked: 'You are blocked from the system.',
     blockedAppeal: 'You are temporarily blocked from sending.\n\nIf this is a mistake, send /appeal.',
@@ -245,6 +243,147 @@ const BOT_COPY = {
   },
 };
 
+function extractReceiptDate($) {
+  const datePatterns = [
+    /\b(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}:\d{2}:\d{2}))?\b/,
+    /\b(\d{2}\.\d{2}\.\d{4})(?:,?\s*(\d{2}:\d{2}(?::\d{2})?))?\b/,
+  ];
+
+  const labeled = $('*:contains("Sana"), *:contains("Vaqt"), *:contains("Дата"), *:contains("Время")');
+  for (const el of labeled.toArray()) {
+    const text = $(el).text();
+    for (const pattern of datePatterns) {
+      const match = text.match(pattern);
+      if (match) {
+        return match[1].includes('.') ? match[1].split('.').reverse().join('-') + (match[2] ? `T${match[2]}` : '') : match[0];
+      }
+    }
+  }
+
+  const pageText = $('body').text();
+  for (const pattern of datePatterns) {
+    const match = pageText.match(pattern);
+    if (match) {
+      return match[1].includes('.') ? match[1].split('.').reverse().join('-') + (match[2] ? `T${match[2]}` : '') : match[0];
+    }
+  }
+
+  return null;
+}
+
+function findItemsTable($) {
+  const soliqTable = $('table.products-tables');
+  if (soliqTable.length > 0) {
+    const headerCells = soliqTable.find('thead tr').first().find('th, td');
+    const headers = headerCells
+      .toArray()
+      .map(cell => $(cell).text().trim().toLowerCase());
+
+    const hasName = headers.some(h => h.includes('nomi'));
+    const hasQty = headers.some(h => h.includes('soni'));
+    const hasPrice = headers.some(h => h.includes('narxi'));
+
+    if (hasName && hasQty && hasPrice) {
+      return { table: soliqTable, headers };
+    }
+  }
+
+  const tables = $('table');
+  for (const table of tables.toArray()) {
+    const headerCells = $(table).find('tr').first().find('th, td');
+    const headers = headerCells
+      .toArray()
+      .map(cell => $(cell).text().trim().toLowerCase());
+
+    const hasName = headers.some(h => h.includes('nomi'));
+    const hasQty = headers.some(h => h.includes('soni'));
+    const hasPrice = headers.some(h => h.includes('narxi'));
+
+    if (hasName && hasQty && hasPrice) {
+      return { table, headers };
+    }
+  }
+  return null;
+}
+
+async function fetchWithRetry(url, attempts = 2) {
+  let lastError = null;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      return await axios.get(url, {
+        timeout: 10000,
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+          'Accept-Language': 'uz,ru;q=0.8,en;q=0.6',
+        },
+      });
+    } catch (error) {
+      lastError = error;
+      if (i === attempts - 1) break;
+    }
+  }
+  throw lastError;
+}
+
+async function scrapeSoliq(url) {
+  try {
+    const { data } = await fetchWithRetry(url);
+    const $ = cheerio.load(data);
+
+    const storeHeader = $('h3').filter((_, el) => $(el).text().includes('"') || $(el).text().includes('MCHJ') || $(el).text().includes('JAMIYAT')).first();
+    const storeName = storeHeader.text().trim() || $('h1, .company-name, b').first().text().trim() || "Noma'lum do'kon";
+    const storeBlock = storeHeader.closest('td');
+    const storeAddress = storeBlock
+      .clone()
+      .find('h3')
+      .remove()
+      .end()
+      .text()
+      .replace(/\s+/g, ' ')
+      .trim() || $('.address, .company-address').first().text().trim() || 'Toshkent sh.';
+    const city = extractCityFromAddress(storeAddress);
+    const receiptDateRaw = extractReceiptDate($);
+    const parsedDate = receiptDateRaw ? new Date(receiptDateRaw) : null;
+    const receiptDate = parsedDate && !Number.isNaN(parsedDate.getTime())
+      ? parsedDate.toISOString()
+      : new Date().toISOString();
+
+    const items = [];
+    const itemsTable = findItemsTable($);
+    if (itemsTable) {
+      const { table, headers } = itemsTable;
+      const nameIndex = headers.findIndex(h => h.includes('nomi'));
+      const qtyIndex = headers.findIndex(h => h.includes('soni'));
+      const priceIndex = headers.findIndex(h => h.includes('narxi'));
+
+      const rows = $(table).find('tbody tr.products-row');
+      const targetRows = rows.length > 0 ? rows : $(table).find('tr').slice(1);
+
+      targetRows.each((_, el) => {
+        const cols = $(el).find('td');
+        if (cols.length === 0) return;
+
+        const name = $(cols[nameIndex]).text().trim();
+        const quantityStr = $(cols[qtyIndex]).text().trim().replace(',', '.');
+        const priceStr = $(cols[priceIndex]).text().trim().replace(/\s/g, '').replace(',', '.');
+
+        const quantity = Number.parseFloat(quantityStr) || 1;
+        const totalPrice = Number.parseFloat(priceStr) || 0;
+        const unitPrice = quantity > 0 ? Math.round(totalPrice / quantity) : totalPrice;
+
+        if (name && totalPrice > 0) {
+          items.push({ name, quantity, totalPrice, unitPrice });
+        }
+      });
+    }
+
+    return { storeName, storeAddress, city, items, receiptDate };
+  } catch (error) {
+    console.error('Scraping error:', error);
+    return null;
+  }
+}
 
 async function syncProductAvailableCities(productId, city) {
   const normalizedCity = normalizeCityName(city || '');
@@ -295,6 +434,27 @@ function formatCityBreakdown(rows, lang) {
     .slice(0, 8)
     .map(([city, count]) => `${getCityLabel(city, lang)} — ${count}`)
     .join('\n');
+}
+
+async function findProductMatch(rawName) {
+  const { data: products } = await supabase.from('products').select('*');
+  if (!products || products.length === 0) return null;
+
+  let bestMatch = null;
+  let highestScore = 0;
+
+  for (const product of products) {
+    const scoreUz = fuzzball.ratio(rawName.toLowerCase(), product.name_uz.toLowerCase());
+    const scoreRu = fuzzball.ratio(rawName.toLowerCase(), product.name_ru.toLowerCase());
+    const score = Math.max(scoreUz, scoreRu);
+
+    if (score > highestScore) {
+      highestScore = score;
+      bestMatch = product;
+    }
+  }
+
+  return highestScore >= 60 ? bestMatch : null;
 }
 
 async function sendTelegramMessage(chatId, payload) {
@@ -828,21 +988,102 @@ async function handleMessage(message) {
   }
 
   if (normalizedText.includes('soliq.uz')) {
-    // Redirect user to the Mini App for receipt scanning
-    // (server cannot reach soliq.uz; the browser must fetch the page)
-    const miniAppUrl = MINI_APP_URL;
-    if (!miniAppUrl) {
-      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].missingMiniApp });
+    const receiptUrl = extractSoliqUrl(message);
+    if (!receiptUrl) {
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].missingReceipt });
       return;
     }
-    await sendTelegramMessage(chatId, {
-      text: BOT_COPY[lang].useMiniApp,
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: BOT_COPY[lang].btnReport, web_app: { url: `${miniAppUrl}?mode=report&lang=${lang}` } }],
-        ],
-      },
-    });
+
+    await sendTelegramMessage(chatId, { text: BOT_COPY[lang].processing });
+
+    if (!supabaseUrl || !supabaseKey) {
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].serverError });
+      return;
+    }
+
+    const { data: alreadyProcessed } = await supabase
+      .from('receipts_log')
+      .select('receipt_url')
+      .eq('receipt_url', receiptUrl)
+      .maybeSingle();
+
+    if (alreadyProcessed) {
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].alreadyAdded });
+      return;
+    }
+
+    const receiptData = await scrapeSoliq(receiptUrl);
+    if (!receiptData) {
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].scrapeFailed });
+      return;
+    }
+
+    if (receiptData && receiptData.items.length > 0) {
+      try {
+        const currentCount = rateLimitCounter[telegramId] || 0;
+        if (currentCount + receiptData.items.length > 10) {
+          await sendTelegramMessage(chatId, { text: BOT_COPY[lang].rateLimited });
+          return;
+        }
+        rateLimitCounter[telegramId] = currentCount + receiptData.items.length;
+
+        const products = await getProductsIndex();
+
+        const inserts = receiptData.items.map(async item => {
+          let bestMatch = null;
+          let highestScore = 0;
+
+          for (const product of products) {
+            const candidates = [product.name_uz, product.name_ru, product.name_en].filter(Boolean);
+            const scores = candidates.map(name => fuzzball.ratio(item.name.toLowerCase(), name.toLowerCase()));
+            const score = Math.max(...scores, 0);
+            if (score > highestScore) {
+              highestScore = score;
+              bestMatch = product;
+            }
+          }
+
+          return supabase.from('pending_prices').insert({
+            product_name_raw: item.name,
+            product_id: bestMatch?.id || null,
+            match_confidence: highestScore,
+            status: 'pending',
+            price: item.totalPrice,
+            quantity: item.quantity,
+            unit_price: item.unitPrice,
+            city: receiptData.city,
+            place_name: receiptData.storeName,
+            place_address: receiptData.storeAddress,
+            receipt_url: receiptUrl,
+            receipt_date: receiptData.receiptDate,
+            source: 'soliq_qr',
+            submitted_by: telegramId,
+          });
+        });
+
+        await Promise.all(inserts);
+
+        await supabase.from('receipts_log').insert({
+          receipt_url: receiptUrl,
+          submitted_by: telegramId,
+          item_count: receiptData.items.length,
+        });
+
+        await sendTelegramMessage(chatId, {
+          text: BOT_COPY[lang].receiptAccepted(
+            receiptData.storeName,
+            receiptData.storeAddress,
+            getCityLabel(receiptData.city, lang),
+            receiptData.items.length,
+          ),
+        });
+      } catch (error) {
+        console.error('Supabase insert error:', error);
+        await sendTelegramMessage(chatId, { text: BOT_COPY[lang].saveFailed });
+      }
+    } else {
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].noItems });
+    }
     return;
   }
 

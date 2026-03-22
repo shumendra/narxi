@@ -1,3 +1,4 @@
+import axios from 'axios';
 import * as cheerio from 'cheerio';
 import * as fuzzball from 'fuzzball';
 import { extractCityFromAddress as extractCityFromAddressBase, normalizeCityName } from '../../src/constants/cities.js';
@@ -64,6 +65,41 @@ export function normalizeSoliqUrl(input) {
   } catch {
     return null;
   }
+}
+
+function buildReceiptUrlCandidates(rawUrl) {
+  const normalized = normalizeSoliqUrl(rawUrl);
+  if (!normalized) return [];
+
+  const candidates = [normalized];
+  try {
+    const parsed = new URL(normalized);
+    const ticket = parsed.searchParams.get('t');
+    if (ticket) {
+      const r = parsed.searchParams.get('r');
+      const c = parsed.searchParams.get('c');
+      const s = parsed.searchParams.get('s');
+
+      const check = new URL('https://ofd.soliq.uz/check');
+      check.searchParams.set('t', ticket);
+      if (r) check.searchParams.set('r', r);
+      if (c) check.searchParams.set('c', c);
+      if (s) check.searchParams.set('s', s);
+
+      const epi = new URL('https://ofd.soliq.uz/epi');
+      epi.searchParams.set('t', ticket);
+      if (r) epi.searchParams.set('r', r);
+      if (c) epi.searchParams.set('c', c);
+      if (s) epi.searchParams.set('s', s);
+
+      candidates.push(check.toString());
+      candidates.push(epi.toString());
+    }
+  } catch {
+    return candidates;
+  }
+
+  return [...new Set(candidates)];
 }
 
 function extractReceiptDate($) {
@@ -446,7 +482,34 @@ function fallbackExtractItemsFromAnyThreeColumnRows($) {
   return items;
 }
 
-export function parseReceiptFromHtml(html) {
+async function fetchWithRetry(url, attempts = 3) {
+  let lastError = null;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      return await axios.get(url, {
+        timeout: 10000,
+        maxRedirects: 5,
+        validateStatus: (status) => status >= 200 && status < 400,
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'uz,ru;q=0.9,en;q=0.8',
+          'Referer': 'https://ofd.soliq.uz/',
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache',
+        },
+      });
+    } catch (error) {
+      lastError = error;
+      if (i === attempts - 1) break;
+      await new Promise(resolve => setTimeout(resolve, 500 * (i + 1)));
+    }
+  }
+  throw lastError;
+}
+
+function parseReceiptFromHtml(html) {
   const $ = cheerio.load(html);
 
   const storeHeader = $('h3')
@@ -560,8 +623,60 @@ export function parseReceiptFromHtml(html) {
   };
 }
 
+function isReceiptGenerating(html) {
+  if (!html || typeof html !== 'string') return false;
+  const lower = html.toLowerCase();
+  return (
+    lower.includes('shakllanmoqda') ||
+    (lower.includes('alert-danger') && !lower.includes('products-tables') && !lower.includes('nomi'))
+  );
+}
+
+async function scrapeCandidateUrl(candidateUrl) {
+  try {
+    const { data } = await fetchWithRetry(candidateUrl);
+    if (isReceiptGenerating(data)) {
+      return { _generating: true };
+    }
+    return parseReceiptFromHtml(data);
+  } catch (error) {
+    return null;
+  }
+}
+
 export function extractCityFromAddress(address) {
   return extractCityFromAddressBase(address || '');
+}
+
+export async function scrapesoliqReceipt(url) {
+  const candidateUrls = buildReceiptUrlCandidates(url);
+  if (candidateUrls.length === 0) {
+    return null;
+  }
+
+  const RETRY_DELAYS = [4000, 6000, 8000];
+
+  for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
+    const results = await Promise.all(candidateUrls.map(candidateUrl => scrapeCandidateUrl(candidateUrl)));
+    const success = results.find(result => result && !result._generating && Array.isArray(result.items) && result.items.length > 0);
+    if (success) return success;
+
+    const stillGenerating = results.some(result => result && result._generating);
+    if (stillGenerating && attempt < RETRY_DELAYS.length) {
+      console.info(`Receipt still generating, retry ${attempt + 1}/${RETRY_DELAYS.length} in ${RETRY_DELAYS[attempt]}ms...`);
+      await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[attempt]));
+      continue;
+    }
+
+    if (stillGenerating) {
+      return { _generating: true, items: [], parseStage: 'generating' };
+    }
+
+    const metadataOnly = results.find(result => result && (result.storeName || result.storeAddress || result.totalAmount));
+    return metadataOnly || null;
+  }
+
+  return null;
 }
 
 export async function fetchProductsIndex(supabase) {

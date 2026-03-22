@@ -187,7 +187,6 @@ const BOT_COPY = {
     saveFailed: 'Could not save right now. Please try again later.',
     scrapeFailed: 'Could not read the receipt. Please check the link and resend 🔄',
     noItems: 'No items found on the receipt. It may be empty or unsupported.',
-    useMiniApp: 'To scan a receipt, please use the app 👇',
     rateLimited: 'Too much data sent. Please try again later 🕐',
     blocked: 'You are blocked from the system.',
     blockedAppeal: 'You are temporarily blocked from sending.\n\nIf this is a mistake, send /appeal.',

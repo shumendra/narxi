@@ -157,18 +157,13 @@ export default function App() {
         scanLoadingTitle: "⏳ Chek o'qilmoqda...",
         scanLoadingHint: 'Iltimos kuting',
         scanSuccessTitle: '✅ Chek qabul qilindi!',
-        scanSuccessQueued: 'Chek qabul qilindi va moderatsiyaga yuborildi. Mahsulotlar administrator tomonidan qo‘lda tekshiriladi.',
-        scanItemsSubmitted: "ta mahsulot yuborildi",
-        scanThanks: 'Rahmat! 🙌',
         scanDuplicateTitle: 'ℹ️ Bu chek avval yuborilgan',
         scanErrorTitle: "❌ Chekni o'qishda xatolik",
         scanErrorBody: 'QR kod soliq.uz ga tegishli emas\nyoki server xatosi yuz berdi.',
         scanErrorNotSoliq: 'QR kod soliq.uz havolasiga mos kelmadi.',
         scanErrorBlocked: 'Siz vaqtincha bloklangansiz.',
         scanErrorScrape: "Chek topildi, lekin server uni hozir o'qiy olmadi.\nIltimos qayta urinib ko'ring yoki havolani botga yuboring.",
-        scanErrorParseEmpty: "Chek ochildi, lekin mahsulotlar ro'yxati topilmadi.\nIltimos qayta urinib ko'ring yoki havolani botga yuboring.",
         scanErrorTimeout: "Serverdan javob kutish vaqti tugadi.\nIltimos yana urinib ko'ring.",
-        scanErrorGenerating: "Chek hali tayyorlanmoqda.\n1-2 daqiqadan so'ng qayta urinib ko'ring.",
         scanErrorNetwork: 'Tarmoq xatosi yuz berdi. Internetni tekshirib qayta urinib ko‘ring.',
         scanAgain: 'Yana skanerlash',
         goHome: 'Bosh sahifaga',
@@ -243,21 +238,14 @@ export default function App() {
         scanLoadingTitle: '⏳ Чтение чека...',
         scanLoadingHint: 'Пожалуйста, подождите',
         scanSuccessTitle: '✅ Чек принят!',
-        scanSuccessQueued: 'Чек принят и отправлен на модерацию. Товары будут проверены администратором вручную.',
-        scanItemsSubmitted: 'товаров отправлено',
-        scanThanks: 'Спасибо! 🙌',
         scanDuplicateTitle: 'ℹ️ Этот чек уже отправляли',
         scanErrorTitle: '❌ Ошибка чтения чека',
         scanErrorBody: 'QR код не относится к soliq.uz\nили произошла ошибка сервера.',
         scanErrorNotSoliq: 'QR код не содержит корректную ссылку soliq.uz.',
         scanErrorBlocked: 'Вы временно заблокированы.',
         scanErrorScrape: 'Чек найден, но сервер пока не смог его прочитать.\nПовторите попытку или отправьте ссылку боту.',
-        scanErrorParseEmpty: 'Чек открыт, но список товаров не найден.\nПовторите попытку или отправьте ссылку боту.',
         scanErrorTimeout: 'Истекло время ожидания ответа сервера.\nПопробуйте снова.',
-        scanErrorGenerating: 'Чек ещё формируется.\nПовторите через 1-2 минуты.',
         scanErrorNetwork: 'Сетевая ошибка. Проверьте интернет и повторите попытку.',
-        scanFetchingPage: 'Загрузка страницы чека...',
-        scanBrowserFetchFailed: 'Не удалось загрузить страницу чека.\nПроверьте интернет и попробуйте снова.',
         scanAgain: 'Сканировать снова',
         goHome: 'На главную',
         retry: 'Повторить',
@@ -331,21 +319,14 @@ export default function App() {
         scanLoadingTitle: '⏳ Reading receipt...',
         scanLoadingHint: 'Please wait',
         scanSuccessTitle: '✅ Receipt accepted!',
-        scanSuccessQueued: 'Receipt accepted and queued for moderation. Products will be verified manually by an admin.',
-        scanItemsSubmitted: 'products submitted',
-        scanThanks: 'Thanks! 🙌',
         scanDuplicateTitle: 'ℹ️ This receipt was already submitted',
         scanErrorTitle: '❌ Receipt read error',
         scanErrorBody: 'QR code is not a soliq.uz link\nor a server error occurred.',
         scanErrorNotSoliq: 'QR code does not contain a valid soliq.uz URL.',
         scanErrorBlocked: 'You are temporarily blocked.',
         scanErrorScrape: 'Receipt was detected, but the server could not read it right now.\nTry again or send the link to the bot.',
-        scanErrorParseEmpty: 'Receipt opened, but no product list was found.\nTry again or send the link to the bot.',
         scanErrorTimeout: 'Server response timed out.\nPlease try again.',
-        scanErrorGenerating: 'Receipt is still being generated.\nPlease try again in 1-2 minutes.',
         scanErrorNetwork: 'Network error. Check internet connection and try again.',
-        scanFetchingPage: 'Loading receipt page...',
-        scanBrowserFetchFailed: 'Could not load the receipt page.\nPlease check your internet and try again.',
         scanAgain: 'Scan again',
         goHome: 'Home',
         retry: 'Retry',
@@ -405,7 +386,6 @@ export default function App() {
     storeAddress?: string;
     city?: string;
     itemCount?: number;
-    queuedWithoutParse?: boolean;
     errorCode?: string;
   } | null>(null);
 
@@ -449,15 +429,9 @@ export default function App() {
 
   const normalizePendingItem = (item: any): PendingModerationItem => ({
     ...item,
-    product_name_raw:
-      String(item.product_name_raw || '').trim() ||
-      (String(item.source || '').startsWith('soliq_qr_unparsed') ? 'RECEIPT_PARSE_REVIEW' : 'UNKNOWN_PRODUCT'),
-    price: Number(item.price) || (String(item.source || '').startsWith('soliq_qr_unparsed') ? 1 : 0),
+    price: Number(item.price) || 0,
     quantity: Number(item.quantity) || 1,
-    unit_price:
-      Number(item.unit_price) ||
-      Number(item.price) ||
-      (String(item.source || '').startsWith('soliq_qr_unparsed') ? 1 : 0),
+    unit_price: Number(item.unit_price) || Number(item.price) || 0,
   });
 
   const normalizeApprovedItem = (item: any): ApprovedModerationItem => ({
@@ -817,44 +791,18 @@ export default function App() {
     const raw = String(input || '').trim();
     if (!raw) return null;
 
-    const buildCheckFromParams = (paramsSource: string) => {
-      const params = new URLSearchParams(paramsSource);
-      const t = params.get('t');
-      if (!t) return null;
-      const r = params.get('r');
-      const c = params.get('c');
-      const s = params.get('s');
-
-      const check = new URL('https://ofd.soliq.uz/check');
-      check.searchParams.set('t', t);
-      if (r) check.searchParams.set('r', r);
-      if (c) check.searchParams.set('c', c);
-      if (s) check.searchParams.set('s', s);
-      return check.toString();
-    };
-
     const directMatch = raw.match(/https?:\/\/[^\s"']+/i);
     if (directMatch && /soliq\.uz/i.test(directMatch[0])) {
-      try {
-        const parsed = new URL(directMatch[0]);
-        return buildCheckFromParams(parsed.search) || parsed.toString();
-      } catch {
-        return directMatch[0];
-      }
+      return directMatch[0];
     }
 
     if (/^ofd\.soliq\.uz\//i.test(raw)) {
-      try {
-        const parsed = new URL(`https://${raw}`);
-        return buildCheckFromParams(parsed.search) || parsed.toString();
-      } catch {
-        return `https://${raw}`;
-      }
+      return `https://${raw}`;
     }
 
-    const fromLooseParams = buildCheckFromParams(raw);
-    if (fromLooseParams) {
-      return fromLooseParams;
+    const tParamMatch = raw.match(/(?:^|[?&])t=([^&\s]+)/i);
+    if (tParamMatch?.[1]) {
+      return `https://ofd.soliq.uz/epi?t=${encodeURIComponent(tParamMatch[1])}`;
     }
 
     return null;
@@ -870,20 +818,11 @@ export default function App() {
     if (errorCode === 'scan_timeout') {
       return t.scanErrorTimeout;
     }
-    if (errorCode === 'receipt_generating') {
-      return t.scanErrorGenerating;
-    }
     if (errorCode === 'scrape_failed') {
       return t.scanErrorScrape;
     }
-    if (errorCode === 'parse_empty') {
-      return t.scanErrorParseEmpty;
-    }
     if (errorCode === 'network_error') {
       return t.scanErrorNetwork;
-    }
-    if (errorCode === 'browser_fetch_failed') {
-      return t.scanBrowserFetchFailed;
     }
     return t.scanErrorBody;
   };
@@ -900,26 +839,11 @@ export default function App() {
     setScanResult(null);
     setReportEntryStep('loading');
 
-    // Step 1: Browser fetches the receipt HTML (server can't reach soliq.uz)
-    let html: string;
-    try {
-      const pageResp = await fetch(scannedUrl);
-      if (!pageResp.ok) throw new Error(`HTTP ${pageResp.status}`);
-      html = await pageResp.text();
-      if (!html || html.length < 200) throw new Error('empty page');
-    } catch {
-      setScanResult({ status: 'error', errorCode: 'browser_fetch_failed' });
-      setReportEntryStep('result');
-      return;
-    }
-
-    // Step 2: Send the HTML to backend for parsing + DB insertion
     try {
       const response = await fetch('/api/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          html,
           url: scannedUrl,
           telegram_id: window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || 'anonymous',
           city: selectedCity,
@@ -1300,14 +1224,9 @@ export default function App() {
                   <div>🏪 {scanResult.storeName || '-'}</div>
                   <div>📍 {scanResult.storeAddress || '-'}</div>
                   <div>🌆 {scanResult.city || selectedCityLabel}</div>
-                  <div>📦 {scanResult.itemCount || 0} {t.scanItemsSubmitted}</div>
+                  <div>📦 {scanResult.itemCount || 0} ta mahsulot yuborildi</div>
                 </div>
-                {scanResult.queuedWithoutParse && (
-                  <div className="rounded-xl border border-emerald-200 bg-white/70 px-3 py-2 text-sm text-emerald-800">
-                    {t.scanSuccessQueued}
-                  </div>
-                )}
-                <div className="text-sm text-emerald-800">{t.scanThanks}</div>
+                <div className="text-sm text-emerald-800">Rahmat! 🙌</div>
                 <div className="grid grid-cols-2 gap-2">
                   <button onClick={retryScan} className="rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white">{t.scanAgain}</button>
                   <button onClick={goToReportHome} className="rounded-xl border border-emerald-300 bg-white px-4 py-3 text-sm font-semibold text-emerald-700">{t.goHome}</button>
@@ -1329,9 +1248,6 @@ export default function App() {
               <section className="rounded-2xl border border-rose-200 bg-rose-50 p-6 space-y-4">
                 <div className="text-xl font-bold text-rose-900">{t.scanErrorTitle}</div>
                 <div className="whitespace-pre-line text-sm text-rose-800">{getScanErrorBody(scanResult.errorCode)}</div>
-                {scanResult.errorCode && (
-                  <div className="text-xs text-rose-700/80">Code: {scanResult.errorCode}</div>
-                )}
                 <div className="grid grid-cols-2 gap-2">
                   <button onClick={retryScan} className="rounded-xl bg-rose-600 px-4 py-3 text-sm font-semibold text-white">{t.retry}</button>
                   <button onClick={goToManualEntry} className="rounded-xl border border-rose-300 bg-white px-4 py-3 text-sm font-semibold text-rose-700">{t.switchManual}</button>

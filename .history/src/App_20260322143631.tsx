@@ -168,7 +168,6 @@ export default function App() {
         scanErrorScrape: "Chek topildi, lekin server uni hozir o'qiy olmadi.\nIltimos qayta urinib ko'ring yoki havolani botga yuboring.",
         scanErrorParseEmpty: "Chek ochildi, lekin mahsulotlar ro'yxati topilmadi.\nIltimos qayta urinib ko'ring yoki havolani botga yuboring.",
         scanErrorTimeout: "Serverdan javob kutish vaqti tugadi.\nIltimos yana urinib ko'ring.",
-        scanErrorGenerating: "Chek hali tayyorlanmoqda.\n1-2 daqiqadan so'ng qayta urinib ko'ring.",
         scanErrorNetwork: 'Tarmoq xatosi yuz berdi. Internetni tekshirib qayta urinib ko‘ring.',
         scanAgain: 'Yana skanerlash',
         goHome: 'Bosh sahifaga',
@@ -254,10 +253,7 @@ export default function App() {
         scanErrorScrape: 'Чек найден, но сервер пока не смог его прочитать.\nПовторите попытку или отправьте ссылку боту.',
         scanErrorParseEmpty: 'Чек открыт, но список товаров не найден.\nПовторите попытку или отправьте ссылку боту.',
         scanErrorTimeout: 'Истекло время ожидания ответа сервера.\nПопробуйте снова.',
-        scanErrorGenerating: 'Чек ещё формируется.\nПовторите через 1-2 минуты.',
         scanErrorNetwork: 'Сетевая ошибка. Проверьте интернет и повторите попытку.',
-        scanFetchingPage: 'Загрузка страницы чека...',
-        scanBrowserFetchFailed: 'Не удалось загрузить страницу чека.\nПроверьте интернет и попробуйте снова.',
         scanAgain: 'Сканировать снова',
         goHome: 'На главную',
         retry: 'Повторить',
@@ -342,10 +338,7 @@ export default function App() {
         scanErrorScrape: 'Receipt was detected, but the server could not read it right now.\nTry again or send the link to the bot.',
         scanErrorParseEmpty: 'Receipt opened, but no product list was found.\nTry again or send the link to the bot.',
         scanErrorTimeout: 'Server response timed out.\nPlease try again.',
-        scanErrorGenerating: 'Receipt is still being generated.\nPlease try again in 1-2 minutes.',
         scanErrorNetwork: 'Network error. Check internet connection and try again.',
-        scanFetchingPage: 'Loading receipt page...',
-        scanBrowserFetchFailed: 'Could not load the receipt page.\nPlease check your internet and try again.',
         scanAgain: 'Scan again',
         goHome: 'Home',
         retry: 'Retry',
@@ -449,15 +442,9 @@ export default function App() {
 
   const normalizePendingItem = (item: any): PendingModerationItem => ({
     ...item,
-    product_name_raw:
-      String(item.product_name_raw || '').trim() ||
-      (String(item.source || '').startsWith('soliq_qr_unparsed') ? 'RECEIPT_PARSE_REVIEW' : 'UNKNOWN_PRODUCT'),
-    price: Number(item.price) || (String(item.source || '').startsWith('soliq_qr_unparsed') ? 1 : 0),
+    price: Number(item.price) || 0,
     quantity: Number(item.quantity) || 1,
-    unit_price:
-      Number(item.unit_price) ||
-      Number(item.price) ||
-      (String(item.source || '').startsWith('soliq_qr_unparsed') ? 1 : 0),
+    unit_price: Number(item.unit_price) || Number(item.price) || 0,
   });
 
   const normalizeApprovedItem = (item: any): ApprovedModerationItem => ({
@@ -817,44 +804,18 @@ export default function App() {
     const raw = String(input || '').trim();
     if (!raw) return null;
 
-    const buildCheckFromParams = (paramsSource: string) => {
-      const params = new URLSearchParams(paramsSource);
-      const t = params.get('t');
-      if (!t) return null;
-      const r = params.get('r');
-      const c = params.get('c');
-      const s = params.get('s');
-
-      const check = new URL('https://ofd.soliq.uz/check');
-      check.searchParams.set('t', t);
-      if (r) check.searchParams.set('r', r);
-      if (c) check.searchParams.set('c', c);
-      if (s) check.searchParams.set('s', s);
-      return check.toString();
-    };
-
     const directMatch = raw.match(/https?:\/\/[^\s"']+/i);
     if (directMatch && /soliq\.uz/i.test(directMatch[0])) {
-      try {
-        const parsed = new URL(directMatch[0]);
-        return buildCheckFromParams(parsed.search) || parsed.toString();
-      } catch {
-        return directMatch[0];
-      }
+      return directMatch[0];
     }
 
     if (/^ofd\.soliq\.uz\//i.test(raw)) {
-      try {
-        const parsed = new URL(`https://${raw}`);
-        return buildCheckFromParams(parsed.search) || parsed.toString();
-      } catch {
-        return `https://${raw}`;
-      }
+      return `https://${raw}`;
     }
 
-    const fromLooseParams = buildCheckFromParams(raw);
-    if (fromLooseParams) {
-      return fromLooseParams;
+    const tParamMatch = raw.match(/(?:^|[?&])t=([^&\s]+)/i);
+    if (tParamMatch?.[1]) {
+      return `https://ofd.soliq.uz/epi?t=${encodeURIComponent(tParamMatch[1])}`;
     }
 
     return null;
@@ -870,9 +831,6 @@ export default function App() {
     if (errorCode === 'scan_timeout') {
       return t.scanErrorTimeout;
     }
-    if (errorCode === 'receipt_generating') {
-      return t.scanErrorGenerating;
-    }
     if (errorCode === 'scrape_failed') {
       return t.scanErrorScrape;
     }
@@ -882,10 +840,32 @@ export default function App() {
     if (errorCode === 'network_error') {
       return t.scanErrorNetwork;
     }
-    if (errorCode === 'browser_fetch_failed') {
-      return t.scanBrowserFetchFailed;
-    }
     return t.scanErrorBody;
+  };
+
+  const getBestEffortScanCoordinates = async () => {
+    if (reportLocation) {
+      return { latitude: reportLocation.lat, longitude: reportLocation.lng };
+    }
+
+    if (!navigator.geolocation) {
+      return { latitude: null, longitude: null };
+    }
+
+    return new Promise<{ latitude: number | null; longitude: number | null }>((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          resolve({
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+          });
+        },
+        () => {
+          resolve({ latitude: null, longitude: null });
+        },
+        { enableHighAccuracy: false, timeout: 3000, maximumAge: 600000 }
+      );
+    });
   };
 
   const handleSoliqUrl = async (url: string) => {
@@ -900,29 +880,17 @@ export default function App() {
     setScanResult(null);
     setReportEntryStep('loading');
 
-    // Step 1: Browser fetches the receipt HTML (server can't reach soliq.uz)
-    let html: string;
     try {
-      const pageResp = await fetch(scannedUrl);
-      if (!pageResp.ok) throw new Error(`HTTP ${pageResp.status}`);
-      html = await pageResp.text();
-      if (!html || html.length < 200) throw new Error('empty page');
-    } catch {
-      setScanResult({ status: 'error', errorCode: 'browser_fetch_failed' });
-      setReportEntryStep('result');
-      return;
-    }
-
-    // Step 2: Send the HTML to backend for parsing + DB insertion
-    try {
+      const coords = await getBestEffortScanCoordinates();
       const response = await fetch('/api/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          html,
           url: scannedUrl,
           telegram_id: window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || 'anonymous',
           city: selectedCity,
+          latitude: coords.latitude,
+          longitude: coords.longitude,
         }),
       });
 
@@ -935,6 +903,7 @@ export default function App() {
           storeAddress: result.store_address,
           city: result.city,
           itemCount: result.item_count,
+          queuedWithoutParse: Boolean(result.queued_without_parse),
         });
       } else if (result?.error === 'duplicate') {
         setScanResult({ status: 'duplicate', errorCode: 'duplicate' });

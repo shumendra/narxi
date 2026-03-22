@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import dns from 'node:dns';
 import { extractCityFromAddress, getCityLabel, normalizeCityName } from '../../src/constants/cities.js';
-import { insertPendingPrice, fetchProductsIndex } from '../../api/utils/receipt.js';
+import { scrapesoliqReceipt, insertPendingPrice, fetchProductsIndex } from '../../api/utils/receipt.js';
 
 dotenv.config();
 dotenv.config({ path: '.env.local', override: true });
@@ -45,7 +45,6 @@ const BOT_COPY = {
     saveFailed: "Hozircha saqlab bo'lmadi. Keyinroq urinib ko'ring.",
     scrapeFailed: "Chekni o'qishda xatolik yuz berdi. Iltimos, havolani tekshirib qayta yuboring 🔄",
     noItems: "Chekda mahsulotlar topilmadi. Bu chek bo'sh yoki format qo'llab-quvvatlanmaydi.",
-    useMiniApp: "Chekni skanerlash uchun ilovadan foydalaning 👇",
     rateLimited: "Juda ko'p ma'lumot yuborildi. Iltimos keyinroq urinib ko'ring 🕐",
     blocked: "Siz tizimdan bloklangansiz.",
     blockedAppeal: "Siz takliflar yuborishdan vaqtincha bloklangansiz.\n\nAgar bu xato deb hisoblasangiz, /appeal buyrug'i orqali murojaat yuboring.",
@@ -116,7 +115,6 @@ const BOT_COPY = {
     saveFailed: "Сейчас не удалось сохранить. Попробуйте позже.",
     scrapeFailed: "Не удалось прочитать чек. Проверьте ссылку и отправьте снова 🔄",
     noItems: "В чеке нет товаров. Возможно, чек пустой или формат не поддерживается.",
-    useMiniApp: "Для сканирования чека используйте приложение 👇",
     rateLimited: "Слишком много данных. Попробуйте позже 🕐",
     blocked: "Вы заблокированы.",
     blockedAppeal: "Вы временно заблокированы от отправки.\n\nЕсли это ошибка, отправьте /appeal.",
@@ -187,7 +185,6 @@ const BOT_COPY = {
     saveFailed: 'Could not save right now. Please try again later.',
     scrapeFailed: 'Could not read the receipt. Please check the link and resend 🔄',
     noItems: 'No items found on the receipt. It may be empty or unsupported.',
-    useMiniApp: 'To scan a receipt, please use the app 👇',
     rateLimited: 'Too much data sent. Please try again later 🕐',
     blocked: 'You are blocked from the system.',
     blockedAppeal: 'You are temporarily blocked from sending.\n\nIf this is a mistake, send /appeal.',
@@ -828,21 +825,80 @@ async function handleMessage(message) {
   }
 
   if (normalizedText.includes('soliq.uz')) {
-    // Redirect user to the Mini App for receipt scanning
-    // (server cannot reach soliq.uz; the browser must fetch the page)
-    const miniAppUrl = MINI_APP_URL;
-    if (!miniAppUrl) {
-      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].missingMiniApp });
+    const receiptUrl = extractSoliqUrl(message);
+    if (!receiptUrl) {
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].missingReceipt });
       return;
     }
-    await sendTelegramMessage(chatId, {
-      text: BOT_COPY[lang].useMiniApp,
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: BOT_COPY[lang].btnReport, web_app: { url: `${miniAppUrl}?mode=report&lang=${lang}` } }],
-        ],
-      },
-    });
+
+    await sendTelegramMessage(chatId, { text: BOT_COPY[lang].processing });
+
+    if (!supabaseUrl || !supabaseKey) {
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].serverError });
+      return;
+    }
+
+    const { data: alreadyProcessed } = await supabase
+      .from('receipts_log')
+      .select('receipt_url')
+      .eq('receipt_url', receiptUrl)
+      .maybeSingle();
+
+    if (alreadyProcessed) {
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].alreadyAdded });
+      return;
+    }
+
+    const receiptData = await scrapesoliqReceipt(receiptUrl);
+    if (!receiptData) {
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].scrapeFailed });
+      return;
+    }
+
+    if (receiptData && receiptData.items.length > 0) {
+      try {
+        const currentCount = rateLimitCounter[telegramId] || 0;
+        if (currentCount + receiptData.items.length > 10) {
+          await sendTelegramMessage(chatId, { text: BOT_COPY[lang].rateLimited });
+          return;
+        }
+        rateLimitCounter[telegramId] = currentCount + receiptData.items.length;
+
+        const products = await fetchProductsIndex(supabase);
+
+        const inserts = receiptData.items.map(item => insertPendingPrice({
+          supabase,
+          item,
+          receiptData,
+          telegramId,
+          city: receiptData.city,
+          receiptUrl,
+          products,
+        }));
+
+        await Promise.all(inserts);
+
+        await supabase.from('receipts_log').insert({
+          receipt_url: receiptUrl,
+          submitted_by: telegramId,
+          item_count: receiptData.items.length,
+        });
+
+        await sendTelegramMessage(chatId, {
+          text: BOT_COPY[lang].receiptAccepted(
+            receiptData.storeName,
+            receiptData.storeAddress,
+            getCityLabel(receiptData.city, lang),
+            receiptData.items.length,
+          ),
+        });
+      } catch (error) {
+        console.error('Supabase insert error:', error);
+        await sendTelegramMessage(chatId, { text: BOT_COPY[lang].saveFailed });
+      }
+    } else {
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].noItems });
+    }
     return;
   }
 
