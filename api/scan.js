@@ -101,6 +101,41 @@ async function tryQueueWithoutParse({ supabase, telegramId, city, receiptUrl }) 
   }
 }
 
+async function insertPendingPriceWithoutMatch({
+  supabase,
+  item,
+  receiptData,
+  telegramId,
+  city,
+  receiptUrl,
+}) {
+  const selectedCity = normalizeCityName(city || '');
+  const parsedCity = normalizeCityName(receiptData?.city || '');
+  const finalCity = parsedCity || selectedCity || 'Tashkent';
+
+  const payload = {
+    product_name_raw: item?.name || 'Unknown item',
+    product_id: null,
+    match_confidence: 0,
+    status: 'pending',
+    price: Number(item?.totalPrice) || 0,
+    quantity: Number(item?.quantity) || 1,
+    unit_price: Number(item?.unitPrice) || Number(item?.totalPrice) || 0,
+    city: finalCity,
+    place_name: receiptData?.storeName || null,
+    place_address: receiptData?.storeAddress || null,
+    receipt_url: receiptUrl,
+    receipt_date: receiptData?.receiptDate || new Date().toISOString(),
+    source: 'soliq_qr',
+    submitted_by: telegramId,
+  };
+
+  const { error } = await supabase.from('pending_prices').insert(payload);
+  if (error) throw error;
+
+  return { finalCity };
+}
+
 export default async function handler(req, res) {
   withCors(res);
 
@@ -198,10 +233,18 @@ export default async function handler(req, res) {
     let itemCount = fallbackQueued?.item_count || 0;
 
     if (!fallbackQueued) {
-      const products = await fetchProductsIndex(supabase);
-      const insertResults = await Promise.all(
-        receiptData.items.map(item =>
-          insertPendingPrice({
+      let products = [];
+      try {
+        products = await fetchProductsIndex(supabase);
+      } catch (productsError) {
+        console.error('scan products fetch warning:', productsError);
+        products = [];
+      }
+
+      const insertResults = [];
+      for (const item of receiptData.items) {
+        try {
+          const inserted = await insertPendingPrice({
             supabase,
             item,
             receiptData,
@@ -209,9 +252,21 @@ export default async function handler(req, res) {
             city: selectedCity,
             receiptUrl: url,
             products,
-          })
-        )
-      );
+          });
+          insertResults.push(inserted);
+        } catch (insertError) {
+          console.error('scan insert with matching failed, retrying without match:', insertError);
+          const inserted = await insertPendingPriceWithoutMatch({
+            supabase,
+            item,
+            receiptData,
+            telegramId,
+            city: selectedCity,
+            receiptUrl: url,
+          });
+          insertResults.push(inserted);
+        }
+      }
 
       finalCity = insertResults[0]?.finalCity || normalizeCityName(receiptData.city || '') || selectedCity || 'Tashkent';
       itemCount = receiptData.items.length;

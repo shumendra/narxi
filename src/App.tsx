@@ -158,6 +158,8 @@ export default function App() {
         scanLoadingHint: 'Iltimos kuting',
         scanSuccessTitle: '✅ Chek qabul qilindi!',
         scanSuccessQueued: 'Chek qabul qilindi va moderatsiyaga yuborildi. Mahsulotlar administrator tomonidan qo‘lda tekshiriladi.',
+        scanItemsSubmitted: "ta mahsulot yuborildi",
+        scanThanks: 'Rahmat! 🙌',
         scanDuplicateTitle: 'ℹ️ Bu chek avval yuborilgan',
         scanErrorTitle: "❌ Chekni o'qishda xatolik",
         scanErrorBody: 'QR kod soliq.uz ga tegishli emas\nyoki server xatosi yuz berdi.',
@@ -241,6 +243,8 @@ export default function App() {
         scanLoadingHint: 'Пожалуйста, подождите',
         scanSuccessTitle: '✅ Чек принят!',
         scanSuccessQueued: 'Чек принят и отправлен на модерацию. Товары будут проверены администратором вручную.',
+        scanItemsSubmitted: 'товаров отправлено',
+        scanThanks: 'Спасибо! 🙌',
         scanDuplicateTitle: 'ℹ️ Этот чек уже отправляли',
         scanErrorTitle: '❌ Ошибка чтения чека',
         scanErrorBody: 'QR код не относится к soliq.uz\nили произошла ошибка сервера.',
@@ -324,6 +328,8 @@ export default function App() {
         scanLoadingHint: 'Please wait',
         scanSuccessTitle: '✅ Receipt accepted!',
         scanSuccessQueued: 'Receipt accepted and queued for moderation. Products will be verified manually by an admin.',
+        scanItemsSubmitted: 'products submitted',
+        scanThanks: 'Thanks! 🙌',
         scanDuplicateTitle: 'ℹ️ This receipt was already submitted',
         scanErrorTitle: '❌ Receipt read error',
         scanErrorBody: 'QR code is not a soliq.uz link\nor a server error occurred.',
@@ -1235,14 +1241,14 @@ export default function App() {
                   <div>🏪 {scanResult.storeName || '-'}</div>
                   <div>📍 {scanResult.storeAddress || '-'}</div>
                   <div>🌆 {scanResult.city || selectedCityLabel}</div>
-                  <div>📦 {scanResult.itemCount || 0} ta mahsulot yuborildi</div>
+                  <div>📦 {scanResult.itemCount || 0} {t.scanItemsSubmitted}</div>
                 </div>
                 {scanResult.queuedWithoutParse && (
                   <div className="rounded-xl border border-emerald-200 bg-white/70 px-3 py-2 text-sm text-emerald-800">
                     {t.scanSuccessQueued}
                   </div>
                 )}
-                <div className="text-sm text-emerald-800">Rahmat! 🙌</div>
+                <div className="text-sm text-emerald-800">{t.scanThanks}</div>
                 <div className="grid grid-cols-2 gap-2">
                   <button onClick={retryScan} className="rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white">{t.scanAgain}</button>
                   <button onClick={goToReportHome} className="rounded-xl border border-emerald-300 bg-white px-4 py-3 text-sm font-semibold text-emerald-700">{t.goHome}</button>
