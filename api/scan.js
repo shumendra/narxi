@@ -146,6 +146,59 @@ async function fetchReceiptHtml(url, trace) {
   throw lastError || new Error('FETCH_FAILED');
 }
 
+function isOFDUnreachableError(error) {
+  const message = String(error?.message || '').toLowerCase();
+  const code = String(error?.code || '').toLowerCase();
+  return (
+    message.includes('etimedout')
+    || message.includes('econnreset')
+    || message.includes('fetch failed')
+    || message.includes('network')
+    || code === 'etimedout'
+    || code === 'econnreset'
+  );
+}
+
+async function queueUnreachableReceipt({
+  supabaseClient,
+  telegramId,
+  city,
+  receiptUrl,
+}) {
+  const fallbackCity = normalizeCityName(city || '') || 'Tashkent';
+  const now = new Date().toISOString();
+
+  const payload = {
+    product_name_raw: 'RECEIPT_FETCH_UNREACHABLE',
+    product_id: null,
+    match_confidence: 0,
+    status: 'pending',
+    price: 1,
+    quantity: 1,
+    unit_price: 1,
+    city: fallbackCity,
+    place_name: 'Soliq receipt (network unreachable)',
+    place_address: null,
+    receipt_url: receiptUrl,
+    receipt_date: now,
+    source: 'soliq_qr_unreachable',
+    submitted_by: telegramId,
+    latitude: null,
+    longitude: null,
+  };
+
+  const { error } = await supabaseClient.from('pending_prices').insert(payload);
+  if (error) throw error;
+
+  return {
+    store_name: 'Soliq receipt (network unreachable)',
+    store_address: '-',
+    city: fallbackCity,
+    item_count: 1,
+    queued_without_parse: true,
+  };
+}
+
 async function insertPendingPriceWithoutMatch({
   supabaseClient,
   item,
@@ -262,6 +315,26 @@ export default async function handler(req, res) {
       html = await fetchReceiptHtml(url, trace);
     } catch (error) {
       console.error('Fetch error:', error?.message || error);
+      if (isOFDUnreachableError(error)) {
+        pushTrace(trace, 'ofd_unreachable_detected', { message: error?.message || 'network_error' });
+        try {
+          const queued = await queueUnreachableReceipt({
+            supabaseClient: supabase,
+            telegramId,
+            city: selectedCity,
+            receiptUrl: url,
+          });
+          pushTrace(trace, 'queued_unreachable_receipt', { city: queued.city });
+          return respond({
+            ok: true,
+            ...queued,
+            fallback_reason: 'ofd_unreachable',
+            fetch_error_detail: error?.message || 'network_error',
+          });
+        } catch (queueError) {
+          pushTrace(trace, 'queue_unreachable_failed', { message: queueError?.message || String(queueError) });
+        }
+      }
       pushTrace(trace, 'fetch_failed', { message: error?.message || 'fetch_error' });
       return respond({
         ok: false,
