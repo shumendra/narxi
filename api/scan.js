@@ -54,23 +54,34 @@ function buildQueuedSuccessPayload(city, receiptUrl, persisted = true) {
   };
 }
 
-async function insertFallbackPendingReceipt({ supabase, telegramId, city, receiptUrl, latitude = null, longitude = null }) {
+async function insertFallbackPendingReceipt({
+  supabase,
+  telegramId,
+  city,
+  receiptUrl,
+  receiptData = null,
+  latitude = null,
+  longitude = null,
+}) {
   const now = new Date().toISOString();
   const fallbackCity = normalizeCityName(city || '') || 'Tashkent';
+  const fallbackTotal = Math.max(1, Number(receiptData?.totalAmount) || 1);
+  const fallbackStoreName = String(receiptData?.storeName || 'Soliq receipt (parse review)').trim();
+  const fallbackStoreAddress = String(receiptData?.storeAddress || '').trim() || null;
 
   const payload = {
-    product_name_raw: 'CHEK_AUTO_PARSE_PENDING',
+    product_name_raw: 'RECEIPT_PARSE_REVIEW',
     product_id: null,
     match_confidence: 0,
     status: 'pending',
-    price: 1,
+    price: fallbackTotal,
     quantity: 1,
-    unit_price: 1,
+    unit_price: fallbackTotal,
     city: fallbackCity,
-    place_name: 'Soliq receipt (parse pending)',
-    place_address: null,
+    place_name: fallbackStoreName,
+    place_address: fallbackStoreAddress,
     receipt_url: receiptUrl,
-    receipt_date: now,
+    receipt_date: receiptData?.receiptDate || now,
     source: 'soliq_qr_unparsed',
     submitted_by: telegramId,
     latitude,
@@ -82,10 +93,23 @@ async function insertFallbackPendingReceipt({ supabase, telegramId, city, receip
     throw error;
   }
 
-  return buildQueuedSuccessPayload(fallbackCity, receiptUrl, true);
+  return {
+    ...buildQueuedSuccessPayload(fallbackCity, receiptUrl, true),
+    store_name: fallbackStoreName,
+    store_address: fallbackStoreAddress || '-',
+    item_count: 1,
+  };
 }
 
-async function tryQueueWithoutParse({ supabase, telegramId, city, receiptUrl, latitude = null, longitude = null }) {
+async function tryQueueWithoutParse({
+  supabase,
+  telegramId,
+  city,
+  receiptUrl,
+  receiptData = null,
+  latitude = null,
+  longitude = null,
+}) {
   if (!supabase || !receiptUrl) {
     return buildQueuedSuccessPayload(city, receiptUrl, false);
   }
@@ -96,6 +120,7 @@ async function tryQueueWithoutParse({ supabase, telegramId, city, receiptUrl, la
       telegramId,
       city,
       receiptUrl,
+      receiptData,
       latitude,
       longitude,
     });
@@ -227,6 +252,7 @@ export default async function handler(req, res) {
           telegramId,
           city: selectedCity,
           receiptUrl: url,
+          receiptData,
           latitude: receiptLatitude,
           longitude: receiptLongitude,
         });

@@ -148,6 +148,106 @@ function parseNumericValue(input) {
   return Number.isFinite(value) ? value : 0;
 }
 
+function extractReceiptTotal($) {
+  const keys = ['jami to\'lov', 'jami to`lov', 'итого', 'total', 'к оплате', 'summa'];
+  const bodyText = $('body').text().replace(/\s+/g, ' ').trim();
+
+  for (const key of keys) {
+    const pattern = new RegExp(`${key}[^\\d]{0,40}([\\d\\s.,]+)`, 'i');
+    const match = bodyText.match(pattern);
+    if (match?.[1]) {
+      const value = parseNumericValue(match[1]);
+      if (value > 0) return Math.round(value);
+    }
+  }
+
+  return null;
+}
+
+function fallbackExtractItemsFromJsonScripts($) {
+  const scripts = $('script[type*="json"], script')
+    .toArray()
+    .map(script => $(script).html() || '')
+    .filter(Boolean);
+
+  const items = [];
+  const seen = new Set();
+
+  const nameKeys = ['name', 'product', 'product_name', 'good_name', 'товар', 'наименование', 'nomi'];
+  const qtyKeys = ['qty', 'quantity', 'count', 'soni', 'кол'];
+  const priceKeys = ['price', 'sum', 'total', 'amount', 'narx', 'стоим', 'цена'];
+
+  const getValueByKeys = (obj, keys) => {
+    if (!obj || typeof obj !== 'object') return null;
+    const entries = Object.entries(obj);
+    for (const [key, value] of entries) {
+      const normalized = String(key).toLowerCase();
+      if (keys.some(k => normalized.includes(k))) {
+        return value;
+      }
+    }
+    return null;
+  };
+
+  const tryPush = (nameRaw, totalRaw, qtyRaw) => {
+    const name = String(nameRaw || '').replace(/\s+/g, ' ').trim();
+    const totalPrice = parseNumericValue(totalRaw);
+    const quantity = Math.max(1, parseNumericValue(qtyRaw) || 1);
+    if (!name || totalPrice <= 0) return;
+    const unitPrice = quantity > 0 ? Math.round(totalPrice / quantity) : totalPrice;
+    const key = `${name.toLowerCase()}|${quantity}|${totalPrice}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    items.push({ name, quantity, totalPrice, unitPrice });
+  };
+
+  const walk = (node) => {
+    if (Array.isArray(node)) {
+      for (const entry of node) walk(entry);
+      return;
+    }
+
+    if (!node || typeof node !== 'object') return;
+
+    const name = getValueByKeys(node, nameKeys);
+    const total = getValueByKeys(node, priceKeys);
+    const qty = getValueByKeys(node, qtyKeys);
+    if (name && total) {
+      tryPush(name, total, qty);
+    }
+
+    for (const value of Object.values(node)) {
+      walk(value);
+    }
+  };
+
+  for (const scriptText of scripts) {
+    const trimmed = scriptText.trim();
+    if (!trimmed) continue;
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      walk(parsed);
+      continue;
+    } catch {
+      // ignore, try pattern extraction below
+    }
+
+    const objectPattern = /\{[\s\S]{10,600}\}/g;
+    const blocks = trimmed.match(objectPattern) || [];
+    for (const block of blocks) {
+      try {
+        const parsed = JSON.parse(block);
+        walk(parsed);
+      } catch {
+        // ignore malformed blocks
+      }
+    }
+  }
+
+  return items;
+}
+
 function tryParseCoordinatePair(latRaw, lonRaw) {
   const latitude = Number(String(latRaw || '').replace(',', '.'));
   const longitude = Number(String(lonRaw || '').replace(',', '.'));
@@ -387,6 +487,7 @@ function parseReceiptFromHtml(html) {
       .trim() || $('.address, .company-address').first().text().trim() || 'Toshkent sh.';
 
   const detectedCity = extractCityFromAddress(storeAddress);
+  const totalAmount = extractReceiptTotal($);
   const receiptDateRaw = extractReceiptDate($);
   const parsedDate = receiptDateRaw ? new Date(receiptDateRaw) : null;
   const receiptDate = parsedDate && !Number.isNaN(parsedDate.getTime())
@@ -430,6 +531,10 @@ function parseReceiptFromHtml(html) {
   }
 
   if (items.length === 0) {
+    items.push(...fallbackExtractItemsFromJsonScripts($));
+  }
+
+  if (items.length === 0) {
     items.push(...fallbackExtractItemsFromProductBlocks($));
   }
 
@@ -444,6 +549,7 @@ function parseReceiptFromHtml(html) {
     detectedCity,
     latitude: coordinates?.latitude ?? null,
     longitude: coordinates?.longitude ?? null,
+    totalAmount,
     receiptDate,
     items,
   };
@@ -452,11 +558,7 @@ function parseReceiptFromHtml(html) {
 async function scrapeCandidateUrl(candidateUrl) {
   try {
     const { data } = await fetchWithRetry(candidateUrl);
-    const parsed = parseReceiptFromHtml(data);
-    if (parsed.items.length === 0) {
-      return null;
-    }
-    return parsed;
+    return parseReceiptFromHtml(data);
   } catch (error) {
     return null;
   }
@@ -474,7 +576,10 @@ export async function scrapesoliqReceipt(url) {
 
   const results = await Promise.all(candidateUrls.map(candidateUrl => scrapeCandidateUrl(candidateUrl)));
   const success = results.find(result => result && Array.isArray(result.items) && result.items.length > 0);
-  return success || null;
+  if (success) return success;
+
+  const metadataOnly = results.find(result => result && (result.storeName || result.storeAddress || result.totalAmount));
+  return metadataOnly || null;
 }
 
 export async function fetchProductsIndex(supabase) {
