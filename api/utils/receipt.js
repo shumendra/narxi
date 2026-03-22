@@ -87,16 +87,29 @@ function extractReceiptDate($) {
 }
 
 function findItemsTable($) {
+  const nameKeys = ['nomi', 'товар', 'наимен', 'name', 'product'];
+  const qtyKeys = ['soni', 'кол', 'qty', 'quantity', 'miqdor'];
+  const priceKeys = ['narxi', 'сумма', 'цена', 'price', 'стоим'];
+
+  const hasAny = (value, keys) => keys.some(key => value.includes(key));
+  const normalizeHeader = (value) => String(value || '').trim().toLowerCase();
+
+  const resolveIndexes = (headers) => {
+    const normalized = headers.map(normalizeHeader);
+    const nameIndex = normalized.findIndex(h => hasAny(h, nameKeys));
+    const qtyIndex = normalized.findIndex(h => hasAny(h, qtyKeys));
+    const priceIndex = normalized.findIndex(h => hasAny(h, priceKeys));
+    if (nameIndex === -1 || qtyIndex === -1 || priceIndex === -1) return null;
+    return { nameIndex, qtyIndex, priceIndex };
+  };
+
   const soliqTable = $('table.products-tables');
   if (soliqTable.length > 0) {
     const headerCells = soliqTable.find('thead tr').first().find('th, td');
-    const headers = headerCells.toArray().map(cell => $(cell).text().trim().toLowerCase());
+    const headers = headerCells.toArray().map(cell => $(cell).text().trim());
+    const indexes = resolveIndexes(headers);
 
-    const hasName = headers.some(h => h.includes('nomi'));
-    const hasQty = headers.some(h => h.includes('soni'));
-    const hasPrice = headers.some(h => h.includes('narxi'));
-
-    if (hasName && hasQty && hasPrice) {
+    if (indexes) {
       return { table: soliqTable, headers };
     }
   }
@@ -104,18 +117,63 @@ function findItemsTable($) {
   const tables = $('table');
   for (const table of tables.toArray()) {
     const headerCells = $(table).find('tr').first().find('th, td');
-    const headers = headerCells.toArray().map(cell => $(cell).text().trim().toLowerCase());
+    const headers = headerCells.toArray().map(cell => $(cell).text().trim());
+    const indexes = resolveIndexes(headers);
 
-    const hasName = headers.some(h => h.includes('nomi'));
-    const hasQty = headers.some(h => h.includes('soni'));
-    const hasPrice = headers.some(h => h.includes('narxi'));
-
-    if (hasName && hasQty && hasPrice) {
+    if (indexes) {
       return { table, headers };
     }
   }
 
   return null;
+}
+
+function parseNumericValue(input) {
+  const raw = String(input || '').trim();
+  if (!raw) return 0;
+
+  let cleaned = raw.replace(/[^\d.,-]/g, '');
+  if (!cleaned) return 0;
+
+  const hasComma = cleaned.includes(',');
+  const hasDot = cleaned.includes('.');
+
+  if (hasComma && hasDot) {
+    cleaned = cleaned.replace(/,/g, '');
+  } else if (hasComma) {
+    cleaned = cleaned.replace(/,/g, '.');
+  }
+
+  const value = Number.parseFloat(cleaned);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function fallbackExtractItems($) {
+  const items = [];
+  const rows = $('table tr').slice(1);
+
+  rows.each((_, row) => {
+    const cols = $(row).find('td');
+    if (cols.length < 2) return;
+
+    const values = cols.toArray().map(cell => $(cell).text().replace(/\s+/g, ' ').trim());
+    const nameCandidate = values.find(value => /[a-zA-Zа-яА-ЯўқғҳҚҒҲЁё]/.test(value)) || '';
+    const numericValues = values
+      .map(value => parseNumericValue(value))
+      .filter(value => Number.isFinite(value) && value > 0);
+
+    if (!nameCandidate || numericValues.length === 0) return;
+
+    const totalPrice = numericValues[numericValues.length - 1] || 0;
+    const quantity = numericValues.length > 1 ? Math.max(1, numericValues[0]) : 1;
+    const unitPrice = quantity > 0 ? Math.round(totalPrice / quantity) : totalPrice;
+
+    if (totalPrice > 0) {
+      items.push({ name: nameCandidate, quantity, totalPrice, unitPrice });
+    }
+  });
+
+  return items;
 }
 
 async function fetchWithRetry(url, attempts = 1) {
@@ -170,9 +228,10 @@ function parseReceiptFromHtml(html) {
   const itemsTable = findItemsTable($);
   if (itemsTable) {
     const { table, headers } = itemsTable;
-    const nameIndex = headers.findIndex(h => h.includes('nomi'));
-    const qtyIndex = headers.findIndex(h => h.includes('soni'));
-    const priceIndex = headers.findIndex(h => h.includes('narxi'));
+    const normalizedHeaders = headers.map(h => String(h || '').toLowerCase());
+    const nameIndex = normalizedHeaders.findIndex(h => ['nomi', 'товар', 'наимен', 'name', 'product'].some(key => h.includes(key)));
+    const qtyIndex = normalizedHeaders.findIndex(h => ['soni', 'кол', 'qty', 'quantity', 'miqdor'].some(key => h.includes(key)));
+    const priceIndex = normalizedHeaders.findIndex(h => ['narxi', 'сумма', 'цена', 'price', 'стоим'].some(key => h.includes(key)));
 
     const rows = $(table).find('tbody tr.products-row');
     const targetRows = rows.length > 0 ? rows : $(table).find('tr').slice(1);
@@ -182,17 +241,18 @@ function parseReceiptFromHtml(html) {
       if (cols.length === 0) return;
 
       const name = $(cols[nameIndex]).text().trim();
-      const quantityStr = $(cols[qtyIndex]).text().trim().replace(',', '.');
-      const priceStr = $(cols[priceIndex]).text().trim().replace(/\s/g, '').replace(',', '.');
-
-      const quantity = Number.parseFloat(quantityStr) || 1;
-      const totalPrice = Number.parseFloat(priceStr) || 0;
+      const quantity = parseNumericValue($(cols[qtyIndex]).text().trim()) || 1;
+      const totalPrice = parseNumericValue($(cols[priceIndex]).text().trim()) || 0;
       const unitPrice = quantity > 0 ? Math.round(totalPrice / quantity) : totalPrice;
 
       if (name && totalPrice > 0) {
         items.push({ name, quantity, totalPrice, unitPrice });
       }
     });
+  }
+
+  if (items.length === 0) {
+    items.push(...fallbackExtractItems($));
   }
 
   return {
