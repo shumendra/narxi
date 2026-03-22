@@ -7,18 +7,46 @@ export function extractSoliqUrlFromText(input) {
   const raw = String(input || '').trim();
   if (!raw) return null;
 
+  const buildCheckFromParams = (paramsSource) => {
+    const search = new URLSearchParams(paramsSource);
+    const t = search.get('t');
+    if (!t) return null;
+    const r = search.get('r');
+    const c = search.get('c');
+    const s = search.get('s');
+
+    const check = new URL('https://ofd.soliq.uz/check');
+    check.searchParams.set('t', t);
+    if (r) check.searchParams.set('r', r);
+    if (c) check.searchParams.set('c', c);
+    if (s) check.searchParams.set('s', s);
+    return check.toString();
+  };
+
   const directMatch = raw.match(/https?:\/\/[^\s"']+/i);
   if (directMatch && /soliq\.uz/i.test(directMatch[0])) {
-    return directMatch[0];
+    try {
+      const parsed = new URL(directMatch[0]);
+      const fromDirectParams = buildCheckFromParams(parsed.search);
+      return fromDirectParams || parsed.toString();
+    } catch {
+      return directMatch[0];
+    }
   }
 
   if (/^ofd\.soliq\.uz\//i.test(raw)) {
-    return `https://${raw}`;
+    try {
+      const parsed = new URL(`https://${raw}`);
+      const fromRawParams = buildCheckFromParams(parsed.search);
+      return fromRawParams || parsed.toString();
+    } catch {
+      return `https://${raw}`;
+    }
   }
 
-  const tParamMatch = raw.match(/(?:^|[?&])t=([^&\s]+)/i);
-  if (tParamMatch?.[1]) {
-    return `https://ofd.soliq.uz/epi?t=${encodeURIComponent(tParamMatch[1])}`;
+  const fromLooseParams = buildCheckFromParams(raw);
+  if (fromLooseParams) {
+    return fromLooseParams;
   }
 
   return null;
@@ -48,8 +76,24 @@ function buildReceiptUrlCandidates(rawUrl) {
     const parsed = new URL(normalized);
     const ticket = parsed.searchParams.get('t');
     if (ticket) {
-      candidates.push(`https://ofd.soliq.uz/epi?t=${encodeURIComponent(ticket)}`);
-      candidates.push(`https://ofd.soliq.uz/check?t=${encodeURIComponent(ticket)}`);
+      const r = parsed.searchParams.get('r');
+      const c = parsed.searchParams.get('c');
+      const s = parsed.searchParams.get('s');
+
+      const check = new URL('https://ofd.soliq.uz/check');
+      check.searchParams.set('t', ticket);
+      if (r) check.searchParams.set('r', r);
+      if (c) check.searchParams.set('c', c);
+      if (s) check.searchParams.set('s', s);
+
+      const epi = new URL('https://ofd.soliq.uz/epi');
+      epi.searchParams.set('t', ticket);
+      if (r) epi.searchParams.set('r', r);
+      if (c) epi.searchParams.set('c', c);
+      if (s) epi.searchParams.set('s', s);
+
+      candidates.push(check.toString());
+      candidates.push(epi.toString());
     }
   } catch {
     return candidates;
