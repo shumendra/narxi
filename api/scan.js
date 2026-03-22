@@ -41,6 +41,41 @@ function ok(res, payload) {
   return res.status(200).json(payload);
 }
 
+async function insertFallbackPendingReceipt({ supabase, telegramId, city, receiptUrl }) {
+  const now = new Date().toISOString();
+  const fallbackCity = normalizeCityName(city || '') || 'Tashkent';
+
+  const payload = {
+    product_name_raw: 'CHEK_AUTO_PARSE_PENDING',
+    product_id: null,
+    match_confidence: 0,
+    status: 'pending',
+    price: 1,
+    quantity: 1,
+    unit_price: 1,
+    city: fallbackCity,
+    place_name: 'Soliq receipt (parse pending)',
+    place_address: null,
+    receipt_url: receiptUrl,
+    receipt_date: now,
+    source: 'soliq_qr_unparsed',
+    submitted_by: telegramId,
+  };
+
+  const { error } = await supabase.from('pending_prices').insert(payload);
+  if (error) {
+    throw error;
+  }
+
+  return {
+    store_name: 'Soliq receipt (parse pending)',
+    store_address: '-',
+    city: fallbackCity,
+    item_count: 1,
+    queued_without_parse: true,
+  };
+}
+
 export default async function handler(req, res) {
   withCors(res);
 
@@ -107,34 +142,51 @@ export default async function handler(req, res) {
       throw error;
     }
 
+    let fallbackQueued = null;
     if (!receiptData || !receiptData.items || receiptData.items.length === 0) {
-      return ok(res, { ok: false, error: 'parse_empty' });
-    }
-
-    const products = await fetchProductsIndex(supabase);
-    const insertResults = await Promise.all(
-      receiptData.items.map(item =>
-        insertPendingPrice({
+      try {
+        fallbackQueued = await insertFallbackPendingReceipt({
           supabase,
-          item,
-          receiptData,
           telegramId,
           city: selectedCity,
           receiptUrl: url,
-          products,
-        })
-      )
-    );
+        });
+      } catch (fallbackError) {
+        console.error('scan fallback insert error:', fallbackError);
+        return ok(res, { ok: false, error: 'parse_empty' });
+      }
+    }
 
-    const finalCity = insertResults[0]?.finalCity || normalizeCityName(receiptData.city || '') || selectedCity || 'Tashkent';
+    let finalCity = selectedCity || 'Tashkent';
+    let itemCount = fallbackQueued?.item_count || 0;
 
-    if (selectedCity && normalizeCityName(selectedCity) !== normalizeCityName(finalCity)) {
-      console.info('scan city mismatch', {
-        selected_city: selectedCity,
-        scraped_city: finalCity,
-        receipt_url: url,
-        telegram_id: telegramId,
-      });
+    if (!fallbackQueued) {
+      const products = await fetchProductsIndex(supabase);
+      const insertResults = await Promise.all(
+        receiptData.items.map(item =>
+          insertPendingPrice({
+            supabase,
+            item,
+            receiptData,
+            telegramId,
+            city: selectedCity,
+            receiptUrl: url,
+            products,
+          })
+        )
+      );
+
+      finalCity = insertResults[0]?.finalCity || normalizeCityName(receiptData.city || '') || selectedCity || 'Tashkent';
+      itemCount = receiptData.items.length;
+
+      if (selectedCity && normalizeCityName(selectedCity) !== normalizeCityName(finalCity)) {
+        console.info('scan city mismatch', {
+          selected_city: selectedCity,
+          scraped_city: finalCity,
+          receipt_url: url,
+          telegram_id: telegramId,
+        });
+      }
     }
 
     const { error: logError } = await supabase.from('receipts_log').insert({
@@ -150,12 +202,13 @@ export default async function handler(req, res) {
 
     return ok(res, {
       ok: true,
-      store_name: receiptData.storeName,
-      store_address: receiptData.storeAddress,
+      store_name: fallbackQueued?.store_name || receiptData.storeName,
+      store_address: fallbackQueued?.store_address || receiptData.storeAddress,
       city: finalCity,
       selected_city: selectedCity,
-      scraped_city: normalizeCityName(receiptData.city || '') || finalCity,
-      item_count: receiptData.items.length,
+      scraped_city: fallbackQueued ? null : (normalizeCityName(receiptData.city || '') || finalCity),
+      item_count: itemCount,
+      queued_without_parse: Boolean(fallbackQueued),
     });
   } catch (error) {
     console.error('scan handler error:', error);

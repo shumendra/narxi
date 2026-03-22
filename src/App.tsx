@@ -157,6 +157,7 @@ export default function App() {
         scanLoadingTitle: "⏳ Chek o'qilmoqda...",
         scanLoadingHint: 'Iltimos kuting',
         scanSuccessTitle: '✅ Chek qabul qilindi!',
+        scanSuccessQueued: 'Chek qabul qilindi va moderatsiyaga yuborildi. Mahsulotlar administrator tomonidan qo‘lda tekshiriladi.',
         scanDuplicateTitle: 'ℹ️ Bu chek avval yuborilgan',
         scanErrorTitle: "❌ Chekni o'qishda xatolik",
         scanErrorBody: 'QR kod soliq.uz ga tegishli emas\nyoki server xatosi yuz berdi.',
@@ -239,6 +240,7 @@ export default function App() {
         scanLoadingTitle: '⏳ Чтение чека...',
         scanLoadingHint: 'Пожалуйста, подождите',
         scanSuccessTitle: '✅ Чек принят!',
+        scanSuccessQueued: 'Чек принят и отправлен на модерацию. Товары будут проверены администратором вручную.',
         scanDuplicateTitle: 'ℹ️ Этот чек уже отправляли',
         scanErrorTitle: '❌ Ошибка чтения чека',
         scanErrorBody: 'QR код не относится к soliq.uz\nили произошла ошибка сервера.',
@@ -321,6 +323,7 @@ export default function App() {
         scanLoadingTitle: '⏳ Reading receipt...',
         scanLoadingHint: 'Please wait',
         scanSuccessTitle: '✅ Receipt accepted!',
+        scanSuccessQueued: 'Receipt accepted and queued for moderation. Products will be verified manually by an admin.',
         scanDuplicateTitle: 'ℹ️ This receipt was already submitted',
         scanErrorTitle: '❌ Receipt read error',
         scanErrorBody: 'QR code is not a soliq.uz link\nor a server error occurred.',
@@ -389,6 +392,7 @@ export default function App() {
     storeAddress?: string;
     city?: string;
     itemCount?: number;
+    queuedWithoutParse?: boolean;
     errorCode?: string;
   } | null>(null);
 
@@ -865,6 +869,7 @@ export default function App() {
           storeAddress: result.store_address,
           city: result.city,
           itemCount: result.item_count,
+          queuedWithoutParse: Boolean(result.queued_without_parse),
         });
       } else if (result?.error === 'duplicate') {
         setScanResult({ status: 'duplicate', errorCode: 'duplicate' });
@@ -1232,6 +1237,11 @@ export default function App() {
                   <div>🌆 {scanResult.city || selectedCityLabel}</div>
                   <div>📦 {scanResult.itemCount || 0} ta mahsulot yuborildi</div>
                 </div>
+                {scanResult.queuedWithoutParse && (
+                  <div className="rounded-xl border border-emerald-200 bg-white/70 px-3 py-2 text-sm text-emerald-800">
+                    {t.scanSuccessQueued}
+                  </div>
+                )}
                 <div className="text-sm text-emerald-800">Rahmat! 🙌</div>
                 <div className="grid grid-cols-2 gap-2">
                   <button onClick={retryScan} className="rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white">{t.scanAgain}</button>
