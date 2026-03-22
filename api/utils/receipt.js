@@ -209,7 +209,47 @@ function fallbackExtractItemsFromScripts($) {
     while ((match = arrayLikePattern.exec(scriptText)) !== null) {
       pushItem(match[1], match[3], match[2]);
     }
+
+    const jsObjectPattern = /(?:name|product_name|good_name|товар|наименование)\s*:\s*['"]([^'"\\n]{2,})['"][\s\S]{0,220}?(?:price|sum|total|amount|narx|стоим|цена)\s*:\s*['"]?([0-9][0-9\s.,]*)['"]?[\s\S]{0,140}?(?:(?:qty|quantity|count|soni|кол)\s*:\s*['"]?([0-9][0-9\s.,]*)['"]?)?/gi;
+    while ((match = jsObjectPattern.exec(scriptText)) !== null) {
+      pushItem(match[1], match[2], match[3]);
+    }
   }
+
+  return items;
+}
+
+function fallbackExtractItemsFromProductBlocks($) {
+  const items = [];
+  const pushIfValid = (name, totalPrice, quantity) => {
+    const cleanName = String(name || '').replace(/\s+/g, ' ').trim();
+    const total = parseNumericValue(totalPrice);
+    const qty = Math.max(1, parseNumericValue(quantity) || 1);
+    if (!cleanName || total <= 0) return;
+    const unitPrice = qty > 0 ? Math.round(total / qty) : total;
+    const fingerprint = `${cleanName.toLowerCase()}|${total}|${qty}`;
+    if (items.some(item => `${item.name.toLowerCase()}|${item.totalPrice}|${item.quantity}` === fingerprint)) {
+      return;
+    }
+    items.push({ name: cleanName, quantity: qty, totalPrice: total, unitPrice });
+  };
+
+  const blockCandidates = $('[class*="product"], [class*="goods"], [class*="item"], [class*="товар"]');
+  blockCandidates.each((_, block) => {
+    const text = $(block).text().replace(/\s+/g, ' ').trim();
+    if (!text) return;
+
+    const name =
+      $(block).find('[class*="name"], [class*="title"]').first().text().trim() ||
+      text.split(/\s{2,}|\|/)[0] ||
+      '';
+
+    const numericParts = text.match(/[0-9][0-9\s.,]*/g) || [];
+    if (numericParts.length === 0) return;
+    const totalPrice = numericParts[numericParts.length - 1];
+    const quantity = numericParts.length > 1 ? numericParts[0] : '1';
+    pushIfValid(name, totalPrice, quantity);
+  });
 
   return items;
 }
@@ -295,6 +335,10 @@ function parseReceiptFromHtml(html) {
 
   if (items.length === 0) {
     items.push(...fallbackExtractItemsFromScripts($));
+  }
+
+  if (items.length === 0) {
+    items.push(...fallbackExtractItemsFromProductBlocks($));
   }
 
   return {
