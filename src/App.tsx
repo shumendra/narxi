@@ -163,6 +163,7 @@ export default function App() {
         scanErrorNotSoliq: 'QR kod soliq.uz havolasiga mos kelmadi.',
         scanErrorBlocked: 'Siz vaqtincha bloklangansiz.',
         scanErrorScrape: "Chek topildi, lekin server uni hozir o'qiy olmadi.\nIltimos qayta urinib ko'ring yoki havolani botga yuboring.",
+        scanErrorParseEmpty: "Chek ochildi, lekin mahsulotlar ro'yxati topilmadi.\nIltimos qayta urinib ko'ring yoki havolani botga yuboring.",
         scanErrorTimeout: "Serverdan javob kutish vaqti tugadi.\nIltimos yana urinib ko'ring.",
         scanErrorNetwork: 'Tarmoq xatosi yuz berdi. Internetni tekshirib qayta urinib ko‘ring.',
         scanAgain: 'Yana skanerlash',
@@ -244,6 +245,7 @@ export default function App() {
         scanErrorNotSoliq: 'QR код не содержит корректную ссылку soliq.uz.',
         scanErrorBlocked: 'Вы временно заблокированы.',
         scanErrorScrape: 'Чек найден, но сервер пока не смог его прочитать.\nПовторите попытку или отправьте ссылку боту.',
+        scanErrorParseEmpty: 'Чек открыт, но список товаров не найден.\nПовторите попытку или отправьте ссылку боту.',
         scanErrorTimeout: 'Истекло время ожидания ответа сервера.\nПопробуйте снова.',
         scanErrorNetwork: 'Сетевая ошибка. Проверьте интернет и повторите попытку.',
         scanAgain: 'Сканировать снова',
@@ -325,6 +327,7 @@ export default function App() {
         scanErrorNotSoliq: 'QR code does not contain a valid soliq.uz URL.',
         scanErrorBlocked: 'You are temporarily blocked.',
         scanErrorScrape: 'Receipt was detected, but the server could not read it right now.\nTry again or send the link to the bot.',
+        scanErrorParseEmpty: 'Receipt opened, but no product list was found.\nTry again or send the link to the bot.',
         scanErrorTimeout: 'Server response timed out.\nPlease try again.',
         scanErrorNetwork: 'Network error. Check internet connection and try again.',
         scanAgain: 'Scan again',
@@ -820,6 +823,9 @@ export default function App() {
     }
     if (errorCode === 'scrape_failed') {
       return t.scanErrorScrape;
+    }
+    if (errorCode === 'parse_empty') {
+      return t.scanErrorParseEmpty;
     }
     if (errorCode === 'network_error') {
       return t.scanErrorNetwork;

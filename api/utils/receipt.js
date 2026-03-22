@@ -176,6 +176,44 @@ function fallbackExtractItems($) {
   return items;
 }
 
+function fallbackExtractItemsFromScripts($) {
+  const items = [];
+  const scripts = $('script')
+    .toArray()
+    .map(script => $(script).html() || '')
+    .filter(Boolean);
+
+  const pushItem = (name, priceRaw, qtyRaw) => {
+    const productName = String(name || '').replace(/\s+/g, ' ').trim();
+    const totalPrice = parseNumericValue(priceRaw);
+    const quantity = Math.max(1, parseNumericValue(qtyRaw) || 1);
+    const unitPrice = quantity > 0 ? Math.round(totalPrice / quantity) : totalPrice;
+    if (!productName || totalPrice <= 0) return;
+
+    const key = `${productName.toLowerCase()}|${totalPrice}|${quantity}`;
+    if (items.some(item => `${item.name.toLowerCase()}|${item.totalPrice}|${item.quantity}` === key)) {
+      return;
+    }
+
+    items.push({ name: productName, quantity, totalPrice, unitPrice });
+  };
+
+  for (const scriptText of scripts) {
+    const jsonLikePattern = /"(?:name|product_name|good_name|товар|наименование)"\s*:\s*"([^"]{2,})"[\s\S]{0,220}?"(?:price|sum|total|amount|narx|стоим|цена)"\s*:\s*"?([0-9][0-9\s.,]*)"?[\s\S]{0,140}?(?:"(?:qty|quantity|count|soni|кол)"\s*:\s*"?([0-9][0-9\s.,]*)"?)?/gi;
+    let match = null;
+    while ((match = jsonLikePattern.exec(scriptText)) !== null) {
+      pushItem(match[1], match[2], match[3]);
+    }
+
+    const arrayLikePattern = /\[\s*"([^"]{2,})"\s*,\s*"?([0-9][0-9\s.,]*)"?\s*,\s*"?([0-9][0-9\s.,]*)"?\s*\]/g;
+    while ((match = arrayLikePattern.exec(scriptText)) !== null) {
+      pushItem(match[1], match[3], match[2]);
+    }
+  }
+
+  return items;
+}
+
 async function fetchWithRetry(url, attempts = 1) {
   let lastError = null;
   for (let i = 0; i < attempts; i += 1) {
@@ -253,6 +291,10 @@ function parseReceiptFromHtml(html) {
 
   if (items.length === 0) {
     items.push(...fallbackExtractItems($));
+  }
+
+  if (items.length === 0) {
+    items.push(...fallbackExtractItemsFromScripts($));
   }
 
   return {

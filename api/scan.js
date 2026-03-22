@@ -108,7 +108,7 @@ export default async function handler(req, res) {
     }
 
     if (!receiptData || !receiptData.items || receiptData.items.length === 0) {
-      return ok(res, { ok: false, error: 'scrape_failed' });
+      return ok(res, { ok: false, error: 'parse_empty' });
     }
 
     const products = await fetchProductsIndex(supabase);
