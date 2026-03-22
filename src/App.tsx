@@ -97,8 +97,15 @@ function ReportMapPicker({ onPick }: { onPick: (lat: number, lng: number) => voi
   return null;
 }
 
+type ScanLogEntry = {
+  id: string;
+  at: string;
+  event: string;
+  payload?: unknown;
+};
+
 export default function App() {
-  const [mode, setMode] = useState<'find' | 'report' | 'moderate'>('find');
+  const [mode, setMode] = useState<'find' | 'report' | 'moderate' | 'logs'>('find');
   const [lang, setLang] = useState<'uz' | 'ru' | 'en'>('uz');
   const [searchQuery, setSearchQuery] = useState('');
   const [products, setProducts] = useState<Product[]>([]);
@@ -127,6 +134,7 @@ export default function App() {
         modeFind: 'Topish',
         modeReport: "Qo'shish",
         modeModerate: 'Tasdiqlash',
+        modeLogs: 'Loglar',
         cityTitle: 'Shahar',
         nearbyToggle: 'Yaqin joylar',
         nearbyHint: 'Avval yaqin do‘konlar ko‘rsatiladi',
@@ -209,12 +217,18 @@ export default function App() {
         approvedEmpty: 'Tasdiqlangan narxlar yo‘q',
         moderationDeleteApproved: 'Tasdiqlanganni o‘chirish',
         moderationDeleted: 'O‘chirildi ✅',
+        logsTitle: 'Skan loglari',
+        logsEmpty: 'Hozircha skan loglari yo‘q',
+        logsClear: 'Loglarni tozalash',
+        logsCopy: 'JSON nusxa olish',
+        logsOpen: 'Skan loglarini ko‘rish',
       },
       ru: {
         appName: 'Narxi',
         modeFind: 'Поиск',
         modeReport: 'Добавить',
         modeModerate: 'Модерация',
+        modeLogs: 'Логи',
         cityTitle: 'Город',
         nearbyToggle: 'Рядом',
         nearbyHint: 'Сначала показывать ближайшие магазины',
@@ -297,12 +311,18 @@ export default function App() {
         approvedEmpty: 'Нет одобренных цен',
         moderationDeleteApproved: 'Удалить одобренное',
         moderationDeleted: 'Удалено ✅',
+        logsTitle: 'Логи сканирования',
+        logsEmpty: 'Логи сканирования пока пусты',
+        logsClear: 'Очистить логи',
+        logsCopy: 'Скопировать JSON',
+        logsOpen: 'Открыть логи сканирования',
       },
       en: {
         appName: 'Narxi',
         modeFind: 'Find',
         modeReport: 'Add',
         modeModerate: 'Moderate',
+        modeLogs: 'Logs',
         cityTitle: 'City',
         nearbyToggle: 'Nearby',
         nearbyHint: 'Show the closest stores first',
@@ -385,6 +405,11 @@ export default function App() {
         approvedEmpty: 'No approved prices',
         moderationDeleteApproved: 'Delete approved',
         moderationDeleted: 'Deleted ✅',
+        logsTitle: 'Scan logs',
+        logsEmpty: 'No scan logs yet',
+        logsClear: 'Clear logs',
+        logsCopy: 'Copy JSON',
+        logsOpen: 'Open scan logs',
       },
     }),
     []
@@ -411,10 +436,11 @@ export default function App() {
     errorCode?: string;
     debugDetail?: string;
   } | null>(null);
+  const [scanLogs, setScanLogs] = useState<ScanLogEntry[]>([]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const initialMode = params.get('mode') as 'find' | 'report' | 'moderate';
+    const initialMode = params.get('mode') as 'find' | 'report' | 'moderate' | 'logs';
     const initialLang = params.get('lang') as 'uz' | 'ru' | 'en';
     const initialCity = params.get('city');
     if (initialMode && (initialMode !== 'moderate' || isAdminUser)) setMode(initialMode);
@@ -898,6 +924,27 @@ export default function App() {
     return 'unknown';
   };
 
+  const appendScanLog = (event: string, payload?: unknown) => {
+    const entry: ScanLogEntry = {
+      id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+      at: new Date().toISOString(),
+      event,
+      payload,
+    };
+    setScanLogs(previous => [entry, ...previous].slice(0, 250));
+  };
+
+  const clearScanLogs = () => setScanLogs([]);
+
+  const copyScanLogs = async () => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(scanLogs, null, 2));
+      window.Telegram?.WebApp?.showAlert('Logs copied');
+    } catch {
+      window.Telegram?.WebApp?.showAlert('Unable to copy logs');
+    }
+  };
+
   const fetchReceiptHtml = async (scannedUrl: string) => {
     const bareUrl = scannedUrl.replace(/^https?:\/\//i, '');
     const attempts = [
@@ -938,6 +985,7 @@ export default function App() {
 
     const failures: string[] = [];
     for (const attempt of attempts) {
+      appendScanLog('receipt_fetch_attempt', { label: attempt.label, url: attempt.url });
       try {
         const pageResp = await fetch(attempt.url, {
           headers: { Accept: 'text/html,application/xhtml+xml' },
@@ -958,9 +1006,16 @@ export default function App() {
         if (!html || html.length < 200 || !looksLikeReceipt) {
           throw new Error('invalid_receipt_html');
         }
+        appendScanLog('receipt_fetch_success', {
+          label: attempt.label,
+          status: pageResp.status,
+          htmlLength: html.length,
+        });
         return html;
       } catch (error) {
-        failures.push(`${attempt.label}:${formatErrorDetail(error)}`);
+        const detail = formatErrorDetail(error);
+        failures.push(`${attempt.label}:${detail}`);
+        appendScanLog('receipt_fetch_failed', { label: attempt.label, error: detail });
       }
     }
 
@@ -968,12 +1023,15 @@ export default function App() {
   };
 
   const handleSoliqUrl = async (url: string) => {
+    appendScanLog('scan_started', { rawInput: url });
     const scannedUrl = extractSoliqUrlFromText(url);
     if (!scannedUrl) {
+      appendScanLog('scan_invalid_url', { rawInput: url });
       setScanResult({ status: 'error', errorCode: 'not_soliq_url' });
       setReportEntryStep('result');
       return;
     }
+    appendScanLog('scan_url_normalized', { scannedUrl });
 
     setShowUrlInput(false);
     setScanResult(null);
@@ -982,7 +1040,9 @@ export default function App() {
     let html: string;
     try {
       html = await fetchReceiptHtml(scannedUrl);
+      appendScanLog('scan_html_ready', { htmlLength: html.length });
     } catch (error) {
+      appendScanLog('scan_html_failed', { error: formatErrorDetail(error) });
       setScanResult({
         status: 'error',
         errorCode: 'browser_fetch_failed',
@@ -993,6 +1053,13 @@ export default function App() {
     }
 
     try {
+      appendScanLog('scan_api_request', {
+        endpoint: '/api/scan',
+        telegram_id: window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || 'anonymous',
+        city: selectedCity,
+        url: scannedUrl,
+        htmlLength: html.length,
+      });
       const response = await fetch('/api/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1005,6 +1072,13 @@ export default function App() {
       });
 
       const result = await response.json();
+      appendScanLog('scan_api_response', {
+        httpStatus: response.status,
+        ok: Boolean(result?.ok),
+        error: result?.error || null,
+        item_count: result?.item_count ?? null,
+        result,
+      });
 
       if (result?.ok) {
         setScanResult({
@@ -1020,6 +1094,7 @@ export default function App() {
         setScanResult({ status: 'error', errorCode: result?.error || 'scan_failed' });
       }
     } catch (error) {
+      appendScanLog('scan_api_failed', { error: formatErrorDetail(error) });
       setScanResult({
         status: 'error',
         errorCode: 'network_error',
@@ -1033,19 +1108,24 @@ export default function App() {
   const openNativeQrScanner = () => {
     const scanner = window.Telegram?.WebApp?.showScanQrPopup;
     if (typeof scanner === 'function') {
+      appendScanLog('qr_popup_opened');
       scanner({ text: t.scanPopupText }, (scannedText: string) => {
+        appendScanLog('qr_popup_scanned', { scannedText });
         const value = extractSoliqUrlFromText(scannedText || '');
         if (value) {
           window.Telegram?.WebApp?.closeScanQrPopup?.();
+          appendScanLog('qr_popup_valid', { scannedUrl: value });
           handleSoliqUrl(value);
           return true;
         }
+        appendScanLog('qr_popup_invalid', { scannedText });
         window.Telegram?.WebApp?.showAlert(t.scannerInvalidAlert);
         return false;
       });
       return;
     }
 
+    appendScanLog('qr_popup_unavailable');
     setShowUrlInput(true);
   };
 
@@ -1100,6 +1180,15 @@ export default function App() {
                 )}
               >
                 {t.modeReport}
+              </button>
+              <button 
+                onClick={() => setMode('logs')}
+                className={cn(
+                  "px-4 py-1.5 rounded-md text-sm font-medium transition-all",
+                  mode === 'logs' ? "bg-white shadow-sm text-emerald-600" : "text-stone-500"
+                )}
+              >
+                {t.modeLogs}
               </button>
               {isAdminUser && (
                 <button 
@@ -1344,6 +1433,21 @@ export default function App() {
                   </div>
                 </button>
 
+                <button
+                  onClick={() => setMode('logs')}
+                  className="w-full rounded-2xl border-2 border-stone-200 bg-white p-6 text-left transition-all hover:border-stone-300"
+                >
+                  <div className="flex items-start gap-4">
+                    <div className="rounded-xl bg-stone-100 p-3 text-stone-700">
+                      <Search className="h-6 w-6" />
+                    </div>
+                    <div>
+                      <div className="text-lg font-bold text-stone-900">{t.logsOpen}</div>
+                      <div className="mt-1 text-sm text-stone-700">{t.logsTitle}</div>
+                    </div>
+                  </div>
+                </button>
+
                 {showUrlInput && (
                   <div className="rounded-2xl border border-stone-200 bg-white p-4 space-y-3">
                     <input
@@ -1541,7 +1645,7 @@ export default function App() {
               </>
             )}
           </div>
-        ) : (
+        ) : mode === 'moderate' ? (
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold">{t.moderationTitle}</h2>
@@ -1682,6 +1786,48 @@ export default function App() {
               </div>
             )}
           </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">{t.logsTitle}</h2>
+              <div className="flex gap-2">
+                <button
+                  onClick={copyScanLogs}
+                  className="rounded-xl border border-stone-200 bg-white px-4 py-2 text-sm font-medium text-stone-700"
+                >
+                  {t.logsCopy}
+                </button>
+                <button
+                  onClick={clearScanLogs}
+                  className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-medium text-rose-700"
+                >
+                  {t.logsClear}
+                </button>
+              </div>
+            </div>
+
+            {scanLogs.length === 0 ? (
+              <div className="rounded-2xl border border-stone-200 bg-white p-8 text-center text-stone-500">
+                {t.logsEmpty}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {scanLogs.map(entry => (
+                  <div key={entry.id} className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-sm font-semibold text-stone-900">{entry.event}</div>
+                      <div className="text-xs text-stone-500">{new Date(entry.at).toLocaleString()}</div>
+                    </div>
+                    {entry.payload !== undefined && (
+                      <pre className="mt-3 overflow-x-auto rounded-xl bg-stone-900 p-3 text-xs text-stone-100">
+                        {JSON.stringify(entry.payload, null, 2)}
+                      </pre>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         )}
       </main>
 
@@ -1700,6 +1846,13 @@ export default function App() {
         >
           <Plus className="w-6 h-6" />
           <span className="text-[10px] font-bold uppercase tracking-widest">{t.modeReport}</span>
+        </button>
+        <button 
+          onClick={() => setMode('logs')}
+          className={cn("flex flex-col items-center gap-1", mode === 'logs' ? "text-emerald-600" : "text-stone-400")}
+        >
+          <QrCode className="w-6 h-6" />
+          <span className="text-[10px] font-bold uppercase tracking-widest">{t.modeLogs}</span>
         </button>
         {isAdminUser && (
           <button 
