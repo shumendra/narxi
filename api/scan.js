@@ -1,6 +1,13 @@
 import { createClient } from '@supabase/supabase-js';
 import { normalizeCityName } from '../src/constants/cities.js';
-import { scrapesoliqReceipt, insertPendingPrice, fetchProductsIndex, normalizeSoliqUrl } from './utils/receipt.js';
+import {
+  parseReceiptHtml,
+  extractCityFromAddress,
+  insertPendingPrice,
+  fetchProductsIndex,
+  normalizeSoliqUrl,
+  isSoliqUrl,
+} from './utils/receipt.js';
 
 export const config = {
   api: {
@@ -13,23 +20,6 @@ const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL ||
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
 const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
 
-async function withTimeout(promise, timeoutMs) {
-  let timeoutHandle;
-  const timeoutPromise = new Promise((_, reject) => {
-    timeoutHandle = setTimeout(() => {
-      const timeoutError = new Error('SCAN_TIMEOUT');
-      timeoutError.code = 'SCAN_TIMEOUT';
-      reject(timeoutError);
-    }, timeoutMs);
-  });
-
-  try {
-    return await Promise.race([promise, timeoutPromise]);
-  } finally {
-    clearTimeout(timeoutHandle);
-  }
-}
-
 function withCors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -41,111 +31,46 @@ function ok(res, payload) {
   return res.status(200).json(payload);
 }
 
-function buildQueuedSuccessPayload(city, receiptUrl, persisted = true) {
-  const finalCity = normalizeCityName(city || '') || 'Tashkent';
-  return {
-    store_name: 'Soliq receipt (parse pending)',
-    store_address: '-',
-    city: finalCity,
-    item_count: 1,
-    queued_without_parse: true,
-    queued_persisted: persisted,
-    receipt_url: receiptUrl || null,
-  };
-}
-
-async function insertFallbackPendingReceipt({
-  supabase,
-  telegramId,
-  city,
-  receiptUrl,
-  receiptData = null,
-  latitude = null,
-  longitude = null,
-}) {
-  const now = new Date().toISOString();
-  const fallbackCity = normalizeCityName(city || '') || 'Tashkent';
-  const fallbackTotal = Math.max(1, Number(receiptData?.totalAmount) || 1);
-  const fallbackStoreName = String(receiptData?.storeName || 'Soliq receipt (parse review)').trim();
-  const fallbackStoreAddress = String(receiptData?.storeAddress || '').trim() || null;
-
-  const parseStageSuffix = String(receiptData?.parseStage || 'unknown').replace(/[^a-z0-9_]+/gi, '_').toLowerCase();
-  const payload = {
-    product_name_raw: 'RECEIPT_PARSE_REVIEW',
-    product_id: null,
-    match_confidence: 0,
-    status: 'pending',
-    price: fallbackTotal,
-    quantity: 1,
-    unit_price: fallbackTotal,
-    city: fallbackCity,
-    place_name: fallbackStoreName,
-    place_address: fallbackStoreAddress,
-    receipt_url: receiptUrl,
-    receipt_date: receiptData?.receiptDate || now,
-    source: `soliq_qr_unparsed_${parseStageSuffix}`,
-    submitted_by: telegramId,
-    latitude,
-    longitude,
-  };
-
-  const { error } = await supabase.from('pending_prices').insert(payload);
-  if (error) {
-    throw error;
-  }
-
-  return {
-    ...buildQueuedSuccessPayload(fallbackCity, receiptUrl, true),
-    store_name: fallbackStoreName,
-    store_address: fallbackStoreAddress || '-',
-    item_count: 1,
-  };
-}
-
-async function tryQueueWithoutParse({
-  supabase,
-  telegramId,
-  city,
-  receiptUrl,
-  receiptData = null,
-  latitude = null,
-  longitude = null,
-}) {
-  if (!supabase || !receiptUrl) {
-    return buildQueuedSuccessPayload(city, receiptUrl, false);
-  }
+async function fetchReceiptHtml(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
 
   try {
-    return await insertFallbackPendingReceipt({
-      supabase,
-      telegramId,
-      city,
-      receiptUrl,
-      receiptData,
-      latitude,
-      longitude,
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'ru-RU,ru;q=0.9,uz-UZ;q=0.8,uz;q=0.7',
+        'Accept-Encoding': 'gzip, deflate, br',
+        Connection: 'keep-alive',
+        Referer: 'https://ofd.soliq.uz/',
+        'Cache-Control': 'no-cache',
+      },
     });
-  } catch (fallbackError) {
-    console.error('scan emergency fallback insert error:', fallbackError);
-    return buildQueuedSuccessPayload(city, receiptUrl, false);
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    return await response.text();
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
 async function insertPendingPriceWithoutMatch({
-  supabase,
+  supabaseClient,
   item,
   receiptData,
   telegramId,
   city,
   receiptUrl,
-  latitude = null,
-  longitude = null,
 }) {
   const selectedCity = normalizeCityName(city || '');
   const parsedCity = normalizeCityName(receiptData?.city || '');
   const finalCity = parsedCity || selectedCity || 'Tashkent';
 
-  const parseStageSuffix = String(receiptData?.parseStage || 'unknown').replace(/[^a-z0-9_]+/gi, '_').toLowerCase();
   const payload = {
     product_name_raw: item?.name || 'Unknown item',
     product_id: null,
@@ -159,13 +84,13 @@ async function insertPendingPriceWithoutMatch({
     place_address: receiptData?.storeAddress || null,
     receipt_url: receiptUrl,
     receipt_date: receiptData?.receiptDate || new Date().toISOString(),
-    source: `soliq_qr_${parseStageSuffix}`,
+    source: 'soliq_qr_table',
     submitted_by: telegramId,
-    latitude,
-    longitude,
+    latitude: null,
+    longitude: null,
   };
 
-  const { error } = await supabase.from('pending_prices').insert(payload);
+  const { error } = await supabaseClient.from('pending_prices').insert(payload);
   if (error) throw error;
 
   return { finalCity };
@@ -189,11 +114,12 @@ export default async function handler(req, res) {
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
     const rawUrl = String(body.url || '').trim();
-    const url = normalizeSoliqUrl(rawUrl);
+    const normalizedUrl = normalizeSoliqUrl(rawUrl);
+    const url = normalizedUrl || rawUrl;
     const telegramId = String(body.telegram_id || 'anonymous');
     const selectedCity = normalizeCityName(body.city || '') || null;
 
-    if (!url) {
+    if (!isSoliqUrl(url)) {
       return ok(res, { ok: false, error: 'not_soliq_url' });
     }
 
@@ -205,7 +131,6 @@ export default async function handler(req, res) {
 
     if (blockedError) {
       console.error('scan blocked check error:', blockedError);
-      console.info('scan proceeding despite blocked check query error', { telegram_id: telegramId, receipt_url: url });
     }
 
     if (blocked) {
@@ -220,106 +145,90 @@ export default async function handler(req, res) {
 
     if (duplicateError) {
       console.error('scan duplicate check error:', duplicateError);
-      console.info('scan proceeding despite duplicate check query error', { telegram_id: telegramId, receipt_url: url });
     }
 
     if (alreadyProcessed) {
       return ok(res, { ok: false, error: 'duplicate', message: 'Bu chek avval yuborilgan edi' });
     }
 
-    let receiptData = null;
+    let html;
     try {
-      receiptData = await withTimeout(scrapesoliqReceipt(url), 45000);
+      html = await fetchReceiptHtml(url);
     } catch (error) {
-      if (error?.code === 'SCAN_TIMEOUT') {
-        // Timed out — likely still generating; tell user to retry later
-        return ok(res, { ok: false, error: 'receipt_generating' });
-      }
-      throw error;
+      console.error('Fetch error:', error?.message || error);
+      return ok(res, {
+        ok: false,
+        error: 'fetch_failed',
+        detail: error?.message || 'fetch_error',
+      });
     }
 
-    // If the Soliq server says the receipt is still being generated, tell the user to retry later
-    if (receiptData?._generating) {
-      return ok(res, { ok: false, error: 'receipt_generating' });
+    if (!html.includes('Nomi') && !html.includes('Narxi') && !html.includes('Наименование')) {
+      return ok(res, { ok: false, error: 'not_receipt_page' });
     }
 
-    const receiptLatitude = Number.isFinite(Number(receiptData?.latitude)) ? Number(receiptData.latitude) : null;
-    const receiptLongitude = Number.isFinite(Number(receiptData?.longitude)) ? Number(receiptData.longitude) : null;
+    const parsed = parseReceiptHtml(html);
 
-    let fallbackQueued = null;
-    if (!receiptData || !receiptData.items || receiptData.items.length === 0) {
+    if (!parsed || !Array.isArray(parsed.items) || parsed.items.length === 0) {
+      console.log('Parse failed. HTML preview:', String(html).substring(0, 1000));
+      return ok(res, { ok: false, error: 'parse_failed' });
+    }
+
+    const normalizedReceiptDate = parsed.receipt_date && /^\d{2}\.\d{2}\.\d{4}$/.test(parsed.receipt_date)
+      ? `${parsed.receipt_date.split('.').reverse().join('-')}T00:00:00.000Z`
+      : (parsed.receipt_date || new Date().toISOString());
+
+    const detectedCity = normalizeCityName(extractCityFromAddress(parsed.store_address || '')) || null;
+    const receiptData = {
+      storeName: parsed.store_name,
+      storeAddress: parsed.store_address,
+      city: detectedCity,
+      detectedCity,
+      receiptDate: normalizedReceiptDate,
+      parseStage: 'table',
+      latitude: null,
+      longitude: null,
+      items: parsed.items.map(item => ({
+        name: item.name,
+        quantity: Number(item.quantity) || 1,
+        totalPrice: Number(item.price) || 0,
+        unitPrice: Number(item.unit_price) || Number(item.price) || 0,
+      })),
+    };
+
+    const products = await fetchProductsIndex(supabase);
+    const insertResults = [];
+
+    for (const item of receiptData.items) {
       try {
-        fallbackQueued = await insertFallbackPendingReceipt({
+        const inserted = await insertPendingPrice({
           supabase,
+          item,
+          receiptData,
           telegramId,
           city: selectedCity,
           receiptUrl: url,
+          products,
+          latitude: null,
+          longitude: null,
+          source: 'soliq_qr_table',
+        });
+        insertResults.push(inserted);
+      } catch (insertError) {
+        console.error('scan insert with matching failed, retrying without match:', insertError);
+        const inserted = await insertPendingPriceWithoutMatch({
+          supabaseClient: supabase,
+          item,
           receiptData,
-          latitude: receiptLatitude,
-          longitude: receiptLongitude,
+          telegramId,
+          city: selectedCity,
+          receiptUrl: url,
         });
-      } catch (fallbackError) {
-        console.error('scan fallback insert error:', fallbackError);
-        fallbackQueued = buildQueuedSuccessPayload(selectedCity, url, false);
+        insertResults.push(inserted);
       }
     }
 
-    let finalCity = selectedCity || 'Tashkent';
-    let itemCount = fallbackQueued?.item_count || 0;
-
-    if (!fallbackQueued) {
-      let products = [];
-      try {
-        products = await fetchProductsIndex(supabase);
-      } catch (productsError) {
-        console.error('scan products fetch warning:', productsError);
-        products = [];
-      }
-
-      const insertResults = [];
-      for (const item of receiptData.items) {
-        try {
-          const inserted = await insertPendingPrice({
-            supabase,
-            item,
-            receiptData,
-            telegramId,
-            city: selectedCity,
-            receiptUrl: url,
-            products,
-            latitude: receiptLatitude,
-            longitude: receiptLongitude,
-            source: `soliq_qr_${String(receiptData?.parseStage || 'unknown').replace(/[^a-z0-9_]+/gi, '_').toLowerCase()}`,
-          });
-          insertResults.push(inserted);
-        } catch (insertError) {
-          console.error('scan insert with matching failed, retrying without match:', insertError);
-          const inserted = await insertPendingPriceWithoutMatch({
-            supabase,
-            item,
-            receiptData,
-            telegramId,
-            city: selectedCity,
-            receiptUrl: url,
-            latitude: receiptLatitude,
-            longitude: receiptLongitude,
-          });
-          insertResults.push(inserted);
-        }
-      }
-
-      finalCity = insertResults[0]?.finalCity || normalizeCityName(receiptData.city || '') || selectedCity || 'Tashkent';
-      itemCount = receiptData.items.length;
-
-      if (selectedCity && normalizeCityName(selectedCity) !== normalizeCityName(finalCity)) {
-        console.info('scan city mismatch', {
-          selected_city: selectedCity,
-          scraped_city: finalCity,
-          receipt_url: url,
-          telegram_id: telegramId,
-        });
-      }
-    }
+    const finalCity = insertResults[0]?.finalCity || detectedCity || selectedCity || 'Tashkent';
 
     const { error: logError } = await supabase.from('receipts_log').insert({
       receipt_url: url,
@@ -329,48 +238,20 @@ export default async function handler(req, res) {
 
     if (logError) {
       console.error('scan receipts_log insert error:', logError);
-      return ok(res, {
-        ok: true,
-        store_name: fallbackQueued?.store_name || receiptData.storeName,
-        store_address: fallbackQueued?.store_address || receiptData.storeAddress,
-        city: finalCity,
-        selected_city: selectedCity,
-        scraped_city: fallbackQueued ? null : (normalizeCityName(receiptData.city || '') || finalCity),
-        item_count: itemCount,
-        queued_without_parse: Boolean(fallbackQueued),
-        fallback_reason: 'receipt_log_failed',
-      });
     }
 
     return ok(res, {
       ok: true,
-      store_name: fallbackQueued?.store_name || receiptData.storeName,
-      store_address: fallbackQueued?.store_address || receiptData.storeAddress,
+      store_name: receiptData.storeName,
+      store_address: receiptData.storeAddress,
       city: finalCity,
       selected_city: selectedCity,
-      scraped_city: fallbackQueued ? null : (normalizeCityName(receiptData.city || '') || finalCity),
-      item_count: itemCount,
-      queued_without_parse: Boolean(fallbackQueued),
+      scraped_city: detectedCity || finalCity,
+      item_count: receiptData.items.length,
+      queued_without_parse: false,
     });
   } catch (error) {
     console.error('scan handler error:', error);
-    const safeBody = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
-    const rawUrl = String(safeBody.url || '').trim();
-    const url = normalizeSoliqUrl(rawUrl);
-    const telegramId = String(safeBody.telegram_id || 'anonymous');
-    const selectedCity = normalizeCityName(safeBody.city || '') || null;
-
-    if (!url) {
-      return ok(res, { ok: false, error: 'not_soliq_url' });
-    }
-
-    const queued = await tryQueueWithoutParse({
-      supabase,
-      telegramId,
-      city: selectedCity,
-      receiptUrl: url,
-    });
-
-    return ok(res, { ok: true, ...queued, fallback_reason: 'unhandled_exception' });
+    return ok(res, { ok: false, error: 'server_error' });
   }
 }

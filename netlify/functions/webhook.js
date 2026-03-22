@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import dns from 'node:dns';
 import { extractCityFromAddress, getCityLabel, normalizeCityName } from '../../src/constants/cities.js';
-import { scrapesoliqReceipt, insertPendingPrice, fetchProductsIndex } from '../../api/utils/receipt.js';
+import { scrapesoliqReceipt, insertPendingPrice, fetchProductsIndex, isSoliqUrl } from '../../api/utils/receipt.js';
 
 dotenv.config();
 dotenv.config({ path: '.env.local', override: true });
@@ -405,16 +405,19 @@ function extractSoliqUrl(message) {
 
   for (const entity of entities) {
     if (entity.type === 'text_link' && entity.url) {
-      if (entity.url.includes('soliq.uz')) return entity.url;
+      if (isSoliqUrl(entity.url)) return entity.url;
     }
     if (entity.type === 'url') {
       const url = text.substring(entity.offset, entity.offset + entity.length);
-      if (url.includes('soliq.uz')) return url;
+      if (isSoliqUrl(url)) return url;
     }
   }
 
-  const match = text.match(/https?:\/\/(?:[a-z0-9-]+\.)*soliq\.uz[^\s]*/i);
-  return match ? match[0] : null;
+  const match = text.match(/https?:\/\/[^\s"']+/i);
+  if (match && isSoliqUrl(match[0])) {
+    return match[0];
+  }
+  return null;
 }
 
 function getCommand(text) {
@@ -824,7 +827,7 @@ async function handleMessage(message) {
     }
   }
 
-  if (normalizedText.includes('soliq.uz')) {
+  if (isSoliqUrl(normalizedText)) {
     const receiptUrl = extractSoliqUrl(message);
     if (!receiptUrl) {
       await sendTelegramMessage(chatId, { text: BOT_COPY[lang].missingReceipt });

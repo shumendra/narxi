@@ -3,6 +3,11 @@ import * as cheerio from 'cheerio';
 import * as fuzzball from 'fuzzball';
 import { extractCityFromAddress as extractCityFromAddressBase, normalizeCityName } from '../../src/constants/cities.js';
 
+export function isSoliqUrl(url) {
+  const value = String(url || '').toLowerCase();
+  return value.includes('ofd.soliq.uz/check') || value.includes('soliq.uz/check');
+}
+
 export function extractSoliqUrlFromText(input) {
   const raw = String(input || '').trim();
   if (!raw) return null;
@@ -59,6 +64,9 @@ export function normalizeSoliqUrl(input) {
   try {
     const parsed = new URL(extracted);
     if (!/soliq\.uz$/i.test(parsed.hostname) && !/\.soliq\.uz$/i.test(parsed.hostname)) {
+      return null;
+    }
+    if (!isSoliqUrl(parsed.toString())) {
       return null;
     }
     return parsed.toString();
@@ -509,117 +517,180 @@ async function fetchWithRetry(url, attempts = 3) {
   throw lastError;
 }
 
-function parseReceiptFromHtml(html) {
-  const $ = cheerio.load(html);
+export function parseReceiptHtml(html) {
+  try {
+    const $ = cheerio.load(html || '');
 
-  const storeHeader = $('h3')
-    .filter((_, el) => $(el).text().includes('"') || $(el).text().includes('MCHJ') || $(el).text().includes('JAMIYAT'))
-    .first();
+    console.log('Raw HTML length:', String(html || '').length);
+    console.log('Tables found:', $('table').length);
 
-  const storeName =
-    storeHeader.text().trim() || $('h1, .company-name, b').first().text().trim() || "Noma'lum do'kon";
+    let storeName = '';
+    let storeAddress = '';
+    let receiptDate = '';
 
-  const storeBlock = storeHeader.closest('td');
-  const storeAddress =
-    storeBlock
-      .clone()
-      .find('h3')
-      .remove()
-      .end()
-      .text()
-      .replace(/\s+/g, ' ')
-      .trim() || $('.address, .company-address').first().text().trim() || 'Toshkent sh.';
-
-  const detectedCity = extractCityFromAddress(storeAddress);
-  const totalAmount = extractReceiptTotal($);
-  const receiptDateRaw = extractReceiptDate($);
-  const parsedDate = receiptDateRaw ? new Date(receiptDateRaw) : null;
-  const receiptDate = parsedDate && !Number.isNaN(parsedDate.getTime())
-    ? parsedDate.toISOString()
-    : new Date().toISOString();
-  const coordinates = extractCoordinatesFromHtml(html, $);
-
-  const items = [];
-  let parseStage = null;
-  const itemsTable = findItemsTable($);
-  if (itemsTable) {
-    const { table, headers } = itemsTable;
-    const normalizedHeaders = headers.map(h => String(h || '').toLowerCase());
-    const nameIndex = normalizedHeaders.findIndex(h => ['nomi', 'товар', 'наимен', 'name', 'product'].some(key => h.includes(key)));
-    const qtyIndex = normalizedHeaders.findIndex(h => ['soni', 'кол', 'qty', 'quantity', 'miqdor'].some(key => h.includes(key)));
-    const priceIndex = normalizedHeaders.findIndex(h => ['narxi', 'сумма', 'цена', 'price', 'стоим'].some(key => h.includes(key)));
-
-    const rows = $(table).find('tbody tr.products-row');
-    const targetRows = rows.length > 0 ? rows : $(table).find('tr').slice(1);
-
-    targetRows.each((_, el) => {
-      const cols = $(el).find('td');
-      if (cols.length === 0) return;
-
-      const name = $(cols[nameIndex]).text().trim();
-      const quantity = parseNumericValue($(cols[qtyIndex]).text().trim()) || 1;
-      const totalPrice = parseNumericValue($(cols[priceIndex]).text().trim()) || 0;
-      const unitPrice = quantity > 0 ? Math.round(totalPrice / quantity) : totalPrice;
-
-      if (name && totalPrice > 0) {
-        items.push({ name, quantity, totalPrice, unitPrice });
+    const allText = [];
+    $('body').find('*').each((_, el) => {
+      if ($(el).children().length === 0) {
+        const text = $(el).text().trim();
+        if (text) allText.push(text);
       }
     });
-    if (items.length > 0) {
-      parseStage = 'table';
-    }
-  }
 
-  if (items.length === 0) {
-    items.push(...fallbackExtractItems($));
-    if (items.length > 0) {
-      parseStage = 'generic_table';
+    for (const text of allText) {
+      if (
+        text.includes('MCHJ')
+        || text.includes('МЧЖ')
+        || text.includes('XK')
+        || text.includes('МАС\'УЛИЯТИ')
+        || text.includes('КОРХОНА')
+        || text.includes('ООО')
+        || text.includes('ЧП')
+        || (text.length > 10 && text === text.toUpperCase() && text.length < 150)
+      ) {
+        if (!storeName) storeName = text;
+      }
     }
-  }
 
-  if (items.length === 0) {
-    items.push(...fallbackExtractItemsFromScripts($));
-    if (items.length > 0) {
-      parseStage = 'script_regex';
+    for (const text of allText) {
+      const looksLikeProductLine = (
+        /\d/.test(text)
+        && (text.includes('гр')
+          || text.includes('kg')
+          || text.includes('ml')
+          || text.includes('chips')
+          || text.includes('чипс')
+          || text.includes(' / ')
+          || text.includes('"'))
+      );
+      if (looksLikeProductLine) continue;
+
+      if (
+        text.includes('ko\'cha')
+        || text.includes('тумани')
+        || text.includes('шаҳри')
+        || text.includes('улица')
+        || text.includes('район')
+        || text.includes('город')
+        || text.includes('MFY')
+        || text.includes('МФЙ')
+        || (text.includes(',') && text.length > 20 && text.length < 200)
+      ) {
+        if (!storeAddress) storeAddress = text;
+      }
     }
-  }
 
-  if (items.length === 0) {
-    items.push(...fallbackExtractItemsFromJsonScripts($));
-    if (items.length > 0) {
-      parseStage = 'script_json';
+    for (const text of allText) {
+      const dateMatch = text.match(/(\d{2}\.\d{2}\.\d{4})/);
+      if (dateMatch && !receiptDate) {
+        receiptDate = dateMatch[1];
+      }
     }
-  }
 
-  if (items.length === 0) {
-    items.push(...fallbackExtractItemsFromProductBlocks($));
-    if (items.length > 0) {
-      parseStage = 'product_blocks';
-    }
-  }
+    const items = [];
 
-  if (items.length === 0) {
-    items.push(...fallbackExtractItemsFromAnyThreeColumnRows($));
-    if (items.length > 0) {
-      parseStage = 'three_columns';
-    }
-  }
+    $('table').each((_, table) => {
+      const firstRowText = $(table).find('tr').first().text().toLowerCase();
 
-  if (!parseStage) {
-    parseStage = 'metadata_only';
+      const isItemsTable =
+        firstRowText.includes('nomi')
+        || firstRowText.includes('narxi')
+        || firstRowText.includes('наименование')
+        || firstRowText.includes('цена');
+
+      if (!isItemsTable) return;
+
+      const headerCells = $(table).find('tr').first().find('th, td');
+      let nameCol = 0;
+      let qtyCol = 1;
+      let priceCol = 2;
+
+      headerCells.each((index, cell) => {
+        const text = $(cell).text().toLowerCase().trim();
+        if (text.includes('nom') || text.includes('наим')) nameCol = index;
+        if (text.includes('son') || text.includes('кол') || text.includes('qty')) qtyCol = index;
+        if (text.includes('narx') || text.includes('цен') || text.includes('сум') || text.includes('sum')) priceCol = index;
+      });
+
+      $(table).find('tr').slice(1).each((_, row) => {
+        const cells = $(row).find('td');
+        if (cells.length < 2) return;
+
+        const rawName = $(cells[nameCol]).text().trim();
+        const rawQty = $(cells[qtyCol]).text().trim();
+        const rawPrice = $(cells[priceCol]).text().trim();
+
+        const skipKeywords = [
+          'jami', 'итого', 'qqs', 'ндс', 'chegirma', 'скидка',
+          'naqd', 'наличн', 'bank', 'банк', 'shtrix', 'штрих',
+          'mxik', 'мхик', 'o\'lchov', 'измер',
+        ];
+
+        const nameLower = rawName.toLowerCase();
+        if (skipKeywords.some(keyword => nameLower.includes(keyword))) return;
+        if (!rawName || rawName.length < 2) return;
+
+        const priceClean = rawPrice
+          .replace(/\s/g, '')
+          .replace(/,/g, '.')
+          .replace(/[^\d.]/g, '');
+        const price = Number.parseFloat(priceClean);
+
+        const qtyClean = rawQty
+          .replace(/\s/g, '')
+          .replace(/,/g, '.')
+          .replace(/[^\d.]/g, '');
+        const quantity = Number.parseFloat(qtyClean) || 1;
+
+        if (price > 0) {
+          items.push({
+            name: rawName,
+            price: Math.round(price),
+            quantity,
+            unit_price: Math.round(price / quantity),
+          });
+        }
+      });
+    });
+
+    console.log(`Parsed: ${items.length} items, store: ${storeName}, address: ${storeAddress}`);
+
+    return {
+      store_name: storeName || "Noma'lum do'kon",
+      store_address: storeAddress || '',
+      receipt_date: receiptDate || new Date().toISOString(),
+      items,
+    };
+  } catch (error) {
+    console.error('Parse error:', error);
+    return null;
   }
+}
+
+function parseReceiptFromHtml(html) {
+  const parsed = parseReceiptHtml(html);
+  if (!parsed) return null;
+
+  const $ = cheerio.load(html || '');
+  const coordinates = extractCoordinatesFromHtml(html || '', $);
+  const detectedCity = extractCityFromAddress(parsed.store_address);
+  const totalAmount = parsed.items.reduce((sum, item) => sum + (Number(item.price) || 0), 0) || extractReceiptTotal($) || null;
 
   return {
-    storeName,
-    storeAddress,
+    storeName: parsed.store_name,
+    storeAddress: parsed.store_address,
     city: detectedCity,
     detectedCity,
     latitude: coordinates?.latitude ?? null,
     longitude: coordinates?.longitude ?? null,
     totalAmount,
-    parseStage,
-    receiptDate,
-    items,
+    parseStage: parsed.items.length > 0 ? 'table' : 'metadata_only',
+    receiptDate: parsed.receipt_date,
+    items: (parsed.items || []).map(item => ({
+      name: item.name,
+      quantity: Number(item.quantity) || 1,
+      totalPrice: Number(item.price) || 0,
+      unitPrice: Number(item.unit_price) || Number(item.price) || 0,
+    })),
   };
 }
 

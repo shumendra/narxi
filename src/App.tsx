@@ -856,6 +856,11 @@ export default function App() {
     return null;
   };
 
+  const isSoliqUrl = (url: string) => {
+    const value = String(url || '').toLowerCase();
+    return value.includes('ofd.soliq.uz/check') || value.includes('soliq.uz/check');
+  };
+
   const getScanErrorBody = (errorCode?: string) => {
     if (errorCode === 'not_soliq_url') {
       return t.scanErrorNotSoliq;
@@ -872,7 +877,13 @@ export default function App() {
     if (errorCode === 'scrape_failed') {
       return t.scanErrorScrape;
     }
+    if (errorCode === 'fetch_failed') {
+      return t.scanErrorNetwork;
+    }
     if (errorCode === 'parse_empty') {
+      return t.scanErrorParseEmpty;
+    }
+    if (errorCode === 'parse_failed' || errorCode === 'not_receipt_page') {
       return t.scanErrorParseEmpty;
     }
     if (errorCode === 'network_error') {
@@ -882,8 +893,8 @@ export default function App() {
   };
 
   const handleSoliqUrl = async (url: string) => {
-    const scannedUrl = extractSoliqUrlFromText(url);
-    if (!scannedUrl) {
+    const scannedUrl = extractSoliqUrlFromText(url) || String(url || '').trim();
+    if (!isSoliqUrl(scannedUrl)) {
       setScanResult({ status: 'error', errorCode: 'not_soliq_url' });
       setReportEntryStep('result');
       return;
@@ -931,8 +942,8 @@ export default function App() {
     const scanner = window.Telegram?.WebApp?.showScanQrPopup;
     if (typeof scanner === 'function') {
       scanner({ text: t.scanPopupText }, (scannedText: string) => {
-        const value = extractSoliqUrlFromText(scannedText || '');
-        if (value) {
+        const value = extractSoliqUrlFromText(scannedText || '') || String(scannedText || '').trim();
+        if (isSoliqUrl(value)) {
           window.Telegram?.WebApp?.closeScanQrPopup?.();
           handleSoliqUrl(value);
           return true;
