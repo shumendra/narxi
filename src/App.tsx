@@ -442,9 +442,15 @@ export default function App() {
 
   const normalizePendingItem = (item: any): PendingModerationItem => ({
     ...item,
-    price: Number(item.price) || 0,
+    product_name_raw:
+      String(item.product_name_raw || '').trim() ||
+      (String(item.source || '').startsWith('soliq_qr_unparsed') ? 'RECEIPT_PARSE_REVIEW' : 'UNKNOWN_PRODUCT'),
+    price: Number(item.price) || (String(item.source || '').startsWith('soliq_qr_unparsed') ? 1 : 0),
     quantity: Number(item.quantity) || 1,
-    unit_price: Number(item.unit_price) || Number(item.price) || 0,
+    unit_price:
+      Number(item.unit_price) ||
+      Number(item.price) ||
+      (String(item.source || '').startsWith('soliq_qr_unparsed') ? 1 : 0),
   });
 
   const normalizeApprovedItem = (item: any): ApprovedModerationItem => ({

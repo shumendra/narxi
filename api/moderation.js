@@ -96,7 +96,47 @@ async function listPending(city) {
   const { data, error } = await query;
 
   if (error) throw error;
-  return data || [];
+
+  const items = data || [];
+  const healedItems = [];
+
+  for (const item of items) {
+    const isUnparsed = String(item?.source || '').startsWith('soliq_qr_unparsed');
+    const safeName = String(item?.product_name_raw || '').trim() || (isUnparsed ? 'RECEIPT_PARSE_REVIEW' : 'UNKNOWN_PRODUCT');
+    const safePrice = Number(item?.price) > 0 ? Math.round(Number(item.price)) : (isUnparsed ? 1 : 0);
+    const safeQty = Number(item?.quantity) > 0 ? Number(item.quantity) : 1;
+    const safeUnit = Number(item?.unit_price) > 0 ? Math.round(Number(item.unit_price)) : (safePrice > 0 ? safePrice : Math.round(safePrice / safeQty));
+
+    const needsHeal = (
+      safeName !== String(item?.product_name_raw || '')
+      || safePrice !== Number(item?.price || 0)
+      || safeQty !== Number(item?.quantity || 0)
+      || safeUnit !== Number(item?.unit_price || 0)
+    );
+
+    if (needsHeal && item?.id) {
+      const { error: healError } = await supabase
+        .from('pending_prices')
+        .update({
+          product_name_raw: safeName,
+          price: safePrice,
+          quantity: safeQty,
+          unit_price: safeUnit,
+        })
+        .eq('id', item.id);
+      if (healError) throw healError;
+    }
+
+    healedItems.push({
+      ...item,
+      product_name_raw: safeName,
+      price: safePrice,
+      quantity: safeQty,
+      unit_price: safeUnit,
+    });
+  }
+
+  return healedItems;
 }
 
 async function listApproved(city) {
@@ -121,7 +161,13 @@ async function updatePending(id, changes) {
   const payload = {};
 
   if (typeof changes.product_name_raw === 'string') {
-    payload.product_name_raw = changes.product_name_raw.trim();
+    const normalizedName = changes.product_name_raw.trim();
+    if (!normalizedName) {
+      const invalidNameError = new Error('Product name cannot be empty');
+      invalidNameError.statusCode = 400;
+      throw invalidNameError;
+    }
+    payload.product_name_raw = normalizedName;
     payload.product_id = null;
     payload.match_confidence = 0;
   }
