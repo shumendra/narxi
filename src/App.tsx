@@ -156,6 +156,10 @@ export default function App() {
         scanPopupText: 'Chekdagi QR kodni skaner qiling',
         scanLoadingTitle: "⏳ Chek o'qilmoqda...",
         scanLoadingHint: 'Iltimos kuting',
+        scanLogTitle: 'Scan log',
+        scanLogClient: 'Client',
+        scanLogServer: 'Server',
+        scanLogEmpty: 'Loglar hali yo‘q',
         scanSuccessTitle: '✅ Chek qabul qilindi!',
         scanSuccessQueued: 'Chek qabul qilindi va moderatsiyaga yuborildi. Mahsulotlar administrator tomonidan qo‘lda tekshiriladi.',
         scanItemsSubmitted: "ta mahsulot yuborildi",
@@ -242,6 +246,10 @@ export default function App() {
         scanPopupText: 'Отсканируйте QR код на чеке',
         scanLoadingTitle: '⏳ Чтение чека...',
         scanLoadingHint: 'Пожалуйста, подождите',
+        scanLogTitle: 'Лог сканирования',
+        scanLogClient: 'Клиент',
+        scanLogServer: 'Сервер',
+        scanLogEmpty: 'Логи пока пустые',
         scanSuccessTitle: '✅ Чек принят!',
         scanSuccessQueued: 'Чек принят и отправлен на модерацию. Товары будут проверены администратором вручную.',
         scanItemsSubmitted: 'товаров отправлено',
@@ -328,6 +336,10 @@ export default function App() {
         scanPopupText: 'Scan the QR code on the receipt',
         scanLoadingTitle: '⏳ Reading receipt...',
         scanLoadingHint: 'Please wait',
+        scanLogTitle: 'Scan log',
+        scanLogClient: 'Client',
+        scanLogServer: 'Server',
+        scanLogEmpty: 'No logs yet',
         scanSuccessTitle: '✅ Receipt accepted!',
         scanSuccessQueued: 'Receipt accepted and queued for moderation. Products will be verified manually by an admin.',
         scanItemsSubmitted: 'products submitted',
@@ -403,7 +415,9 @@ export default function App() {
     itemCount?: number;
     queuedWithoutParse?: boolean;
     errorCode?: string;
+    errorDetail?: string;
   } | null>(null);
+  const [scanLogs, setScanLogs] = useState<Array<{ ts: string; source: 'client' | 'server'; message: string }>>([]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -799,6 +813,7 @@ export default function App() {
     setReportEntryStep('manual');
     setShowUrlInput(false);
     setScanResult(null);
+    setScanLogs([]);
   };
 
   const goToReportHome = () => {
@@ -807,6 +822,26 @@ export default function App() {
     setShowUrlInput(false);
     setScanResult(null);
     setScanUrlInput('');
+    setScanLogs([]);
+  };
+
+  const pushClientLog = (message: string) => {
+    setScanLogs(prev => [
+      ...prev,
+      { ts: new Date().toISOString(), source: 'client', message },
+    ]);
+  };
+
+  const pushServerTrace = (trace: Array<{ ts?: string; stage?: string; detail?: unknown }> | undefined) => {
+    if (!Array.isArray(trace) || trace.length === 0) return;
+    setScanLogs(prev => [
+      ...prev,
+      ...trace.map(entry => ({
+        ts: entry?.ts || new Date().toISOString(),
+        source: 'server' as const,
+        message: `${entry?.stage || 'unknown'}${entry?.detail ? `: ${JSON.stringify(entry.detail)}` : ''}`,
+      })),
+    ]);
   };
 
   const extractSoliqUrlFromText = (input: string) => {
@@ -893,16 +928,23 @@ export default function App() {
   };
 
   const handleSoliqUrl = async (url: string) => {
+    const startedAt = Date.now();
+    setScanLogs([]);
+    pushClientLog('QR scanned');
     const scannedUrl = extractSoliqUrlFromText(url) || String(url || '').trim();
+    pushClientLog(`URL extracted: ${scannedUrl || 'empty'}`);
     if (!isSoliqUrl(scannedUrl)) {
-      setScanResult({ status: 'error', errorCode: 'not_soliq_url' });
+      pushClientLog('Validation failed: not_soliq_url');
+      setScanResult({ status: 'error', errorCode: 'not_soliq_url', errorDetail: 'URL does not match soliq receipt domain' });
       setReportEntryStep('result');
       return;
     }
+    pushClientLog('Validation passed');
 
     setShowUrlInput(false);
     setScanResult(null);
     setReportEntryStep('loading');
+    pushClientLog('Sending POST /api/scan');
 
     try {
       const response = await fetch('/api/scan', {
@@ -914,10 +956,14 @@ export default function App() {
           city: selectedCity,
         }),
       });
+      pushClientLog(`HTTP response: ${response.status}`);
 
       const result = await response.json();
+      pushClientLog(`API response received in ${Date.now() - startedAt}ms`);
+      pushServerTrace(result?.trace);
 
       if (result?.ok) {
+        pushClientLog('Result: success');
         setScanResult({
           status: 'success',
           storeName: result.store_name,
@@ -927,13 +973,22 @@ export default function App() {
           queuedWithoutParse: Boolean(result.queued_without_parse),
         });
       } else if (result?.error === 'duplicate') {
-        setScanResult({ status: 'duplicate', errorCode: 'duplicate' });
+        pushClientLog('Result: duplicate');
+        setScanResult({ status: 'duplicate', errorCode: 'duplicate', errorDetail: result?.detail || '' });
       } else {
-        setScanResult({ status: 'error', errorCode: result?.error || 'scan_failed' });
+        pushClientLog(`Result: error (${result?.error || 'scan_failed'})`);
+        setScanResult({
+          status: 'error',
+          errorCode: result?.error || 'scan_failed',
+          errorDetail: result?.detail || '',
+        });
       }
-    } catch {
-      setScanResult({ status: 'error', errorCode: 'network_error' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'network_error';
+      pushClientLog(`Request failed: ${message}`);
+      setScanResult({ status: 'error', errorCode: 'network_error', errorDetail: message });
     } finally {
+      pushClientLog('Flow finished');
       setReportEntryStep('result');
     }
   };
@@ -959,6 +1014,7 @@ export default function App() {
 
   const retryScan = () => {
     setScanResult(null);
+    setScanLogs([]);
     setReportEntryStep('entry');
     openNativeQrScanner();
   };
@@ -1274,12 +1330,26 @@ export default function App() {
             )}
 
             {reportEntryStep === 'loading' && (
-              <section className="rounded-2xl border border-stone-200 bg-white p-10 text-center">
-                <div className="text-xl font-bold text-stone-900">{t.scanLoadingTitle}</div>
-                <div className="mt-4 flex justify-center">
-                  <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
+              <section className="space-y-4">
+                <div className="rounded-2xl border border-stone-200 bg-white p-10 text-center">
+                  <div className="text-xl font-bold text-stone-900">{t.scanLoadingTitle}</div>
+                  <div className="mt-4 flex justify-center">
+                    <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
+                  </div>
+                  <div className="mt-4 text-sm text-stone-600">{t.scanLoadingHint}</div>
                 </div>
-                <div className="mt-4 text-sm text-stone-600">{t.scanLoadingHint}</div>
+                <div className="rounded-2xl border border-stone-200 bg-white p-4">
+                  <div className="text-sm font-semibold text-stone-800">{t.scanLogTitle}</div>
+                  <div className="mt-3 max-h-64 overflow-auto rounded-xl bg-stone-50 p-3 text-xs font-mono text-stone-700 space-y-1">
+                    {scanLogs.length === 0 ? (
+                      <div className="text-stone-500">{t.scanLogEmpty}</div>
+                    ) : scanLogs.map((entry, index) => (
+                      <div key={`${entry.ts}-${index}`}>
+                        [{new Date(entry.ts).toLocaleTimeString()}] {entry.source === 'client' ? t.scanLogClient : t.scanLogServer}: {entry.message}
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </section>
             )}
 
@@ -1322,9 +1392,27 @@ export default function App() {
                 {scanResult.errorCode && (
                   <div className="text-xs text-rose-700/80">Code: {scanResult.errorCode}</div>
                 )}
+                {scanResult.errorDetail && (
+                  <div className="rounded-xl border border-rose-200 bg-white/60 p-3 text-xs text-rose-800 break-all">Detail: {scanResult.errorDetail}</div>
+                )}
                 <div className="grid grid-cols-2 gap-2">
                   <button onClick={retryScan} className="rounded-xl bg-rose-600 px-4 py-3 text-sm font-semibold text-white">{t.retry}</button>
                   <button onClick={goToManualEntry} className="rounded-xl border border-rose-300 bg-white px-4 py-3 text-sm font-semibold text-rose-700">{t.switchManual}</button>
+                </div>
+              </section>
+            )}
+
+            {reportEntryStep === 'result' && (
+              <section className="rounded-2xl border border-stone-200 bg-white p-4">
+                <div className="text-sm font-semibold text-stone-800">{t.scanLogTitle}</div>
+                <div className="mt-3 max-h-72 overflow-auto rounded-xl bg-stone-50 p-3 text-xs font-mono text-stone-700 space-y-1">
+                  {scanLogs.length === 0 ? (
+                    <div className="text-stone-500">{t.scanLogEmpty}</div>
+                  ) : scanLogs.map((entry, index) => (
+                    <div key={`${entry.ts}-${index}`}>
+                      [{new Date(entry.ts).toLocaleTimeString()}] {entry.source === 'client' ? t.scanLogClient : t.scanLogServer}: {entry.message}
+                    </div>
+                  ))}
                 </div>
               </section>
             )}

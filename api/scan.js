@@ -32,6 +32,14 @@ function ok(res, payload) {
   return res.status(200).json(payload);
 }
 
+function pushTrace(trace, stage, detail = null) {
+  trace.push({
+    ts: new Date().toISOString(),
+    stage,
+    detail,
+  });
+}
+
 function canonicalReceiptUrl(input) {
   const normalized = normalizeSoliqUrl(input);
   if (!normalized) return null;
@@ -57,7 +65,7 @@ function canonicalReceiptUrl(input) {
   }
 }
 
-async function fetchReceiptHtml(url) {
+async function fetchReceiptHtml(url, trace) {
   const headers = {
     'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
     Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -74,12 +82,14 @@ async function fetchReceiptHtml(url) {
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000);
+    pushTrace(trace, 'fetch_attempt', { attempt, transport: 'fetch', url });
 
     try {
       const response = await fetch(url, {
         signal: controller.signal,
         headers,
       });
+      pushTrace(trace, 'fetch_response', { attempt, transport: 'fetch', status: response.status });
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -87,13 +97,21 @@ async function fetchReceiptHtml(url) {
 
       const html = await response.text();
       if (html && html.length > 0) {
+        pushTrace(trace, 'fetch_success', { attempt, transport: 'fetch', htmlLength: html.length });
         return html;
       }
 
       throw new Error('EMPTY_HTML');
     } catch (error) {
       lastError = error;
+      pushTrace(trace, 'fetch_error', {
+        attempt,
+        transport: 'fetch',
+        name: error?.name || 'Error',
+        message: error?.message || String(error),
+      });
       try {
+        pushTrace(trace, 'fetch_attempt', { attempt, transport: 'axios', url });
         const response = await axios.get(url, {
           timeout: 30000,
           maxRedirects: 5,
@@ -102,13 +120,22 @@ async function fetchReceiptHtml(url) {
         });
         const html = String(response.data || '');
         if (html) {
+          pushTrace(trace, 'fetch_success', { attempt, transport: 'axios', status: response.status, htmlLength: html.length });
           return html;
         }
+        pushTrace(trace, 'fetch_error', { attempt, transport: 'axios', message: 'EMPTY_HTML' });
       } catch (axiosError) {
         lastError = axiosError;
+        pushTrace(trace, 'fetch_error', {
+          attempt,
+          transport: 'axios',
+          name: axiosError?.name || 'Error',
+          message: axiosError?.message || String(axiosError),
+        });
       }
 
       if (attempt < attempts) {
+        pushTrace(trace, 'fetch_retry_wait', { attempt, waitMs: attempt * 1500 });
         await new Promise(resolve => setTimeout(resolve, attempt * 1500));
       }
     } finally {
@@ -158,17 +185,23 @@ async function insertPendingPriceWithoutMatch({
 
 export default async function handler(req, res) {
   withCors(res);
+  const trace = [];
+  const respond = (payload) => ok(res, { ...payload, trace });
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
 
+  pushTrace(trace, 'request_received', { method: req.method });
+
   if (!supabase) {
-    return ok(res, { ok: false, error: 'server_not_configured' });
+    pushTrace(trace, 'config_error', { error: 'server_not_configured' });
+    return respond({ ok: false, error: 'server_not_configured' });
   }
 
   if (req.method !== 'POST') {
-    return ok(res, { ok: false, error: 'method_not_allowed' });
+    pushTrace(trace, 'method_not_allowed', { method: req.method });
+    return respond({ ok: false, error: 'method_not_allowed' });
   }
 
   try {
@@ -177,10 +210,18 @@ export default async function handler(req, res) {
     const url = canonicalReceiptUrl(rawUrl) || rawUrl;
     const telegramId = String(body.telegram_id || 'anonymous');
     const selectedCity = normalizeCityName(body.city || '') || null;
+    pushTrace(trace, 'request_parsed', {
+      telegramId,
+      selectedCity,
+      rawUrl,
+      canonicalUrl: url,
+    });
 
     if (!isSoliqUrl(url)) {
-      return ok(res, { ok: false, error: 'not_soliq_url' });
+      pushTrace(trace, 'validation_failed', { error: 'not_soliq_url' });
+      return respond({ ok: false, error: 'not_soliq_url' });
     }
+    pushTrace(trace, 'validation_ok', { isSoliqUrl: true });
 
     const { data: blocked, error: blockedError } = await supabase
       .from('blocked_users')
@@ -190,11 +231,14 @@ export default async function handler(req, res) {
 
     if (blockedError) {
       console.error('scan blocked check error:', blockedError);
+      pushTrace(trace, 'blocked_check_error', { message: blockedError.message });
     }
 
     if (blocked) {
-      return ok(res, { ok: false, error: 'blocked' });
+      pushTrace(trace, 'blocked', { telegramId });
+      return respond({ ok: false, error: 'blocked' });
     }
+    pushTrace(trace, 'blocked_check_ok');
 
     const { data: alreadyProcessed, error: duplicateError } = await supabase
       .from('receipts_log')
@@ -204,33 +248,46 @@ export default async function handler(req, res) {
 
     if (duplicateError) {
       console.error('scan duplicate check error:', duplicateError);
+      pushTrace(trace, 'duplicate_check_error', { message: duplicateError.message });
     }
 
     if (alreadyProcessed) {
-      return ok(res, { ok: false, error: 'duplicate', message: 'Bu chek avval yuborilgan edi' });
+      pushTrace(trace, 'duplicate_found', { receiptUrl: url });
+      return respond({ ok: false, error: 'duplicate', message: 'Bu chek avval yuborilgan edi' });
     }
+    pushTrace(trace, 'duplicate_check_ok');
 
     let html;
     try {
-      html = await fetchReceiptHtml(url);
+      html = await fetchReceiptHtml(url, trace);
     } catch (error) {
       console.error('Fetch error:', error?.message || error);
-      return ok(res, {
+      pushTrace(trace, 'fetch_failed', { message: error?.message || 'fetch_error' });
+      return respond({
         ok: false,
         error: 'fetch_failed',
         detail: error?.message || 'fetch_error',
       });
     }
+    pushTrace(trace, 'html_received', { htmlLength: String(html || '').length });
 
     if (!html.includes('Nomi') && !html.includes('Narxi') && !html.includes('Наименование')) {
-      return ok(res, { ok: false, error: 'not_receipt_page' });
+      pushTrace(trace, 'receipt_markers_missing', { error: 'not_receipt_page' });
+      return respond({ ok: false, error: 'not_receipt_page' });
     }
+    pushTrace(trace, 'receipt_markers_found');
 
     const parsed = parseReceiptHtml(html);
+    pushTrace(trace, 'parse_completed', {
+      hasParsed: Boolean(parsed),
+      itemCount: parsed?.items?.length || 0,
+      storeName: parsed?.store_name || null,
+    });
 
     if (!parsed || !Array.isArray(parsed.items) || parsed.items.length === 0) {
       console.log('Parse failed. HTML preview:', String(html).substring(0, 1000));
-      return ok(res, { ok: false, error: 'parse_failed' });
+      pushTrace(trace, 'parse_failed', { error: 'parse_failed' });
+      return respond({ ok: false, error: 'parse_failed' });
     }
 
     const normalizedReceiptDate = parsed.receipt_date && /^\d{2}\.\d{2}\.\d{4}$/.test(parsed.receipt_date)
@@ -256,10 +313,12 @@ export default async function handler(req, res) {
     };
 
     const products = await fetchProductsIndex(supabase);
+    pushTrace(trace, 'products_loaded', { count: products.length });
     const insertResults = [];
 
     for (const item of receiptData.items) {
       try {
+        pushTrace(trace, 'insert_attempt_match', { name: item.name, totalPrice: item.totalPrice });
         const inserted = await insertPendingPrice({
           supabase,
           item,
@@ -273,8 +332,13 @@ export default async function handler(req, res) {
           source: 'soliq_qr_table',
         });
         insertResults.push(inserted);
+        pushTrace(trace, 'insert_success_match', { name: item.name });
       } catch (insertError) {
         console.error('scan insert with matching failed, retrying without match:', insertError);
+        pushTrace(trace, 'insert_match_failed', {
+          name: item.name,
+          message: insertError?.message || String(insertError),
+        });
         const inserted = await insertPendingPriceWithoutMatch({
           supabaseClient: supabase,
           item,
@@ -284,10 +348,12 @@ export default async function handler(req, res) {
           receiptUrl: url,
         });
         insertResults.push(inserted);
+        pushTrace(trace, 'insert_success_no_match', { name: item.name });
       }
     }
 
     const finalCity = insertResults[0]?.finalCity || detectedCity || selectedCity || 'Tashkent';
+    pushTrace(trace, 'insert_all_done', { finalCity, itemCount: receiptData.items.length });
 
     const { error: logError } = await supabase.from('receipts_log').insert({
       receipt_url: url,
@@ -297,9 +363,12 @@ export default async function handler(req, res) {
 
     if (logError) {
       console.error('scan receipts_log insert error:', logError);
+      pushTrace(trace, 'receipt_log_error', { message: logError.message });
+    } else {
+      pushTrace(trace, 'receipt_log_saved');
     }
 
-    return ok(res, {
+    return respond({
       ok: true,
       store_name: receiptData.storeName,
       store_address: receiptData.storeAddress,
@@ -311,6 +380,10 @@ export default async function handler(req, res) {
     });
   } catch (error) {
     console.error('scan handler error:', error);
-    return ok(res, { ok: false, error: 'server_error' });
+    pushTrace(trace, 'handler_exception', {
+      name: error?.name || 'Error',
+      message: error?.message || String(error),
+    });
+    return respond({ ok: false, error: 'server_error' });
   }
 }
