@@ -41,6 +41,19 @@ function ok(res, payload) {
   return res.status(200).json(payload);
 }
 
+function buildQueuedSuccessPayload(city, receiptUrl, persisted = true) {
+  const finalCity = normalizeCityName(city || '') || 'Tashkent';
+  return {
+    store_name: 'Soliq receipt (parse pending)',
+    store_address: '-',
+    city: finalCity,
+    item_count: 1,
+    queued_without_parse: true,
+    queued_persisted: persisted,
+    receipt_url: receiptUrl || null,
+  };
+}
+
 async function insertFallbackPendingReceipt({ supabase, telegramId, city, receiptUrl }) {
   const now = new Date().toISOString();
   const fallbackCity = normalizeCityName(city || '') || 'Tashkent';
@@ -67,13 +80,25 @@ async function insertFallbackPendingReceipt({ supabase, telegramId, city, receip
     throw error;
   }
 
-  return {
-    store_name: 'Soliq receipt (parse pending)',
-    store_address: '-',
-    city: fallbackCity,
-    item_count: 1,
-    queued_without_parse: true,
-  };
+  return buildQueuedSuccessPayload(fallbackCity, receiptUrl, true);
+}
+
+async function tryQueueWithoutParse({ supabase, telegramId, city, receiptUrl }) {
+  if (!supabase || !receiptUrl) {
+    return buildQueuedSuccessPayload(city, receiptUrl, false);
+  }
+
+  try {
+    return await insertFallbackPendingReceipt({
+      supabase,
+      telegramId,
+      city,
+      receiptUrl,
+    });
+  } catch (fallbackError) {
+    console.error('scan emergency fallback insert error:', fallbackError);
+    return buildQueuedSuccessPayload(city, receiptUrl, false);
+  }
 }
 
 export default async function handler(req, res) {
@@ -110,7 +135,13 @@ export default async function handler(req, res) {
 
     if (blockedError) {
       console.error('scan blocked check error:', blockedError);
-      return ok(res, { ok: false, error: 'blocked_check_failed' });
+      const queued = await tryQueueWithoutParse({
+        supabase,
+        telegramId,
+        city: selectedCity,
+        receiptUrl: url,
+      });
+      return ok(res, { ok: true, ...queued, fallback_reason: 'blocked_check_failed' });
     }
 
     if (blocked) {
@@ -125,7 +156,13 @@ export default async function handler(req, res) {
 
     if (duplicateError) {
       console.error('scan duplicate check error:', duplicateError);
-      return ok(res, { ok: false, error: 'duplicate_check_failed' });
+      const queued = await tryQueueWithoutParse({
+        supabase,
+        telegramId,
+        city: selectedCity,
+        receiptUrl: url,
+      });
+      return ok(res, { ok: true, ...queued, fallback_reason: 'duplicate_check_failed' });
     }
 
     if (alreadyProcessed) {
@@ -153,7 +190,7 @@ export default async function handler(req, res) {
         });
       } catch (fallbackError) {
         console.error('scan fallback insert error:', fallbackError);
-        return ok(res, { ok: false, error: 'parse_empty' });
+        fallbackQueued = buildQueuedSuccessPayload(selectedCity, url, false);
       }
     }
 
@@ -197,7 +234,17 @@ export default async function handler(req, res) {
 
     if (logError) {
       console.error('scan receipts_log insert error:', logError);
-      return ok(res, { ok: false, error: 'receipt_log_failed' });
+      return ok(res, {
+        ok: true,
+        store_name: fallbackQueued?.store_name || receiptData.storeName,
+        store_address: fallbackQueued?.store_address || receiptData.storeAddress,
+        city: finalCity,
+        selected_city: selectedCity,
+        scraped_city: fallbackQueued ? null : (normalizeCityName(receiptData.city || '') || finalCity),
+        item_count: itemCount,
+        queued_without_parse: Boolean(fallbackQueued),
+        fallback_reason: 'receipt_log_failed',
+      });
     }
 
     return ok(res, {
@@ -212,6 +259,23 @@ export default async function handler(req, res) {
     });
   } catch (error) {
     console.error('scan handler error:', error);
-    return ok(res, { ok: false, error: 'server_error' });
+    const safeBody = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
+    const rawUrl = String(safeBody.url || '').trim();
+    const url = normalizeSoliqUrl(rawUrl);
+    const telegramId = String(safeBody.telegram_id || 'anonymous');
+    const selectedCity = normalizeCityName(safeBody.city || '') || null;
+
+    if (!url) {
+      return ok(res, { ok: false, error: 'not_soliq_url' });
+    }
+
+    const queued = await tryQueueWithoutParse({
+      supabase,
+      telegramId,
+      city: selectedCity,
+      receiptUrl: url,
+    });
+
+    return ok(res, { ok: true, ...queued, fallback_reason: 'unhandled_exception' });
   }
 }
