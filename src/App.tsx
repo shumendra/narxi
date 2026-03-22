@@ -168,6 +168,7 @@ export default function App() {
         scanErrorScrape: "Chek topildi, lekin server uni hozir o'qiy olmadi.\nIltimos qayta urinib ko'ring yoki havolani botga yuboring.",
         scanErrorParseEmpty: "Chek ochildi, lekin mahsulotlar ro'yxati topilmadi.\nIltimos qayta urinib ko'ring yoki havolani botga yuboring.",
         scanErrorTimeout: "Serverdan javob kutish vaqti tugadi.\nIltimos yana urinib ko'ring.",
+        scanErrorGenerating: "Chek hali tayyorlanmoqda.\n1-2 daqiqadan so'ng qayta urinib ko'ring.",
         scanErrorNetwork: 'Tarmoq xatosi yuz berdi. Internetni tekshirib qayta urinib ko‘ring.',
         scanAgain: 'Yana skanerlash',
         goHome: 'Bosh sahifaga',
@@ -253,6 +254,7 @@ export default function App() {
         scanErrorScrape: 'Чек найден, но сервер пока не смог его прочитать.\nПовторите попытку или отправьте ссылку боту.',
         scanErrorParseEmpty: 'Чек открыт, но список товаров не найден.\nПовторите попытку или отправьте ссылку боту.',
         scanErrorTimeout: 'Истекло время ожидания ответа сервера.\nПопробуйте снова.',
+        scanErrorGenerating: 'Чек ещё формируется.\nПовторите через 1-2 минуты.',
         scanErrorNetwork: 'Сетевая ошибка. Проверьте интернет и повторите попытку.',
         scanAgain: 'Сканировать снова',
         goHome: 'На главную',
@@ -338,6 +340,7 @@ export default function App() {
         scanErrorScrape: 'Receipt was detected, but the server could not read it right now.\nTry again or send the link to the bot.',
         scanErrorParseEmpty: 'Receipt opened, but no product list was found.\nTry again or send the link to the bot.',
         scanErrorTimeout: 'Server response timed out.\nPlease try again.',
+        scanErrorGenerating: 'Receipt is still being generated.\nPlease try again in 1-2 minutes.',
         scanErrorNetwork: 'Network error. Check internet connection and try again.',
         scanAgain: 'Scan again',
         goHome: 'Home',
@@ -862,6 +865,9 @@ export default function App() {
     }
     if (errorCode === 'scan_timeout') {
       return t.scanErrorTimeout;
+    }
+    if (errorCode === 'receipt_generating') {
+      return t.scanErrorGenerating;
     }
     if (errorCode === 'scrape_failed') {
       return t.scanErrorScrape;

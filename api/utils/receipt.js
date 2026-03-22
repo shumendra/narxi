@@ -623,9 +623,21 @@ function parseReceiptFromHtml(html) {
   };
 }
 
+function isReceiptGenerating(html) {
+  if (!html || typeof html !== 'string') return false;
+  const lower = html.toLowerCase();
+  return (
+    lower.includes('shakllanmoqda') ||
+    (lower.includes('alert-danger') && !lower.includes('products-tables') && !lower.includes('nomi'))
+  );
+}
+
 async function scrapeCandidateUrl(candidateUrl) {
   try {
     const { data } = await fetchWithRetry(candidateUrl);
+    if (isReceiptGenerating(data)) {
+      return { _generating: true };
+    }
     return parseReceiptFromHtml(data);
   } catch (error) {
     return null;
@@ -642,12 +654,29 @@ export async function scrapesoliqReceipt(url) {
     return null;
   }
 
-  const results = await Promise.all(candidateUrls.map(candidateUrl => scrapeCandidateUrl(candidateUrl)));
-  const success = results.find(result => result && Array.isArray(result.items) && result.items.length > 0);
-  if (success) return success;
+  const RETRY_DELAYS = [4000, 6000, 8000];
 
-  const metadataOnly = results.find(result => result && (result.storeName || result.storeAddress || result.totalAmount));
-  return metadataOnly || null;
+  for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
+    const results = await Promise.all(candidateUrls.map(candidateUrl => scrapeCandidateUrl(candidateUrl)));
+    const success = results.find(result => result && !result._generating && Array.isArray(result.items) && result.items.length > 0);
+    if (success) return success;
+
+    const stillGenerating = results.some(result => result && result._generating);
+    if (stillGenerating && attempt < RETRY_DELAYS.length) {
+      console.info(`Receipt still generating, retry ${attempt + 1}/${RETRY_DELAYS.length} in ${RETRY_DELAYS[attempt]}ms...`);
+      await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[attempt]));
+      continue;
+    }
+
+    if (stillGenerating) {
+      return { _generating: true, items: [], parseStage: 'generating' };
+    }
+
+    const metadataOnly = results.find(result => result && (result.storeName || result.storeAddress || result.totalAmount));
+    return metadataOnly || null;
+  }
+
+  return null;
 }
 
 export async function fetchProductsIndex(supabase) {

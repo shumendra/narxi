@@ -232,15 +232,15 @@ export default async function handler(req, res) {
       receiptData = await withTimeout(scrapesoliqReceipt(url), 45000);
     } catch (error) {
       if (error?.code === 'SCAN_TIMEOUT') {
-        const queued = await tryQueueWithoutParse({
-          supabase,
-          telegramId,
-          city: selectedCity,
-          receiptUrl: url,
-        });
-        return ok(res, { ok: true, ...queued, fallback_reason: 'scan_timeout' });
+        // Timed out — likely still generating; tell user to retry later
+        return ok(res, { ok: false, error: 'receipt_generating' });
       }
       throw error;
+    }
+
+    // If the Soliq server says the receipt is still being generated, tell the user to retry later
+    if (receiptData?._generating) {
+      return ok(res, { ok: false, error: 'receipt_generating' });
     }
 
     const receiptLatitude = Number.isFinite(Number(receiptData?.latitude)) ? Number(receiptData.latitude) : null;
