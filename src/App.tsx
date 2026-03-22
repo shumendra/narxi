@@ -417,7 +417,7 @@ export default function App() {
     errorCode?: string;
     errorDetail?: string;
   } | null>(null);
-  const [scanLogs, setScanLogs] = useState<Array<{ ts: string; source: 'client' | 'server'; message: string }>>([]);
+
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -822,26 +822,6 @@ export default function App() {
     setShowUrlInput(false);
     setScanResult(null);
     setScanUrlInput('');
-    setScanLogs([]);
-  };
-
-  const pushClientLog = (message: string) => {
-    setScanLogs(prev => [
-      ...prev,
-      { ts: new Date().toISOString(), source: 'client', message },
-    ]);
-  };
-
-  const pushServerTrace = (trace: Array<{ ts?: string; stage?: string; detail?: unknown }> | undefined) => {
-    if (!Array.isArray(trace) || trace.length === 0) return;
-    setScanLogs(prev => [
-      ...prev,
-      ...trace.map(entry => ({
-        ts: entry?.ts || new Date().toISOString(),
-        source: 'server' as const,
-        message: `${entry?.stage || 'unknown'}${entry?.detail ? `: ${JSON.stringify(entry.detail)}` : ''}`,
-      })),
-    ]);
   };
 
   const extractSoliqUrlFromText = (input: string) => {
@@ -927,27 +907,22 @@ export default function App() {
     return t.scanErrorBody;
   };
 
+  const scanApiUrl = import.meta.env.VITE_SCAN_API_URL || '/api/scan';
+
   const handleSoliqUrl = async (url: string) => {
-    const startedAt = Date.now();
-    setScanLogs([]);
-    pushClientLog('QR scanned');
     const scannedUrl = extractSoliqUrlFromText(url) || String(url || '').trim();
-    pushClientLog(`URL extracted: ${scannedUrl || 'empty'}`);
     if (!isSoliqUrl(scannedUrl)) {
-      pushClientLog('Validation failed: not_soliq_url');
       setScanResult({ status: 'error', errorCode: 'not_soliq_url', errorDetail: 'URL does not match soliq receipt domain' });
       setReportEntryStep('result');
       return;
     }
-    pushClientLog('Validation passed');
 
     setShowUrlInput(false);
     setScanResult(null);
     setReportEntryStep('loading');
-    pushClientLog('Sending POST /api/scan');
 
     try {
-      const response = await fetch('/api/scan', {
+      const response = await fetch(scanApiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -956,27 +931,21 @@ export default function App() {
           city: selectedCity,
         }),
       });
-      pushClientLog(`HTTP response: ${response.status}`);
 
       const result = await response.json();
-      pushClientLog(`API response received in ${Date.now() - startedAt}ms`);
-      pushServerTrace(result?.trace);
 
       if (result?.ok) {
-        pushClientLog('Result: success');
         setScanResult({
           status: 'success',
           storeName: result.store_name,
           storeAddress: result.store_address,
           city: result.city,
           itemCount: result.item_count,
-          queuedWithoutParse: Boolean(result.queued_without_parse),
+          queuedWithoutParse: false,
         });
       } else if (result?.error === 'duplicate') {
-        pushClientLog('Result: duplicate');
         setScanResult({ status: 'duplicate', errorCode: 'duplicate', errorDetail: result?.detail || '' });
       } else {
-        pushClientLog(`Result: error (${result?.error || 'scan_failed'})`);
         setScanResult({
           status: 'error',
           errorCode: result?.error || 'scan_failed',
@@ -985,10 +954,8 @@ export default function App() {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'network_error';
-      pushClientLog(`Request failed: ${message}`);
       setScanResult({ status: 'error', errorCode: 'network_error', errorDetail: message });
     } finally {
-      pushClientLog('Flow finished');
       setReportEntryStep('result');
     }
   };
@@ -1014,7 +981,6 @@ export default function App() {
 
   const retryScan = () => {
     setScanResult(null);
-    setScanLogs([]);
     setReportEntryStep('entry');
     openNativeQrScanner();
   };
@@ -1338,18 +1304,6 @@ export default function App() {
                   </div>
                   <div className="mt-4 text-sm text-stone-600">{t.scanLoadingHint}</div>
                 </div>
-                <div className="rounded-2xl border border-stone-200 bg-white p-4">
-                  <div className="text-sm font-semibold text-stone-800">{t.scanLogTitle}</div>
-                  <div className="mt-3 max-h-64 overflow-auto rounded-xl bg-stone-50 p-3 text-xs font-mono text-stone-700 space-y-1">
-                    {scanLogs.length === 0 ? (
-                      <div className="text-stone-500">{t.scanLogEmpty}</div>
-                    ) : scanLogs.map((entry, index) => (
-                      <div key={`${entry.ts}-${index}`}>
-                        [{new Date(entry.ts).toLocaleTimeString()}] {entry.source === 'client' ? t.scanLogClient : t.scanLogServer}: {entry.message}
-                      </div>
-                    ))}
-                  </div>
-                </div>
               </section>
             )}
 
@@ -1402,20 +1356,7 @@ export default function App() {
               </section>
             )}
 
-            {reportEntryStep === 'result' && (
-              <section className="rounded-2xl border border-stone-200 bg-white p-4">
-                <div className="text-sm font-semibold text-stone-800">{t.scanLogTitle}</div>
-                <div className="mt-3 max-h-72 overflow-auto rounded-xl bg-stone-50 p-3 text-xs font-mono text-stone-700 space-y-1">
-                  {scanLogs.length === 0 ? (
-                    <div className="text-stone-500">{t.scanLogEmpty}</div>
-                  ) : scanLogs.map((entry, index) => (
-                    <div key={`${entry.ts}-${index}`}>
-                      [{new Date(entry.ts).toLocaleTimeString()}] {entry.source === 'client' ? t.scanLogClient : t.scanLogServer}: {entry.message}
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
+
 
             {reportEntryStep === 'manual' && (
               <>
