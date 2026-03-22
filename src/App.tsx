@@ -899,10 +899,41 @@ export default function App() {
   };
 
   const fetchReceiptHtml = async (scannedUrl: string) => {
+    const bareUrl = scannedUrl.replace(/^https?:\/\//i, '');
     const attempts = [
-      { label: 'direct', url: scannedUrl },
-      { label: 'allorigins', url: `https://api.allorigins.win/raw?url=${encodeURIComponent(scannedUrl)}` },
-      { label: 'corsproxy', url: `https://corsproxy.io/?${encodeURIComponent(scannedUrl)}` },
+      {
+        label: 'direct',
+        url: scannedUrl,
+        parseBody: async (resp: Response) => resp.text(),
+      },
+      {
+        label: 'allorigins_raw',
+        url: `https://api.allorigins.win/raw?url=${encodeURIComponent(scannedUrl)}`,
+        parseBody: async (resp: Response) => resp.text(),
+      },
+      {
+        label: 'allorigins_get',
+        url: `https://api.allorigins.win/get?url=${encodeURIComponent(scannedUrl)}`,
+        parseBody: async (resp: Response) => {
+          const payload = await resp.json();
+          return String(payload?.contents || '');
+        },
+      },
+      {
+        label: 'codetabs',
+        url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(scannedUrl)}`,
+        parseBody: async (resp: Response) => resp.text(),
+      },
+      {
+        label: 'jina',
+        url: `https://r.jina.ai/http://${bareUrl}`,
+        parseBody: async (resp: Response) => resp.text(),
+      },
+      {
+        label: 'corsproxy',
+        url: `https://corsproxy.io/?${encodeURIComponent(scannedUrl)}`,
+        parseBody: async (resp: Response) => resp.text(),
+      },
     ];
 
     const failures: string[] = [];
@@ -914,14 +945,16 @@ export default function App() {
         if (!pageResp.ok) {
           throw new Error(`HTTP ${pageResp.status}`);
         }
-        const html = await pageResp.text();
+        const html = await attempt.parseBody(pageResp);
         const normalizedHtml = String(html || '').toLowerCase();
         const looksLikeReceipt =
           normalizedHtml.includes('<html') ||
           normalizedHtml.includes('products-tables') ||
           normalizedHtml.includes('xarid cheki') ||
+          normalizedHtml.includes('harid cheki') ||
           normalizedHtml.includes('receipt') ||
-          normalizedHtml.includes('nomi');
+          normalizedHtml.includes('nomi') ||
+          normalizedHtml.includes('mahsulot');
         if (!html || html.length < 200 || !looksLikeReceipt) {
           throw new Error('invalid_receipt_html');
         }
