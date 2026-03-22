@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { normalizeCityName } from '../src/constants/cities.js';
-import { scrapesoliqReceipt, insertPendingPrice, fetchProductsIndex } from './utils/receipt.js';
+import { scrapesoliqReceipt, insertPendingPrice, fetchProductsIndex, normalizeSoliqUrl } from './utils/receipt.js';
 
 export const config = {
   api: {
@@ -41,11 +41,12 @@ export default async function handler(req, res) {
 
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
-    const url = String(body.url || '').trim();
+    const rawUrl = String(body.url || '').trim();
+    const url = normalizeSoliqUrl(rawUrl);
     const telegramId = String(body.telegram_id || 'anonymous');
     const selectedCity = normalizeCityName(body.city || '') || null;
 
-    if (!url || !url.includes('soliq.uz')) {
+    if (!url) {
       return ok(res, { ok: false, error: 'not_soliq_url' });
     }
 
@@ -82,7 +83,7 @@ export default async function handler(req, res) {
     const receiptData = await scrapesoliqReceipt(url);
 
     if (!receiptData || !receiptData.items || receiptData.items.length === 0) {
-      return ok(res, { ok: false, error: 'empty_receipt' });
+      return ok(res, { ok: false, error: 'scrape_failed' });
     }
 
     const products = await fetchProductsIndex(supabase);

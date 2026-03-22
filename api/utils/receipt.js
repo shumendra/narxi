@@ -3,6 +3,61 @@ import * as cheerio from 'cheerio';
 import * as fuzzball from 'fuzzball';
 import { extractCityFromAddress as extractCityFromAddressBase, normalizeCityName } from '../../src/constants/cities.js';
 
+export function extractSoliqUrlFromText(input) {
+  const raw = String(input || '').trim();
+  if (!raw) return null;
+
+  const directMatch = raw.match(/https?:\/\/[^\s"']+/i);
+  if (directMatch && /soliq\.uz/i.test(directMatch[0])) {
+    return directMatch[0];
+  }
+
+  if (/^ofd\.soliq\.uz\//i.test(raw)) {
+    return `https://${raw}`;
+  }
+
+  const tParamMatch = raw.match(/(?:^|[?&])t=([^&\s]+)/i);
+  if (tParamMatch?.[1]) {
+    return `https://ofd.soliq.uz/epi?t=${encodeURIComponent(tParamMatch[1])}`;
+  }
+
+  return null;
+}
+
+export function normalizeSoliqUrl(input) {
+  const extracted = extractSoliqUrlFromText(input);
+  if (!extracted) return null;
+
+  try {
+    const parsed = new URL(extracted);
+    if (!/soliq\.uz$/i.test(parsed.hostname) && !/\.soliq\.uz$/i.test(parsed.hostname)) {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function buildReceiptUrlCandidates(rawUrl) {
+  const normalized = normalizeSoliqUrl(rawUrl);
+  if (!normalized) return [];
+
+  const candidates = [normalized];
+  try {
+    const parsed = new URL(normalized);
+    const ticket = parsed.searchParams.get('t');
+    if (ticket) {
+      candidates.push(`https://ofd.soliq.uz/epi?t=${encodeURIComponent(ticket)}`);
+      candidates.push(`https://ofd.soliq.uz/check?t=${encodeURIComponent(ticket)}`);
+    }
+  } catch {
+    return candidates;
+  }
+
+  return [...new Set(candidates)];
+}
+
 function extractReceiptDate($) {
   const datePatterns = [
     /\b(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}:\d{2}:\d{2}))?\b/,
@@ -88,72 +143,91 @@ export function extractCityFromAddress(address) {
 }
 
 export async function scrapesoliqReceipt(url) {
-  try {
-    const { data } = await fetchWithRetry(url);
-    const $ = cheerio.load(data);
+  const candidateUrls = buildReceiptUrlCandidates(url);
+  if (candidateUrls.length === 0) {
+    return null;
+  }
 
-    const storeHeader = $('h3')
-      .filter((_, el) => $(el).text().includes('"') || $(el).text().includes('MCHJ') || $(el).text().includes('JAMIYAT'))
-      .first();
+  let lastError = null;
+  for (const candidateUrl of candidateUrls) {
+    try {
+      const { data } = await fetchWithRetry(candidateUrl);
+      const $ = cheerio.load(data);
 
-    const storeName =
-      storeHeader.text().trim() || $('h1, .company-name, b').first().text().trim() || "Noma'lum do'kon";
+      const storeHeader = $('h3')
+        .filter((_, el) => $(el).text().includes('"') || $(el).text().includes('MCHJ') || $(el).text().includes('JAMIYAT'))
+        .first();
 
-    const storeBlock = storeHeader.closest('td');
-    const storeAddress =
-      storeBlock
-        .clone()
-        .find('h3')
-        .remove()
-        .end()
-        .text()
-        .replace(/\s+/g, ' ')
-        .trim() || $('.address, .company-address').first().text().trim() || 'Toshkent sh.';
+      const storeName =
+        storeHeader.text().trim() || $('h1, .company-name, b').first().text().trim() || "Noma'lum do'kon";
 
-    const detectedCity = extractCityFromAddress(storeAddress);
-    const receiptDateRaw = extractReceiptDate($);
-    const parsedDate = receiptDateRaw ? new Date(receiptDateRaw) : null;
-    const receiptDate = parsedDate && !Number.isNaN(parsedDate.getTime())
-      ? parsedDate.toISOString()
-      : new Date().toISOString();
+      const storeBlock = storeHeader.closest('td');
+      const storeAddress =
+        storeBlock
+          .clone()
+          .find('h3')
+          .remove()
+          .end()
+          .text()
+          .replace(/\s+/g, ' ')
+          .trim() || $('.address, .company-address').first().text().trim() || 'Toshkent sh.';
 
-    const items = [];
-    const itemsTable = findItemsTable($);
-    if (itemsTable) {
-      const { table, headers } = itemsTable;
-      const nameIndex = headers.findIndex(h => h.includes('nomi'));
-      const qtyIndex = headers.findIndex(h => h.includes('soni'));
-      const priceIndex = headers.findIndex(h => h.includes('narxi'));
+      const detectedCity = extractCityFromAddress(storeAddress);
+      const receiptDateRaw = extractReceiptDate($);
+      const parsedDate = receiptDateRaw ? new Date(receiptDateRaw) : null;
+      const receiptDate = parsedDate && !Number.isNaN(parsedDate.getTime())
+        ? parsedDate.toISOString()
+        : new Date().toISOString();
 
-      const rows = $(table).find('tbody tr.products-row');
-      const targetRows = rows.length > 0 ? rows : $(table).find('tr').slice(1);
+      const items = [];
+      const itemsTable = findItemsTable($);
+      if (itemsTable) {
+        const { table, headers } = itemsTable;
+        const nameIndex = headers.findIndex(h => h.includes('nomi'));
+        const qtyIndex = headers.findIndex(h => h.includes('soni'));
+        const priceIndex = headers.findIndex(h => h.includes('narxi'));
 
-      targetRows.each((_, el) => {
-        const cols = $(el).find('td');
-        if (cols.length === 0) return;
+        const rows = $(table).find('tbody tr.products-row');
+        const targetRows = rows.length > 0 ? rows : $(table).find('tr').slice(1);
 
-        const name = $(cols[nameIndex]).text().trim();
-        const quantityStr = $(cols[qtyIndex]).text().trim().replace(',', '.');
-        const priceStr = $(cols[priceIndex]).text().trim().replace(/\s/g, '').replace(',', '.');
+        targetRows.each((_, el) => {
+          const cols = $(el).find('td');
+          if (cols.length === 0) return;
 
-        const quantity = Number.parseFloat(quantityStr) || 1;
-        const totalPrice = Number.parseFloat(priceStr) || 0;
-        const unitPrice = quantity > 0 ? Math.round(totalPrice / quantity) : totalPrice;
+          const name = $(cols[nameIndex]).text().trim();
+          const quantityStr = $(cols[qtyIndex]).text().trim().replace(',', '.');
+          const priceStr = $(cols[priceIndex]).text().trim().replace(/\s/g, '').replace(',', '.');
 
-        if (name && totalPrice > 0) {
-          items.push({ name, quantity, totalPrice, unitPrice });
-        }
-      });
+          const quantity = Number.parseFloat(quantityStr) || 1;
+          const totalPrice = Number.parseFloat(priceStr) || 0;
+          const unitPrice = quantity > 0 ? Math.round(totalPrice / quantity) : totalPrice;
+
+          if (name && totalPrice > 0) {
+            items.push({ name, quantity, totalPrice, unitPrice });
+          }
+        });
+      }
+
+      if (items.length > 0) {
+        return {
+          storeName,
+          storeAddress,
+          city: detectedCity,
+          detectedCity,
+          receiptDate,
+          items,
+        };
+      }
+    } catch (error) {
+      lastError = error;
     }
+  }
 
-    return {
-      storeName,
-      storeAddress,
-      city: detectedCity,
-      detectedCity,
-      receiptDate,
-      items,
-    };
+  try {
+    if (lastError) {
+      console.error('Soliq scrape error:', lastError);
+    }
+    return null;
   } catch (error) {
     console.error('Soliq scrape error:', error);
     return null;

@@ -772,9 +772,40 @@ export default function App() {
     setScanUrlInput('');
   };
 
+  const extractSoliqUrlFromText = (input: string) => {
+    const raw = String(input || '').trim();
+    if (!raw) return null;
+
+    const directMatch = raw.match(/https?:\/\/[^\s"']+/i);
+    if (directMatch && /soliq\.uz/i.test(directMatch[0])) {
+      return directMatch[0];
+    }
+
+    if (/^ofd\.soliq\.uz\//i.test(raw)) {
+      return `https://${raw}`;
+    }
+
+    const tParamMatch = raw.match(/(?:^|[?&])t=([^&\s]+)/i);
+    if (tParamMatch?.[1]) {
+      return `https://ofd.soliq.uz/epi?t=${encodeURIComponent(tParamMatch[1])}`;
+    }
+
+    return null;
+  };
+
+  const getScanErrorBody = (errorCode?: string) => {
+    if (errorCode === 'blocked') {
+      return 'Siz vaqtincha bloklangansiz.';
+    }
+    if (errorCode === 'scrape_failed') {
+      return "Chek topildi, lekin server uni hozir o'qiy olmadi.\nIltimos qayta urinib ko'ring yoki havolani botga yuboring.";
+    }
+    return t.scanErrorBody;
+  };
+
   const handleSoliqUrl = async (url: string) => {
-    const scannedUrl = String(url || '').trim();
-    if (!scannedUrl.includes('soliq.uz')) {
+    const scannedUrl = extractSoliqUrlFromText(url);
+    if (!scannedUrl) {
       setScanResult({ status: 'error', errorCode: 'not_soliq_url' });
       setReportEntryStep('result');
       return;
@@ -821,8 +852,8 @@ export default function App() {
     const scanner = window.Telegram?.WebApp?.showScanQrPopup;
     if (typeof scanner === 'function') {
       scanner({ text: t.scanPopupText }, (scannedText: string) => {
-        const value = String(scannedText || '');
-        if (value.includes('soliq.uz')) {
+        const value = extractSoliqUrlFromText(scannedText || '');
+        if (value) {
           window.Telegram?.WebApp?.closeScanQrPopup?.();
           handleSoliqUrl(value);
           return true;
@@ -1192,7 +1223,7 @@ export default function App() {
             {reportEntryStep === 'result' && scanResult?.status === 'error' && (
               <section className="rounded-2xl border border-rose-200 bg-rose-50 p-6 space-y-4">
                 <div className="text-xl font-bold text-rose-900">{t.scanErrorTitle}</div>
-                <div className="whitespace-pre-line text-sm text-rose-800">{t.scanErrorBody}</div>
+                <div className="whitespace-pre-line text-sm text-rose-800">{getScanErrorBody(scanResult.errorCode)}</div>
                 <div className="grid grid-cols-2 gap-2">
                   <button onClick={retryScan} className="rounded-xl bg-rose-600 px-4 py-3 text-sm font-semibold text-white">{t.retry}</button>
                   <button onClick={goToManualEntry} className="rounded-xl border border-rose-300 bg-white px-4 py-3 text-sm font-semibold text-rose-700">{t.switchManual}</button>
