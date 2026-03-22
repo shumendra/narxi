@@ -843,6 +843,31 @@ export default function App() {
     return t.scanErrorBody;
   };
 
+  const getBestEffortScanCoordinates = async () => {
+    if (reportLocation) {
+      return { latitude: reportLocation.lat, longitude: reportLocation.lng };
+    }
+
+    if (!navigator.geolocation) {
+      return { latitude: null, longitude: null };
+    }
+
+    return new Promise<{ latitude: number | null; longitude: number | null }>((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          resolve({
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+          });
+        },
+        () => {
+          resolve({ latitude: null, longitude: null });
+        },
+        { enableHighAccuracy: false, timeout: 3000, maximumAge: 600000 }
+      );
+    });
+  };
+
   const handleSoliqUrl = async (url: string) => {
     const scannedUrl = extractSoliqUrlFromText(url);
     if (!scannedUrl) {
@@ -856,6 +881,7 @@ export default function App() {
     setReportEntryStep('loading');
 
     try {
+      const coords = await getBestEffortScanCoordinates();
       const response = await fetch('/api/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -863,6 +889,8 @@ export default function App() {
           url: scannedUrl,
           telegram_id: window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || 'anonymous',
           city: selectedCity,
+          latitude: coords.latitude,
+          longitude: coords.longitude,
         }),
       });
 

@@ -292,7 +292,7 @@ function fallbackExtractItemsFromAnyThreeColumnRows($) {
   return items;
 }
 
-async function fetchWithRetry(url, attempts = 1) {
+async function fetchWithRetry(url, attempts = 3) {
   let lastError = null;
   for (let i = 0; i < attempts; i += 1) {
     try {
@@ -313,6 +313,7 @@ async function fetchWithRetry(url, attempts = 1) {
     } catch (error) {
       lastError = error;
       if (i === attempts - 1) break;
+      await new Promise(resolve => setTimeout(resolve, 500 * (i + 1)));
     }
   }
   throw lastError;
@@ -461,6 +462,8 @@ export async function insertPendingPrice({
   city,
   receiptUrl,
   products,
+  latitude = null,
+  longitude = null,
 }) {
   const productPool = products || (await fetchProductsIndex(supabase));
   const { product: bestMatch, score: highestScore } = fuzzyMatchProduct(item.name, productPool);
@@ -484,6 +487,8 @@ export async function insertPendingPrice({
     receipt_date: receiptData.receiptDate,
     source: 'soliq_qr',
     submitted_by: telegramId,
+    latitude,
+    longitude,
   };
 
   const { data, error } = await supabase
