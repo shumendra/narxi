@@ -204,7 +204,7 @@ async function approvePending(id) {
   }
 
   const unitPrice = pending.unit_price || pending.price;
-  const { error: insertError } = await supabase.from('prices').insert({
+  const pricePayload = {
     product_id: productId,
     product_name_raw: pending.product_name_raw,
     price: unitPrice,
@@ -217,9 +217,31 @@ async function approvePending(id) {
     receipt_date: pending.receipt_date,
     submitted_by: pending.submitted_by,
     source: pending.source,
-  });
+  };
 
-  if (insertError) throw insertError;
+  const { data: existingPrice, error: findExistingError } = await supabase
+    .from('prices')
+    .select('id, receipt_date')
+    .eq('product_id', productId)
+    .eq('city', city)
+    .eq('place_name', pending.place_name || null)
+    .eq('place_address', pending.place_address || null)
+    .order('receipt_date', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (findExistingError) throw findExistingError;
+
+  if (existingPrice?.id) {
+    const { error: updatePriceError } = await supabase
+      .from('prices')
+      .update(pricePayload)
+      .eq('id', existingPrice.id);
+    if (updatePriceError) throw updatePriceError;
+  } else {
+    const { error: insertError } = await supabase.from('prices').insert(pricePayload);
+    if (insertError) throw insertError;
+  }
 
   await syncProductAvailableCities(productId, city);
 

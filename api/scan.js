@@ -54,11 +54,6 @@ function buildQueuedSuccessPayload(city, receiptUrl, persisted = true) {
   };
 }
 
-function sanitizeCoordinate(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
 async function insertFallbackPendingReceipt({ supabase, telegramId, city, receiptUrl, latitude = null, longitude = null }) {
   const now = new Date().toISOString();
   const fallbackCity = normalizeCityName(city || '') || 'Tashkent';
@@ -170,8 +165,6 @@ export default async function handler(req, res) {
     const url = normalizeSoliqUrl(rawUrl);
     const telegramId = String(body.telegram_id || 'anonymous');
     const selectedCity = normalizeCityName(body.city || '') || null;
-    const latitude = sanitizeCoordinate(body.latitude);
-    const longitude = sanitizeCoordinate(body.longitude);
 
     if (!url) {
       return ok(res, { ok: false, error: 'not_soliq_url' });
@@ -209,13 +202,22 @@ export default async function handler(req, res) {
 
     let receiptData = null;
     try {
-      receiptData = await withTimeout(scrapesoliqReceipt(url), 28000);
+      receiptData = await withTimeout(scrapesoliqReceipt(url), 45000);
     } catch (error) {
       if (error?.code === 'SCAN_TIMEOUT') {
-        return ok(res, { ok: false, error: 'scan_timeout' });
+        const queued = await tryQueueWithoutParse({
+          supabase,
+          telegramId,
+          city: selectedCity,
+          receiptUrl: url,
+        });
+        return ok(res, { ok: true, ...queued, fallback_reason: 'scan_timeout' });
       }
       throw error;
     }
+
+    const receiptLatitude = Number.isFinite(Number(receiptData?.latitude)) ? Number(receiptData.latitude) : null;
+    const receiptLongitude = Number.isFinite(Number(receiptData?.longitude)) ? Number(receiptData.longitude) : null;
 
     let fallbackQueued = null;
     if (!receiptData || !receiptData.items || receiptData.items.length === 0) {
@@ -225,8 +227,8 @@ export default async function handler(req, res) {
           telegramId,
           city: selectedCity,
           receiptUrl: url,
-          latitude,
-          longitude,
+          latitude: receiptLatitude,
+          longitude: receiptLongitude,
         });
       } catch (fallbackError) {
         console.error('scan fallback insert error:', fallbackError);
@@ -257,8 +259,8 @@ export default async function handler(req, res) {
             city: selectedCity,
             receiptUrl: url,
             products,
-            latitude,
-            longitude,
+            latitude: receiptLatitude,
+            longitude: receiptLongitude,
           });
           insertResults.push(inserted);
         } catch (insertError) {
@@ -270,8 +272,8 @@ export default async function handler(req, res) {
             telegramId,
             city: selectedCity,
             receiptUrl: url,
-            latitude,
-            longitude,
+            latitude: receiptLatitude,
+            longitude: receiptLongitude,
           });
           insertResults.push(inserted);
         }
@@ -328,8 +330,6 @@ export default async function handler(req, res) {
     const url = normalizeSoliqUrl(rawUrl);
     const telegramId = String(safeBody.telegram_id || 'anonymous');
     const selectedCity = normalizeCityName(safeBody.city || '') || null;
-    const latitude = sanitizeCoordinate(safeBody.latitude);
-    const longitude = sanitizeCoordinate(safeBody.longitude);
 
     if (!url) {
       return ok(res, { ok: false, error: 'not_soliq_url' });
@@ -340,8 +340,6 @@ export default async function handler(req, res) {
       telegramId,
       city: selectedCity,
       receiptUrl: url,
-      latitude,
-      longitude,
     });
 
     return ok(res, { ok: true, ...queued, fallback_reason: 'unhandled_exception' });

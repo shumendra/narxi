@@ -148,6 +148,52 @@ function parseNumericValue(input) {
   return Number.isFinite(value) ? value : 0;
 }
 
+function tryParseCoordinatePair(latRaw, lonRaw) {
+  const latitude = Number(String(latRaw || '').replace(',', '.'));
+  const longitude = Number(String(lonRaw || '').replace(',', '.'));
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return null;
+  return { latitude, longitude };
+}
+
+function extractCoordinatesFromHtml(html, $) {
+  const candidates = [];
+
+  const patterns = [
+    /(?:latitude|lat)\s*[:=]\s*['"]?(-?\d{1,2}(?:[.,]\d+)?)['"]?[\s,;]+(?:longitude|lng|lon)\s*[:=]\s*['"]?(-?\d{1,3}(?:[.,]\d+)?)['"]?/gi,
+    /(?:longitude|lng|lon)\s*[:=]\s*['"]?(-?\d{1,3}(?:[.,]\d+)?)['"]?[\s,;]+(?:latitude|lat)\s*[:=]\s*['"]?(-?\d{1,2}(?:[.,]\d+)?)['"]?/gi,
+    /[?&](?:q|query|ll|center)=(-?\d{1,2}(?:[.,]\d+)?),(-?\d{1,3}(?:[.,]\d+)?)/gi,
+    /(-?\d{1,2}(?:[.,]\d+)?)\s*,\s*(-?\d{1,3}(?:[.,]\d+)?)/g,
+  ];
+
+  for (const pattern of patterns) {
+    let match = null;
+    while ((match = pattern.exec(html)) !== null) {
+      const pair = tryParseCoordinatePair(match[1], match[2]);
+      if (pair) candidates.push(pair);
+    }
+  }
+
+  const anchors = $('a[href*="maps"], a[href*="google"], a[href*="yandex"], a[href*="2gis"], a[href*="geo"], a[href*="q="]');
+  anchors.each((_, el) => {
+    const href = $(el).attr('href') || '';
+    const match = href.match(/(-?\d{1,2}(?:[.,]\d+)?)\s*,\s*(-?\d{1,3}(?:[.,]\d+)?)/);
+    if (!match) return;
+    const pair = tryParseCoordinatePair(match[1], match[2]);
+    if (pair) candidates.push(pair);
+  });
+
+  const uzbekBounds = { minLat: 36, maxLat: 46, minLon: 55, maxLon: 75 };
+  const best = candidates.find(point => (
+    point.latitude >= uzbekBounds.minLat
+    && point.latitude <= uzbekBounds.maxLat
+    && point.longitude >= uzbekBounds.minLon
+    && point.longitude <= uzbekBounds.maxLon
+  ));
+
+  return best || null;
+}
+
 function fallbackExtractItems($) {
   const items = [];
   const rows = $('table tr').slice(1);
@@ -346,6 +392,7 @@ function parseReceiptFromHtml(html) {
   const receiptDate = parsedDate && !Number.isNaN(parsedDate.getTime())
     ? parsedDate.toISOString()
     : new Date().toISOString();
+  const coordinates = extractCoordinatesFromHtml(html, $);
 
   const items = [];
   const itemsTable = findItemsTable($);
@@ -395,6 +442,8 @@ function parseReceiptFromHtml(html) {
     storeAddress,
     city: detectedCity,
     detectedCity,
+    latitude: coordinates?.latitude ?? null,
+    longitude: coordinates?.longitude ?? null,
     receiptDate,
     items,
   };
