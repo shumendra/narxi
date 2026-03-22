@@ -69,6 +69,7 @@ async function insertFallbackPendingReceipt({
   const fallbackStoreName = String(receiptData?.storeName || 'Soliq receipt (parse review)').trim();
   const fallbackStoreAddress = String(receiptData?.storeAddress || '').trim() || null;
 
+  const parseStageSuffix = String(receiptData?.parseStage || 'unknown').replace(/[^a-z0-9_]+/gi, '_').toLowerCase();
   const payload = {
     product_name_raw: 'RECEIPT_PARSE_REVIEW',
     product_id: null,
@@ -82,7 +83,7 @@ async function insertFallbackPendingReceipt({
     place_address: fallbackStoreAddress,
     receipt_url: receiptUrl,
     receipt_date: receiptData?.receiptDate || now,
-    source: 'soliq_qr_unparsed',
+    source: `soliq_qr_unparsed_${parseStageSuffix}`,
     submitted_by: telegramId,
     latitude,
     longitude,
@@ -144,6 +145,7 @@ async function insertPendingPriceWithoutMatch({
   const parsedCity = normalizeCityName(receiptData?.city || '');
   const finalCity = parsedCity || selectedCity || 'Tashkent';
 
+  const parseStageSuffix = String(receiptData?.parseStage || 'unknown').replace(/[^a-z0-9_]+/gi, '_').toLowerCase();
   const payload = {
     product_name_raw: item?.name || 'Unknown item',
     product_id: null,
@@ -157,7 +159,7 @@ async function insertPendingPriceWithoutMatch({
     place_address: receiptData?.storeAddress || null,
     receipt_url: receiptUrl,
     receipt_date: receiptData?.receiptDate || new Date().toISOString(),
-    source: 'soliq_qr',
+    source: `soliq_qr_${parseStageSuffix}`,
     submitted_by: telegramId,
     latitude,
     longitude,
@@ -287,6 +289,7 @@ export default async function handler(req, res) {
             products,
             latitude: receiptLatitude,
             longitude: receiptLongitude,
+            source: `soliq_qr_${String(receiptData?.parseStage || 'unknown').replace(/[^a-z0-9_]+/gi, '_').toLowerCase()}`,
           });
           insertResults.push(inserted);
         } catch (insertError) {

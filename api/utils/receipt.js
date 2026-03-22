@@ -496,6 +496,7 @@ function parseReceiptFromHtml(html) {
   const coordinates = extractCoordinatesFromHtml(html, $);
 
   const items = [];
+  let parseStage = null;
   const itemsTable = findItemsTable($);
   if (itemsTable) {
     const { table, headers } = itemsTable;
@@ -520,26 +521,48 @@ function parseReceiptFromHtml(html) {
         items.push({ name, quantity, totalPrice, unitPrice });
       }
     });
+    if (items.length > 0) {
+      parseStage = 'table';
+    }
   }
 
   if (items.length === 0) {
     items.push(...fallbackExtractItems($));
+    if (items.length > 0) {
+      parseStage = 'generic_table';
+    }
   }
 
   if (items.length === 0) {
     items.push(...fallbackExtractItemsFromScripts($));
+    if (items.length > 0) {
+      parseStage = 'script_regex';
+    }
   }
 
   if (items.length === 0) {
     items.push(...fallbackExtractItemsFromJsonScripts($));
+    if (items.length > 0) {
+      parseStage = 'script_json';
+    }
   }
 
   if (items.length === 0) {
     items.push(...fallbackExtractItemsFromProductBlocks($));
+    if (items.length > 0) {
+      parseStage = 'product_blocks';
+    }
   }
 
   if (items.length === 0) {
     items.push(...fallbackExtractItemsFromAnyThreeColumnRows($));
+    if (items.length > 0) {
+      parseStage = 'three_columns';
+    }
+  }
+
+  if (!parseStage) {
+    parseStage = 'metadata_only';
   }
 
   return {
@@ -550,6 +573,7 @@ function parseReceiptFromHtml(html) {
     latitude: coordinates?.latitude ?? null,
     longitude: coordinates?.longitude ?? null,
     totalAmount,
+    parseStage,
     receiptDate,
     items,
   };
@@ -616,6 +640,7 @@ export async function insertPendingPrice({
   city,
   receiptUrl,
   products,
+  source = 'soliq_qr',
   latitude = null,
   longitude = null,
 }) {
@@ -639,7 +664,7 @@ export async function insertPendingPrice({
     place_address: receiptData.storeAddress,
     receipt_url: receiptUrl,
     receipt_date: receiptData.receiptDate,
-    source: 'soliq_qr',
+    source,
     submitted_by: telegramId,
     latitude,
     longitude,
