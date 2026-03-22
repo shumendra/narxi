@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import axios from 'axios';
 import { normalizeCityName } from '../src/constants/cities.js';
 import {
   parseReceiptHtml,
@@ -31,32 +32,91 @@ function ok(res, payload) {
   return res.status(200).json(payload);
 }
 
-async function fetchReceiptHtml(url) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 20000);
+function canonicalReceiptUrl(input) {
+  const normalized = normalizeSoliqUrl(input);
+  if (!normalized) return null;
 
   try {
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'ru-RU,ru;q=0.9,uz-UZ;q=0.8,uz;q=0.7',
-        'Accept-Encoding': 'gzip, deflate, br',
-        Connection: 'keep-alive',
-        Referer: 'https://ofd.soliq.uz/',
-        'Cache-Control': 'no-cache',
-      },
-    });
+    const parsed = new URL(normalized);
+    const ticket = parsed.searchParams.get('t');
+    if (!ticket) return normalized;
 
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
+    const canonical = new URL('https://ofd.soliq.uz/check');
+    canonical.searchParams.set('t', ticket);
 
-    return await response.text();
-  } finally {
-    clearTimeout(timeout);
+    const r = parsed.searchParams.get('r');
+    const c = parsed.searchParams.get('c');
+    const s = parsed.searchParams.get('s');
+    if (r) canonical.searchParams.set('r', r);
+    if (c) canonical.searchParams.set('c', c);
+    if (s) canonical.searchParams.set('s', s);
+
+    return canonical.toString();
+  } catch {
+    return normalized;
   }
+}
+
+async function fetchReceiptHtml(url) {
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'ru-RU,ru;q=0.9,uz-UZ;q=0.8,uz;q=0.7',
+    'Accept-Encoding': 'gzip, deflate, br',
+    Connection: 'keep-alive',
+    Referer: 'https://ofd.soliq.uz/',
+    'Cache-Control': 'no-cache',
+  };
+
+  const attempts = 3;
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
+
+    try {
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers,
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const html = await response.text();
+      if (html && html.length > 0) {
+        return html;
+      }
+
+      throw new Error('EMPTY_HTML');
+    } catch (error) {
+      lastError = error;
+      try {
+        const response = await axios.get(url, {
+          timeout: 30000,
+          maxRedirects: 5,
+          validateStatus: (status) => status >= 200 && status < 400,
+          headers,
+        });
+        const html = String(response.data || '');
+        if (html) {
+          return html;
+        }
+      } catch (axiosError) {
+        lastError = axiosError;
+      }
+
+      if (attempt < attempts) {
+        await new Promise(resolve => setTimeout(resolve, attempt * 1500));
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  throw lastError || new Error('FETCH_FAILED');
 }
 
 async function insertPendingPriceWithoutMatch({
@@ -114,8 +174,7 @@ export default async function handler(req, res) {
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
     const rawUrl = String(body.url || '').trim();
-    const normalizedUrl = normalizeSoliqUrl(rawUrl);
-    const url = normalizedUrl || rawUrl;
+    const url = canonicalReceiptUrl(rawUrl) || rawUrl;
     const telegramId = String(body.telegram_id || 'anonymous');
     const selectedCity = normalizeCityName(body.city || '') || null;
 
