@@ -138,6 +138,86 @@ async function fetchWithRetry(url, attempts = 1) {
   throw lastError;
 }
 
+function parseReceiptFromHtml(html) {
+  const $ = cheerio.load(html);
+
+  const storeHeader = $('h3')
+    .filter((_, el) => $(el).text().includes('"') || $(el).text().includes('MCHJ') || $(el).text().includes('JAMIYAT'))
+    .first();
+
+  const storeName =
+    storeHeader.text().trim() || $('h1, .company-name, b').first().text().trim() || "Noma'lum do'kon";
+
+  const storeBlock = storeHeader.closest('td');
+  const storeAddress =
+    storeBlock
+      .clone()
+      .find('h3')
+      .remove()
+      .end()
+      .text()
+      .replace(/\s+/g, ' ')
+      .trim() || $('.address, .company-address').first().text().trim() || 'Toshkent sh.';
+
+  const detectedCity = extractCityFromAddress(storeAddress);
+  const receiptDateRaw = extractReceiptDate($);
+  const parsedDate = receiptDateRaw ? new Date(receiptDateRaw) : null;
+  const receiptDate = parsedDate && !Number.isNaN(parsedDate.getTime())
+    ? parsedDate.toISOString()
+    : new Date().toISOString();
+
+  const items = [];
+  const itemsTable = findItemsTable($);
+  if (itemsTable) {
+    const { table, headers } = itemsTable;
+    const nameIndex = headers.findIndex(h => h.includes('nomi'));
+    const qtyIndex = headers.findIndex(h => h.includes('soni'));
+    const priceIndex = headers.findIndex(h => h.includes('narxi'));
+
+    const rows = $(table).find('tbody tr.products-row');
+    const targetRows = rows.length > 0 ? rows : $(table).find('tr').slice(1);
+
+    targetRows.each((_, el) => {
+      const cols = $(el).find('td');
+      if (cols.length === 0) return;
+
+      const name = $(cols[nameIndex]).text().trim();
+      const quantityStr = $(cols[qtyIndex]).text().trim().replace(',', '.');
+      const priceStr = $(cols[priceIndex]).text().trim().replace(/\s/g, '').replace(',', '.');
+
+      const quantity = Number.parseFloat(quantityStr) || 1;
+      const totalPrice = Number.parseFloat(priceStr) || 0;
+      const unitPrice = quantity > 0 ? Math.round(totalPrice / quantity) : totalPrice;
+
+      if (name && totalPrice > 0) {
+        items.push({ name, quantity, totalPrice, unitPrice });
+      }
+    });
+  }
+
+  return {
+    storeName,
+    storeAddress,
+    city: detectedCity,
+    detectedCity,
+    receiptDate,
+    items,
+  };
+}
+
+async function scrapeCandidateUrl(candidateUrl) {
+  try {
+    const { data } = await fetchWithRetry(candidateUrl);
+    const parsed = parseReceiptFromHtml(data);
+    if (parsed.items.length === 0) {
+      return null;
+    }
+    return parsed;
+  } catch (error) {
+    return null;
+  }
+}
+
 export function extractCityFromAddress(address) {
   return extractCityFromAddressBase(address || '');
 }
@@ -148,90 +228,9 @@ export async function scrapesoliqReceipt(url) {
     return null;
   }
 
-  let lastError = null;
-  for (const candidateUrl of candidateUrls) {
-    try {
-      const { data } = await fetchWithRetry(candidateUrl);
-      const $ = cheerio.load(data);
-
-      const storeHeader = $('h3')
-        .filter((_, el) => $(el).text().includes('"') || $(el).text().includes('MCHJ') || $(el).text().includes('JAMIYAT'))
-        .first();
-
-      const storeName =
-        storeHeader.text().trim() || $('h1, .company-name, b').first().text().trim() || "Noma'lum do'kon";
-
-      const storeBlock = storeHeader.closest('td');
-      const storeAddress =
-        storeBlock
-          .clone()
-          .find('h3')
-          .remove()
-          .end()
-          .text()
-          .replace(/\s+/g, ' ')
-          .trim() || $('.address, .company-address').first().text().trim() || 'Toshkent sh.';
-
-      const detectedCity = extractCityFromAddress(storeAddress);
-      const receiptDateRaw = extractReceiptDate($);
-      const parsedDate = receiptDateRaw ? new Date(receiptDateRaw) : null;
-      const receiptDate = parsedDate && !Number.isNaN(parsedDate.getTime())
-        ? parsedDate.toISOString()
-        : new Date().toISOString();
-
-      const items = [];
-      const itemsTable = findItemsTable($);
-      if (itemsTable) {
-        const { table, headers } = itemsTable;
-        const nameIndex = headers.findIndex(h => h.includes('nomi'));
-        const qtyIndex = headers.findIndex(h => h.includes('soni'));
-        const priceIndex = headers.findIndex(h => h.includes('narxi'));
-
-        const rows = $(table).find('tbody tr.products-row');
-        const targetRows = rows.length > 0 ? rows : $(table).find('tr').slice(1);
-
-        targetRows.each((_, el) => {
-          const cols = $(el).find('td');
-          if (cols.length === 0) return;
-
-          const name = $(cols[nameIndex]).text().trim();
-          const quantityStr = $(cols[qtyIndex]).text().trim().replace(',', '.');
-          const priceStr = $(cols[priceIndex]).text().trim().replace(/\s/g, '').replace(',', '.');
-
-          const quantity = Number.parseFloat(quantityStr) || 1;
-          const totalPrice = Number.parseFloat(priceStr) || 0;
-          const unitPrice = quantity > 0 ? Math.round(totalPrice / quantity) : totalPrice;
-
-          if (name && totalPrice > 0) {
-            items.push({ name, quantity, totalPrice, unitPrice });
-          }
-        });
-      }
-
-      if (items.length > 0) {
-        return {
-          storeName,
-          storeAddress,
-          city: detectedCity,
-          detectedCity,
-          receiptDate,
-          items,
-        };
-      }
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  try {
-    if (lastError) {
-      console.error('Soliq scrape error:', lastError);
-    }
-    return null;
-  } catch (error) {
-    console.error('Soliq scrape error:', error);
-    return null;
-  }
+  const results = await Promise.all(candidateUrls.map(candidateUrl => scrapeCandidateUrl(candidateUrl)));
+  const success = results.find(result => result && Array.isArray(result.items) && result.items.length > 0);
+  return success || null;
 }
 
 export async function fetchProductsIndex(supabase) {

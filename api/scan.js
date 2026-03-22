@@ -99,7 +99,7 @@ export default async function handler(req, res) {
 
     let receiptData = null;
     try {
-      receiptData = await withTimeout(scrapesoliqReceipt(url), 16000);
+      receiptData = await withTimeout(scrapesoliqReceipt(url), 28000);
     } catch (error) {
       if (error?.code === 'SCAN_TIMEOUT') {
         return ok(res, { ok: false, error: 'scan_timeout' });
