@@ -170,6 +170,8 @@ export default function App() {
         scanErrorTimeout: "Serverdan javob kutish vaqti tugadi.\nIltimos yana urinib ko'ring.",
         scanErrorGenerating: "Chek hali tayyorlanmoqda.\n1-2 daqiqadan so'ng qayta urinib ko'ring.",
         scanErrorNetwork: 'Tarmoq xatosi yuz berdi. Internetni tekshirib qayta urinib ko‘ring.',
+        scanFetchingPage: 'Chek sahifasi yuklanmoqda...',
+        scanBrowserFetchFailed: "Chek sahifasini yuklab bo‘lmadi.\nIltimos internetni tekshiring va qayta urinib ko'ring.",
         scanAgain: 'Yana skanerlash',
         goHome: 'Bosh sahifaga',
         retry: 'Qayta urinish',
@@ -256,6 +258,8 @@ export default function App() {
         scanErrorTimeout: 'Истекло время ожидания ответа сервера.\nПопробуйте снова.',
         scanErrorGenerating: 'Чек ещё формируется.\nПовторите через 1-2 минуты.',
         scanErrorNetwork: 'Сетевая ошибка. Проверьте интернет и повторите попытку.',
+        scanFetchingPage: 'Загрузка страницы чека...',
+        scanBrowserFetchFailed: 'Не удалось загрузить страницу чека.\nПроверьте интернет и попробуйте снова.',
         scanAgain: 'Сканировать снова',
         goHome: 'На главную',
         retry: 'Повторить',
@@ -342,6 +346,8 @@ export default function App() {
         scanErrorTimeout: 'Server response timed out.\nPlease try again.',
         scanErrorGenerating: 'Receipt is still being generated.\nPlease try again in 1-2 minutes.',
         scanErrorNetwork: 'Network error. Check internet connection and try again.',
+        scanFetchingPage: 'Loading receipt page...',
+        scanBrowserFetchFailed: 'Could not load the receipt page.\nPlease check your internet and try again.',
         scanAgain: 'Scan again',
         goHome: 'Home',
         retry: 'Retry',
@@ -403,6 +409,7 @@ export default function App() {
     itemCount?: number;
     queuedWithoutParse?: boolean;
     errorCode?: string;
+    debugDetail?: string;
   } | null>(null);
 
   useEffect(() => {
@@ -878,7 +885,86 @@ export default function App() {
     if (errorCode === 'network_error') {
       return t.scanErrorNetwork;
     }
+    if (errorCode === 'browser_fetch_failed') {
+      return t.scanBrowserFetchFailed;
+    }
     return t.scanErrorBody;
+  };
+
+  const formatErrorDetail = (error: unknown) => {
+    if (error instanceof Error) {
+      return String(error.message || 'unknown').slice(0, 220);
+    }
+    return 'unknown';
+  };
+
+  const fetchReceiptHtml = async (scannedUrl: string) => {
+    const bareUrl = scannedUrl.replace(/^https?:\/\//i, '');
+    const attempts = [
+      {
+        label: 'direct',
+        url: scannedUrl,
+        parseBody: async (resp: Response) => resp.text(),
+      },
+      {
+        label: 'allorigins_raw',
+        url: `https://api.allorigins.win/raw?url=${encodeURIComponent(scannedUrl)}`,
+        parseBody: async (resp: Response) => resp.text(),
+      },
+      {
+        label: 'allorigins_get',
+        url: `https://api.allorigins.win/get?url=${encodeURIComponent(scannedUrl)}`,
+        parseBody: async (resp: Response) => {
+          const payload = await resp.json();
+          return String(payload?.contents || '');
+        },
+      },
+      {
+        label: 'codetabs',
+        url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(scannedUrl)}`,
+        parseBody: async (resp: Response) => resp.text(),
+      },
+      {
+        label: 'jina',
+        url: `https://r.jina.ai/http://${bareUrl}`,
+        parseBody: async (resp: Response) => resp.text(),
+      },
+      {
+        label: 'corsproxy',
+        url: `https://corsproxy.io/?${encodeURIComponent(scannedUrl)}`,
+        parseBody: async (resp: Response) => resp.text(),
+      },
+    ];
+
+    const failures: string[] = [];
+    for (const attempt of attempts) {
+      try {
+        const pageResp = await fetch(attempt.url, {
+          headers: { Accept: 'text/html,application/xhtml+xml' },
+        });
+        if (!pageResp.ok) {
+          throw new Error(`HTTP ${pageResp.status}`);
+        }
+        const html = await attempt.parseBody(pageResp);
+        const normalizedHtml = String(html || '').toLowerCase();
+        const looksLikeReceipt =
+          normalizedHtml.includes('<html') ||
+          normalizedHtml.includes('products-tables') ||
+          normalizedHtml.includes('xarid cheki') ||
+          normalizedHtml.includes('harid cheki') ||
+          normalizedHtml.includes('receipt') ||
+          normalizedHtml.includes('nomi') ||
+          normalizedHtml.includes('mahsulot');
+        if (!html || html.length < 200 || !looksLikeReceipt) {
+          throw new Error('invalid_receipt_html');
+        }
+        return html;
+      } catch (error) {
+        failures.push(`${attempt.label}:${formatErrorDetail(error)}`);
+      }
+    }
+
+    throw new Error(failures.join(' | ') || 'browser_fetch_failed');
   };
 
   const handleSoliqUrl = async (url: string) => {
@@ -893,11 +979,25 @@ export default function App() {
     setScanResult(null);
     setReportEntryStep('loading');
 
+    let html: string;
+    try {
+      html = await fetchReceiptHtml(scannedUrl);
+    } catch (error) {
+      setScanResult({
+        status: 'error',
+        errorCode: 'browser_fetch_failed',
+        debugDetail: formatErrorDetail(error),
+      });
+      setReportEntryStep('result');
+      return;
+    }
+
     try {
       const response = await fetch('/api/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          html,
           url: scannedUrl,
           telegram_id: window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || 'anonymous',
           city: selectedCity,
@@ -913,15 +1013,18 @@ export default function App() {
           storeAddress: result.store_address,
           city: result.city,
           itemCount: result.item_count,
-          queuedWithoutParse: Boolean(result.queued_without_parse),
         });
       } else if (result?.error === 'duplicate') {
         setScanResult({ status: 'duplicate', errorCode: 'duplicate' });
       } else {
         setScanResult({ status: 'error', errorCode: result?.error || 'scan_failed' });
       }
-    } catch {
-      setScanResult({ status: 'error', errorCode: 'network_error' });
+    } catch (error) {
+      setScanResult({
+        status: 'error',
+        errorCode: 'network_error',
+        debugDetail: `api_scan:${formatErrorDetail(error)}`,
+      });
     } finally {
       setReportEntryStep('result');
     }
@@ -1310,6 +1413,9 @@ export default function App() {
                 <div className="whitespace-pre-line text-sm text-rose-800">{getScanErrorBody(scanResult.errorCode)}</div>
                 {scanResult.errorCode && (
                   <div className="text-xs text-rose-700/80">Code: {scanResult.errorCode}</div>
+                )}
+                {scanResult.debugDetail && (
+                  <div className="text-[11px] break-all text-rose-700/80">Debug: {scanResult.debugDetail}</div>
                 )}
                 <div className="grid grid-cols-2 gap-2">
                   <button onClick={retryScan} className="rounded-xl bg-rose-600 px-4 py-3 text-sm font-semibold text-white">{t.retry}</button>
