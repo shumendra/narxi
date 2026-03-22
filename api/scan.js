@@ -13,6 +13,23 @@ const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL ||
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
 const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
 
+async function withTimeout(promise, timeoutMs) {
+  let timeoutHandle;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutHandle = setTimeout(() => {
+      const timeoutError = new Error('SCAN_TIMEOUT');
+      timeoutError.code = 'SCAN_TIMEOUT';
+      reject(timeoutError);
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+}
+
 function withCors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -80,7 +97,15 @@ export default async function handler(req, res) {
       return ok(res, { ok: false, error: 'duplicate', message: 'Bu chek avval yuborilgan edi' });
     }
 
-    const receiptData = await scrapesoliqReceipt(url);
+    let receiptData = null;
+    try {
+      receiptData = await withTimeout(scrapesoliqReceipt(url), 16000);
+    } catch (error) {
+      if (error?.code === 'SCAN_TIMEOUT') {
+        return ok(res, { ok: false, error: 'scan_timeout' });
+      }
+      throw error;
+    }
 
     if (!receiptData || !receiptData.items || receiptData.items.length === 0) {
       return ok(res, { ok: false, error: 'scrape_failed' });

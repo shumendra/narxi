@@ -160,6 +160,11 @@ export default function App() {
         scanDuplicateTitle: 'ℹ️ Bu chek avval yuborilgan',
         scanErrorTitle: "❌ Chekni o'qishda xatolik",
         scanErrorBody: 'QR kod soliq.uz ga tegishli emas\nyoki server xatosi yuz berdi.',
+        scanErrorNotSoliq: 'QR kod soliq.uz havolasiga mos kelmadi.',
+        scanErrorBlocked: 'Siz vaqtincha bloklangansiz.',
+        scanErrorScrape: "Chek topildi, lekin server uni hozir o'qiy olmadi.\nIltimos qayta urinib ko'ring yoki havolani botga yuboring.",
+        scanErrorTimeout: "Serverdan javob kutish vaqti tugadi.\nIltimos yana urinib ko'ring.",
+        scanErrorNetwork: 'Tarmoq xatosi yuz berdi. Internetni tekshirib qayta urinib ko‘ring.',
         scanAgain: 'Yana skanerlash',
         goHome: 'Bosh sahifaga',
         retry: 'Qayta urinish',
@@ -236,6 +241,11 @@ export default function App() {
         scanDuplicateTitle: 'ℹ️ Этот чек уже отправляли',
         scanErrorTitle: '❌ Ошибка чтения чека',
         scanErrorBody: 'QR код не относится к soliq.uz\nили произошла ошибка сервера.',
+        scanErrorNotSoliq: 'QR код не содержит корректную ссылку soliq.uz.',
+        scanErrorBlocked: 'Вы временно заблокированы.',
+        scanErrorScrape: 'Чек найден, но сервер пока не смог его прочитать.\nПовторите попытку или отправьте ссылку боту.',
+        scanErrorTimeout: 'Истекло время ожидания ответа сервера.\nПопробуйте снова.',
+        scanErrorNetwork: 'Сетевая ошибка. Проверьте интернет и повторите попытку.',
         scanAgain: 'Сканировать снова',
         goHome: 'На главную',
         retry: 'Повторить',
@@ -312,6 +322,11 @@ export default function App() {
         scanDuplicateTitle: 'ℹ️ This receipt was already submitted',
         scanErrorTitle: '❌ Receipt read error',
         scanErrorBody: 'QR code is not a soliq.uz link\nor a server error occurred.',
+        scanErrorNotSoliq: 'QR code does not contain a valid soliq.uz URL.',
+        scanErrorBlocked: 'You are temporarily blocked.',
+        scanErrorScrape: 'Receipt was detected, but the server could not read it right now.\nTry again or send the link to the bot.',
+        scanErrorTimeout: 'Server response timed out.\nPlease try again.',
+        scanErrorNetwork: 'Network error. Check internet connection and try again.',
         scanAgain: 'Scan again',
         goHome: 'Home',
         retry: 'Retry',
@@ -794,11 +809,20 @@ export default function App() {
   };
 
   const getScanErrorBody = (errorCode?: string) => {
+    if (errorCode === 'not_soliq_url') {
+      return t.scanErrorNotSoliq;
+    }
     if (errorCode === 'blocked') {
-      return 'Siz vaqtincha bloklangansiz.';
+      return t.scanErrorBlocked;
+    }
+    if (errorCode === 'scan_timeout') {
+      return t.scanErrorTimeout;
     }
     if (errorCode === 'scrape_failed') {
-      return "Chek topildi, lekin server uni hozir o'qiy olmadi.\nIltimos qayta urinib ko'ring yoki havolani botga yuboring.";
+      return t.scanErrorScrape;
+    }
+    if (errorCode === 'network_error') {
+      return t.scanErrorNetwork;
     }
     return t.scanErrorBody;
   };
@@ -1224,6 +1248,9 @@ export default function App() {
               <section className="rounded-2xl border border-rose-200 bg-rose-50 p-6 space-y-4">
                 <div className="text-xl font-bold text-rose-900">{t.scanErrorTitle}</div>
                 <div className="whitespace-pre-line text-sm text-rose-800">{getScanErrorBody(scanResult.errorCode)}</div>
+                {scanResult.errorCode && (
+                  <div className="text-xs text-rose-700/80">Code: {scanResult.errorCode}</div>
+                )}
                 <div className="grid grid-cols-2 gap-2">
                   <button onClick={retryScan} className="rounded-xl bg-rose-600 px-4 py-3 text-sm font-semibold text-white">{t.retry}</button>
                   <button onClick={goToManualEntry} className="rounded-xl border border-rose-300 bg-white px-4 py-3 text-sm font-semibold text-rose-700">{t.switchManual}</button>

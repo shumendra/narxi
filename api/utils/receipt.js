@@ -118,7 +118,7 @@ function findItemsTable($) {
   return null;
 }
 
-async function fetchWithRetry(url, attempts = 2) {
+async function fetchWithRetry(url, attempts = 1) {
   let lastError = null;
   for (let i = 0; i < attempts; i += 1) {
     try {
