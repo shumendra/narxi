@@ -174,8 +174,8 @@ export default function App() {
         scanErrorTimeout: "Serverdan javob kutish vaqti tugadi.\nIltimos yana urinib ko'ring.",
         scanErrorGenerating: "Chek hali tayyorlanmoqda.\n1-2 daqiqadan so'ng qayta urinib ko'ring.",
         scanErrorNetwork: 'Tarmoq xatosi yuz berdi. Internetni tekshirib qayta urinib ko‘ring.',
-        scanManualTitle: '🔗 Chekni qo‘lda oching',
-        scanManualBody: 'Chek real brauzer reader sahifasida ochiladi. U yerda extraction qilib yuboring, so‘ng mini app ga qayting.',
+        scanManualTitle: '🔗 3 qadam bilan yuborish',
+        scanManualBody: '1) Readerni oching. 2) JS ni nusxalab chek sahifasida ishga tushiring. 3) JSON ni yuboring.',
         scanManualPasteAction: 'Page source kiritish',
         scanManualExtract: 'Source dan ajratish',
         scanManualExtracting: 'Source ajratilmoqda...',
@@ -290,8 +290,8 @@ export default function App() {
         scanErrorTimeout: 'Истекло время ожидания ответа сервера.\nПопробуйте снова.',
         scanErrorGenerating: 'Чек ещё формируется.\nПовторите через 1-2 минуты.',
         scanErrorNetwork: 'Сетевая ошибка. Проверьте интернет и повторите попытку.',
-        scanManualTitle: '🔗 Откройте чек вручную',
-        scanManualBody: 'Чек откроется в reader-странице реального браузера. Выполните извлечение и отправку там, затем вернитесь в мини‑приложение.',
+        scanManualTitle: '🔗 Отправка в 3 шага',
+        scanManualBody: '1) Откройте Reader. 2) Скопируйте JS и запустите его на странице чека. 3) Отправьте JSON.',
         scanManualPasteAction: 'Вставить page source',
         scanManualExtract: 'Извлечь из source',
         scanManualExtracting: 'Извлечение из source...',
@@ -406,8 +406,8 @@ export default function App() {
         scanErrorTimeout: 'Server response timed out.\nPlease try again.',
         scanErrorGenerating: 'Receipt is still being generated.\nPlease try again in 1-2 minutes.',
         scanErrorNetwork: 'Network error. Check internet connection and try again.',
-        scanManualTitle: '🔗 Open receipt manually',
-        scanManualBody: 'The receipt opens in a real-browser reader page. Extract and submit there, then return to the Mini App.',
+        scanManualTitle: '🔗 Submit in 3 steps',
+        scanManualBody: '1) Open Reader. 2) Copy JS and run it on the receipt page. 3) Submit JSON.',
         scanManualPasteAction: 'Paste page source',
         scanManualExtract: 'Extract from source',
         scanManualExtracting: 'Extracting from source...',
@@ -1863,105 +1863,20 @@ export default function App() {
               <section className="rounded-2xl border border-amber-200 bg-amber-50 p-6 space-y-4">
                 <div className="text-xl font-bold text-amber-900">{t.scanManualTitle}</div>
                 <div className="text-sm text-amber-800">{t.scanManualBody}</div>
-                <div className="space-y-2">
-                  <button onClick={openReaderPage} className="w-full rounded-xl bg-amber-600 px-4 py-3 text-sm font-semibold text-white">{t.openReceiptLink}</button>
-                  <button
-                    onClick={openSourceInMiniWindow}
-                    disabled={loadingMiniWindowSource}
-                    className="w-full rounded-xl border border-amber-300 bg-white px-4 py-3 text-sm font-semibold text-amber-800 disabled:opacity-50"
-                  >
-                    {loadingMiniWindowSource ? t.miniWindowLoadingSource : t.miniWindowOpenSource}
-                  </button>
-                  <button
-                    onClick={copyMiniWindowSource}
-                    disabled={!miniWindowSourceHtml}
-                    className="w-full rounded-xl border border-amber-300 bg-white px-4 py-3 text-sm font-semibold text-amber-800 disabled:opacity-50"
-                  >
-                    {t.miniWindowCopySource}
-                  </button>
-                  <button
-                    onClick={copyMiniWindowPageContent}
-                    className="w-full rounded-xl border border-amber-300 bg-white px-4 py-3 text-sm font-semibold text-amber-800"
-                  >
-                    {t.miniWindowCopyContent}
-                  </button>
-                  <button
-                    onClick={copyBrowserExtractorScript}
-                    className="w-full rounded-xl border border-amber-300 bg-white px-4 py-3 text-sm font-semibold text-amber-800"
-                  >
-                    {t.browserJsCopy}
-                  </button>
+                <div className="rounded-xl border border-amber-200 bg-white p-4 text-sm text-amber-900">
+                  <div>1) {t.openReceiptLink}</div>
+                  <div className="mt-1">2) {t.browserJsCopy}</div>
+                  <div className="mt-1">3) {t.browserJsonSubmit}</div>
                 </div>
 
-                <div className="rounded-xl border border-amber-200 bg-white p-3">
-                  <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-amber-700">{t.miniWindowTitle}</div>
-                  <div className="h-64 overflow-hidden rounded-lg border border-stone-200 bg-stone-50">
-                    {miniWindowMode === 'receipt' && miniWindowReceiptUrl ? (
-                      <iframe
-                        ref={miniWindowIframeRef}
-                        title="receipt-mini-window"
-                        src={miniWindowReceiptUrl}
-                        className="h-full w-full border-0"
-                        sandbox="allow-scripts allow-forms allow-same-origin allow-popups"
-                        referrerPolicy="no-referrer"
-                      />
-                    ) : miniWindowMode === 'source' && miniWindowSourceHtml ? (
-                      <iframe
-                        title="source-mini-window"
-                        srcDoc={`<pre style=\"white-space:pre-wrap;word-break:break-word;padding:12px;font-family:monospace;font-size:12px;\">${escapeHtmlForPreview(miniWindowSourceHtml)}</pre>`}
-                        className="h-full w-full border-0"
-                      />
-                    ) : (
-                      <div className="flex h-full items-center justify-center px-4 text-center text-xs text-stone-500">{t.miniWindowEmpty}</div>
-                    )}
-                  </div>
-                </div>
-
-                <button
-                  onClick={openReceiptLink}
-                  className="w-full rounded-xl border border-amber-300 bg-white px-4 py-3 text-sm font-semibold text-amber-800"
-                >
-                  {t.openReceiptLink}
-                </button>
-
-                <div className="space-y-3">
-                  <textarea
-                    value={pageSourceHtml}
-                    onChange={(e) => setPageSourceHtml(e.target.value)}
-                    placeholder={t.scanManualSourcePlaceholder}
-                    className="h-44 w-full rounded-xl border border-amber-200 bg-white px-3 py-3 text-xs text-stone-800"
-                  />
-                  <button
-                    onClick={extractFromPageSource}
-                    disabled={!pageSourceHtml.trim() || extractingFromSource}
-                    className="w-full rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
-                  >
-                    {extractingFromSource ? t.scanManualExtracting : t.scanManualExtract}
-                  </button>
-                </div>
-
-                <div className="space-y-3">
-                  <textarea
-                    value={browserExtractedJson}
-                    onChange={(e) => setBrowserExtractedJson(e.target.value)}
-                    placeholder={t.browserJsonPlaceholder}
-                    className="h-44 w-full rounded-xl border border-amber-200 bg-white px-3 py-3 text-xs text-stone-800"
-                  />
-                  <button
-                    onClick={submitExtractedJson}
-                    disabled={!browserExtractedJson.trim() || submittingExtractedJson}
-                    className="w-full rounded-xl bg-emerald-700 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
-                  >
-                    {submittingExtractedJson ? t.browserJsonSubmitting : t.browserJsonSubmit}
-                  </button>
-                </div>
+                <button onClick={openReaderPage} className="w-full rounded-xl bg-amber-600 px-4 py-3 text-sm font-semibold text-white">1) {t.openReceiptLink}</button>
 
                 <button
                   onClick={submitForAuthorization}
                   disabled={queuingForAuth}
                   className="w-full rounded-xl border border-emerald-300 bg-white px-4 py-3 text-sm font-semibold text-emerald-700 disabled:opacity-50"
                 >
-                  {queuingForAuth ? `${t.submitting}...` : t.submitForAuth}
+                  {queuingForAuth ? `${t.submitting}...` : `Fallback: ${t.submitForAuth}`}
                 </button>
 
                 <div className="grid grid-cols-2 gap-2">
@@ -1971,7 +1886,7 @@ export default function App() {
               </section>
             )}
 
-            {reportEntryStep === 'result' && (
+            {reportEntryStep === 'result' && scanResult?.status !== 'manual' && (
               <section className="rounded-2xl border border-stone-200 bg-white p-4 space-y-3">
                 <div className="text-sm font-semibold text-stone-800">{t.scanLogTitle}</div>
                 <div className="max-h-72 overflow-auto rounded-xl bg-stone-50 p-3 text-xs font-mono text-stone-700 space-y-1">

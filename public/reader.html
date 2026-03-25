@@ -83,21 +83,21 @@
   <body>
     <div class="wrap">
       <div class="card">
-        <h1 class="title">Receipt Reader</h1>
+        <h1 class="title">Receipt Reader (3 Steps)</h1>
         <div class="muted" id="metaText">Preparing...</div>
         <div class="actions">
-          <button id="openReceiptBtn">Open receipt in browser</button>
-          <button class="alt" id="copyExtractorBtn">Copy extractor JS</button>
+          <button id="openReceiptBtn">Step 1: Open Receipt</button>
+          <button class="alt" id="copyExtractorBtn">Step 2: Copy Extractor JS</button>
         </div>
       </div>
 
       <div class="card">
         <div class="muted" style="margin-bottom: 8px;">
-          1) Open the receipt page 2) run copied JS in browser console 3) paste JSON below 4) submit.
+          On receipt page: open browser console, paste script, press Enter. Then paste JSON below.
         </div>
-        <textarea id="jsonInput" placeholder="Paste extracted receipt_data JSON here"></textarea>
+        <textarea id="jsonInput" placeholder="Step 3: Paste receipt_data JSON here"></textarea>
         <div class="actions">
-          <button id="submitBtn">Submit to moderation</button>
+          <button id="submitBtn">Step 3: Submit</button>
         </div>
       </div>
 
@@ -141,7 +141,7 @@
           try {
             if (navigator.clipboard?.writeText) {
               await navigator.clipboard.writeText(extractorScript);
-              result.textContent = 'Extractor JS copied. Open receipt page and run it in browser console.';
+              result.textContent = 'Step 2 done. Now open the receipt page console, run the script, copy JSON, then submit here.';
             } else {
               window.prompt('Copy extractor JS', extractorScript);
             }
@@ -155,17 +155,17 @@
           try {
             receiptData = JSON.parse(String(jsonInput.value || '').trim());
           } catch {
-            result.textContent = 'Invalid JSON in textarea.';
+            result.textContent = 'JSON is invalid. Paste full receipt_data JSON and try again.';
             return;
           }
 
           if (!receiptData || !Array.isArray(receiptData.items) || receiptData.items.length === 0) {
-            result.textContent = 'receipt_data.items is required and must be non-empty.';
+            result.textContent = 'No items found in receipt_data. Re-run extraction and paste again.';
             return;
           }
 
           submitBtn.disabled = true;
-          submitBtn.textContent = 'Submitting...';
+            submitBtn.textContent = 'Submitting...';
           try {
             const response = await fetch('/api/scan', {
               method: 'POST',
@@ -183,7 +183,7 @@
             result.textContent = `Submit failed: ${error?.message || String(error)}`;
           } finally {
             submitBtn.disabled = false;
-            submitBtn.textContent = 'Submit to moderation';
+            submitBtn.textContent = 'Step 3: Submit';
           }
         });
       })();
