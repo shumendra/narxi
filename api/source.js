@@ -83,8 +83,15 @@ async function fetchSource(url) {
         return { html, attempts };
       }
       attempts.push({ candidate, status: response.status, htmlLength: 0, ok: false, error: 'empty_html' });
-    } catch {
-      attempts.push({ candidate, ok: false, error: 'request_failed' });
+    } catch (error) {
+      attempts.push({
+        candidate,
+        ok: false,
+        error: 'request_failed',
+        code: error?.code || null,
+        message: error?.message || String(error),
+        status: error?.response?.status || null,
+      });
       continue;
     }
   }

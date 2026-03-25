@@ -1107,6 +1107,9 @@ export default function App() {
       const result = await response.json();
 
       if (!response.ok || !result?.ok || typeof result?.content !== 'string') {
+        if (result?.detail) {
+          pushClientLog(`Content copy detail: ${JSON.stringify(result.detail)}`);
+        }
         throw new Error(result?.error || 'content_extract_failed');
       }
 
@@ -1115,7 +1118,7 @@ export default function App() {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'content_copy_failed';
       pushClientLog(`Content copy failed: ${message}`);
-      window.Telegram?.WebApp?.showAlert(t.miniWindowContentCopyError);
+      window.Telegram?.WebApp?.showAlert(`${t.miniWindowContentCopyError} (${message})`);
     }
   };
 
