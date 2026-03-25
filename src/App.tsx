@@ -178,6 +178,7 @@ export default function App() {
         goHome: 'Bosh sahifaga',
         retry: 'Qayta urinish',
         switchManual: "Qo'lda kiritish",
+        openReceiptLink: 'Chek havolasini ochish',
         urlFallbackPlaceholder: 'soliq.uz havolasini kiriting',
         urlFallbackSubmit: 'Yuborish',
         scannerInvalidAlert: "QR kod soliq.uz havolasi bo'lishi kerak",
@@ -268,6 +269,7 @@ export default function App() {
         goHome: 'На главную',
         retry: 'Повторить',
         switchManual: 'Ввести вручную',
+        openReceiptLink: 'Открыть ссылку чека',
         urlFallbackPlaceholder: 'введите ссылку soliq.uz',
         urlFallbackSubmit: 'Отправить',
         scannerInvalidAlert: 'QR код должен содержать ссылку soliq.uz',
@@ -358,6 +360,7 @@ export default function App() {
         goHome: 'Home',
         retry: 'Retry',
         switchManual: 'Manual entry',
+        openReceiptLink: 'Open receipt link',
         urlFallbackPlaceholder: 'enter soliq.uz link',
         urlFallbackSubmit: 'Submit',
         scannerInvalidAlert: 'QR code must contain a soliq.uz URL',
@@ -419,6 +422,7 @@ export default function App() {
   } | null>(null);
   const [scanLogs, setScanLogs] = useState<Array<{ ts: string; source: 'client' | 'server'; message: string }>>([]);
   const [scanApiResponse, setScanApiResponse] = useState<unknown>(null);
+  const [lastScannedReceiptUrl, setLastScannedReceiptUrl] = useState('');
 
 
   useEffect(() => {
@@ -827,6 +831,23 @@ export default function App() {
     setScanUrlInput('');
     setScanLogs([]);
     setScanApiResponse(null);
+    setLastScannedReceiptUrl('');
+  };
+
+  const openReceiptLink = () => {
+    const url = String(lastScannedReceiptUrl || '').trim();
+    if (!url) return;
+
+    const tgOpenLink = window.Telegram?.WebApp && 'openLink' in window.Telegram.WebApp
+      ? (window.Telegram.WebApp as unknown as { openLink?: (href: string) => void }).openLink
+      : undefined;
+
+    if (typeof tgOpenLink === 'function') {
+      tgOpenLink(url);
+      return;
+    }
+
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   const pushClientLog = (message: string) => {
@@ -957,6 +978,7 @@ export default function App() {
     setScanApiResponse(null);
     pushClientLog('QR scanned');
     const scannedUrl = extractSoliqUrlFromText(url) || String(url || '').trim();
+    setLastScannedReceiptUrl(scannedUrl || '');
     pushClientLog(`URL extracted: ${scannedUrl || 'empty'}`);
     if (!isSoliqUrl(scannedUrl)) {
       pushClientLog('Validation failed: not_soliq_url');
@@ -1398,6 +1420,9 @@ export default function App() {
                   <button onClick={retryScan} className="rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white">{t.scanAgain}</button>
                   <button onClick={goToReportHome} className="rounded-xl border border-emerald-300 bg-white px-4 py-3 text-sm font-semibold text-emerald-700">{t.goHome}</button>
                 </div>
+                {lastScannedReceiptUrl && (
+                  <button onClick={openReceiptLink} className="w-full rounded-xl border border-emerald-300 bg-white px-4 py-3 text-sm font-semibold text-emerald-700">{t.openReceiptLink}</button>
+                )}
               </section>
             )}
 
@@ -1408,6 +1433,9 @@ export default function App() {
                   <button onClick={retryScan} className="rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white">{t.scanAgain}</button>
                   <button onClick={goToReportHome} className="rounded-xl border border-stone-300 bg-stone-50 px-4 py-3 text-sm font-semibold text-stone-700">{t.goHome}</button>
                 </div>
+                {lastScannedReceiptUrl && (
+                  <button onClick={openReceiptLink} className="w-full rounded-xl border border-stone-300 bg-stone-50 px-4 py-3 text-sm font-semibold text-stone-700">{t.openReceiptLink}</button>
+                )}
               </section>
             )}
 
@@ -1425,6 +1453,9 @@ export default function App() {
                   <button onClick={retryScan} className="rounded-xl bg-rose-600 px-4 py-3 text-sm font-semibold text-white">{t.retry}</button>
                   <button onClick={goToManualEntry} className="rounded-xl border border-rose-300 bg-white px-4 py-3 text-sm font-semibold text-rose-700">{t.switchManual}</button>
                 </div>
+                {lastScannedReceiptUrl && (
+                  <button onClick={openReceiptLink} className="w-full rounded-xl border border-rose-300 bg-white px-4 py-3 text-sm font-semibold text-rose-700">{t.openReceiptLink}</button>
+                )}
               </section>
             )}
 
@@ -1750,6 +1781,7 @@ declare global {
         ready: () => void;
         expand: () => void;
         showAlert: (message: string) => void;
+        openLink?: (url: string) => void;
         showScanQrPopup?: (params: { text?: string }, callback: (scannedText: string) => boolean) => void;
         closeScanQrPopup?: () => void;
         initData: string;
