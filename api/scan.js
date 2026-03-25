@@ -43,6 +43,32 @@ function pushTrace(trace, stage, detail = null) {
   });
 }
 
+function normalizeReceiptDataFromParsed(parsed) {
+  if (!parsed || !Array.isArray(parsed.items)) return null;
+
+  const normalizedReceiptDate =
+    parsed.receipt_date && /^\d{2}\.\d{2}\.\d{4}$/.test(parsed.receipt_date)
+      ? `${parsed.receipt_date.split('.').reverse().join('-')}T00:00:00.000Z`
+      : parsed.receipt_date || new Date().toISOString();
+
+  return {
+    storeName: parsed.store_name,
+    storeAddress: parsed.store_address,
+    city: null,
+    detectedCity: null,
+    latitude: null,
+    longitude: null,
+    receiptDate: normalizedReceiptDate,
+    parseStage: 'raw_html',
+    items: parsed.items.map(item => ({
+      name: item.name,
+      quantity: Number(item.quantity) || 1,
+      totalPrice: Number(item.price) || 0,
+      unitPrice: Number(item.unit_price) || Number(item.price) || 0,
+    })),
+  };
+}
+
 async function queueManualReceiptReview({
   supabaseClient,
   telegramId,
@@ -163,26 +189,15 @@ async function fallbackScrapeReceipt(url, trace) {
         continue;
       }
 
-      const normalizedReceiptDate =
-        parsed.receipt_date && /^\d{2}\.\d{2}\.\d{4}$/.test(parsed.receipt_date)
-          ? `${parsed.receipt_date.split('.').reverse().join('-')}T00:00:00.000Z`
-          : parsed.receipt_date || new Date().toISOString();
+      const normalized = normalizeReceiptDataFromParsed(parsed);
+      if (!normalized || !Array.isArray(normalized.items) || normalized.items.length === 0) {
+        pushTrace(trace, 'fallback_candidate_parse_empty', { candidateUrl });
+        continue;
+      }
 
       return {
-        storeName: parsed.store_name,
-        storeAddress: parsed.store_address,
-        city: null,
-        detectedCity: null,
-        latitude: null,
-        longitude: null,
-        receiptDate: normalizedReceiptDate,
+        ...normalized,
         parseStage: 'fallback_table',
-        items: parsed.items.map(item => ({
-          name: item.name,
-          quantity: Number(item.quantity) || 1,
-          totalPrice: Number(item.price) || 0,
-          unitPrice: Number(item.unit_price) || Number(item.price) || 0,
-        })),
       };
     } catch (error) {
       pushTrace(trace, 'fallback_candidate_error', {
@@ -218,6 +233,7 @@ export default async function handler(req, res) {
         : req.body || {};
     const rawUrl = String(body.url || '').trim();
     const url = normalizeSoliqUrl(rawUrl) || rawUrl;
+    const rawHtml = String(body.raw_html || body.html || '').trim();
     const telegramId = String(body.telegram_id || 'anonymous');
     const selectedCity = normalizeCityName(body.city || '') || null;
     const forceQueue = Boolean(body.force_queue);
@@ -226,6 +242,8 @@ export default async function handler(req, res) {
       selectedCity,
       url,
       forceQueue,
+      hasRawHtml: Boolean(rawHtml),
+      rawHtmlLength: rawHtml ? rawHtml.length : 0,
     });
 
     if (!isSoliqUrl(url)) {
@@ -275,10 +293,24 @@ export default async function handler(req, res) {
       }
     }
 
-    pushTrace(trace, 'scrape_start', { url });
-    let receiptData = await scrapesoliqReceipt(url);
+    let receiptData = null;
 
-    if (!receiptData) {
+    if (rawHtml) {
+      pushTrace(trace, 'raw_html_parse_start', { rawHtmlLength: rawHtml.length });
+      const parsedFromRawHtml = parseReceiptHtml(rawHtml);
+      const normalizedFromRawHtml = normalizeReceiptDataFromParsed(parsedFromRawHtml);
+      if (!normalizedFromRawHtml || !Array.isArray(normalizedFromRawHtml.items) || normalizedFromRawHtml.items.length === 0) {
+        pushTrace(trace, 'raw_html_parse_failed', { error: 'parse_empty' });
+        return respond({ ok: false, error: 'parse_empty' });
+      }
+      receiptData = normalizedFromRawHtml;
+      pushTrace(trace, 'raw_html_parse_success', { itemCount: receiptData.items.length });
+    } else {
+      pushTrace(trace, 'scrape_start', { url });
+      receiptData = await scrapesoliqReceipt(url);
+    }
+
+    if (!receiptData && !rawHtml) {
       pushTrace(trace, 'scrape_primary_failed', { error: 'no_receipt_data' });
       receiptData = await fallbackScrapeReceipt(url, trace);
       if (!receiptData) {

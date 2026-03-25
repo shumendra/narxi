@@ -174,6 +174,12 @@ export default function App() {
         scanErrorTimeout: "Serverdan javob kutish vaqti tugadi.\nIltimos yana urinib ko'ring.",
         scanErrorGenerating: "Chek hali tayyorlanmoqda.\n1-2 daqiqadan so'ng qayta urinib ko'ring.",
         scanErrorNetwork: 'Tarmoq xatosi yuz berdi. Internetni tekshirib qayta urinib ko‘ring.',
+        scanManualTitle: '🔗 Chekni qo‘lda oching',
+        scanManualBody: 'Avtomatik tekshiruv vaqtincha o‘chirildi. Avval chek havolasini oching, keyin page source HTML ni shu yerga joylab ajrating.',
+        scanManualPasteAction: 'Page source kiritish',
+        scanManualExtract: 'Source dan ajratish',
+        scanManualExtracting: 'Source ajratilmoqda...',
+        scanManualSourcePlaceholder: 'View Page Source dan olingan HTML ni shu yerga joylang',
         scanAgain: 'Yana skanerlash',
         goHome: 'Bosh sahifaga',
         retry: 'Qayta urinish',
@@ -266,6 +272,12 @@ export default function App() {
         scanErrorTimeout: 'Истекло время ожидания ответа сервера.\nПопробуйте снова.',
         scanErrorGenerating: 'Чек ещё формируется.\nПовторите через 1-2 минуты.',
         scanErrorNetwork: 'Сетевая ошибка. Проверьте интернет и повторите попытку.',
+        scanManualTitle: '🔗 Откройте чек вручную',
+        scanManualBody: 'Автопроверка временно отключена. Сначала откройте ссылку чека, затем вставьте HTML из page source сюда для извлечения.',
+        scanManualPasteAction: 'Вставить page source',
+        scanManualExtract: 'Извлечь из source',
+        scanManualExtracting: 'Извлечение из source...',
+        scanManualSourcePlaceholder: 'Вставьте HTML из View Page Source сюда',
         scanAgain: 'Сканировать снова',
         goHome: 'На главную',
         retry: 'Повторить',
@@ -358,6 +370,12 @@ export default function App() {
         scanErrorTimeout: 'Server response timed out.\nPlease try again.',
         scanErrorGenerating: 'Receipt is still being generated.\nPlease try again in 1-2 minutes.',
         scanErrorNetwork: 'Network error. Check internet connection and try again.',
+        scanManualTitle: '🔗 Open receipt manually',
+        scanManualBody: 'Automatic checking is temporarily paused. Open the receipt link first, then paste page source HTML here to extract.',
+        scanManualPasteAction: 'Paste page source',
+        scanManualExtract: 'Extract from source',
+        scanManualExtracting: 'Extracting from source...',
+        scanManualSourcePlaceholder: 'Paste HTML from View Page Source here',
         scanAgain: 'Scan again',
         goHome: 'Home',
         retry: 'Retry',
@@ -414,7 +432,7 @@ export default function App() {
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [scanUrlInput, setScanUrlInput] = useState('');
   const [scanResult, setScanResult] = useState<{
-    status: 'success' | 'duplicate' | 'error';
+    status: 'success' | 'duplicate' | 'error' | 'manual';
     storeName?: string;
     storeAddress?: string;
     city?: string;
@@ -427,6 +445,9 @@ export default function App() {
   const [scanApiResponse, setScanApiResponse] = useState<unknown>(null);
   const [lastScannedReceiptUrl, setLastScannedReceiptUrl] = useState('');
   const [queuingForAuth, setQueuingForAuth] = useState(false);
+  const [showSourceInput, setShowSourceInput] = useState(false);
+  const [pageSourceHtml, setPageSourceHtml] = useState('');
+  const [extractingFromSource, setExtractingFromSource] = useState(false);
 
 
   useEffect(() => {
@@ -822,6 +843,8 @@ export default function App() {
   const goToManualEntry = () => {
     setReportEntryStep('manual');
     setShowUrlInput(false);
+    setShowSourceInput(false);
+    setPageSourceHtml('');
     setScanResult(null);
     setScanLogs([]);
     setScanApiResponse(null);
@@ -836,6 +859,8 @@ export default function App() {
     setScanLogs([]);
     setScanApiResponse(null);
     setLastScannedReceiptUrl('');
+    setShowSourceInput(false);
+    setPageSourceHtml('');
   };
 
   const openReceiptLink = () => {
@@ -900,6 +925,60 @@ export default function App() {
       setScanResult({ status: 'error', errorCode: 'network_error', errorDetail: message });
     } finally {
       setQueuingForAuth(false);
+    }
+  };
+
+  const extractFromPageSource = async () => {
+    const url = String(lastScannedReceiptUrl || '').trim();
+    const rawHtml = String(pageSourceHtml || '').trim();
+    if (!url || !rawHtml || extractingFromSource) return;
+
+    setExtractingFromSource(true);
+    pushClientLog('Source extraction requested');
+    try {
+      const response = await fetch(scanApiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url,
+          raw_html: rawHtml,
+          telegram_id: window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || 'anonymous',
+          city: selectedCity,
+        }),
+      });
+
+      const result = await response.json();
+      setScanApiResponse(result);
+      pushServerTrace(result?.trace);
+
+      if (result?.ok) {
+        pushClientLog('Source extraction success');
+        setScanResult({
+          status: 'success',
+          storeName: result.store_name,
+          storeAddress: result.store_address,
+          city: result.city,
+          itemCount: result.item_count,
+          queuedWithoutParse: false,
+        });
+      } else if (result?.error === 'duplicate') {
+        pushClientLog('Source extraction duplicate');
+        setScanResult({ status: 'duplicate', errorCode: 'duplicate', errorDetail: result?.detail || result?.message || '' });
+      } else {
+        pushClientLog(`Source extraction failed (${result?.error || 'scan_failed'})`);
+        setScanResult({
+          status: 'error',
+          errorCode: result?.error || 'scan_failed',
+          errorDetail: result?.detail || '',
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'network_error';
+      pushClientLog(`Source extraction network error: ${message}`);
+      setScanResult({ status: 'error', errorCode: 'network_error', errorDetail: message });
+      setScanApiResponse({ ok: false, error: 'network_error', detail: message });
+    } finally {
+      setExtractingFromSource(false);
     }
   };
 
@@ -1026,12 +1105,13 @@ export default function App() {
   const scanApiUrl = import.meta.env.VITE_SCAN_API_URL || '/api/scan';
 
   const handleSoliqUrl = async (url: string) => {
-    const startedAt = Date.now();
     setScanLogs([]);
     setScanApiResponse(null);
     pushClientLog('QR scanned');
     const scannedUrl = extractSoliqUrlFromText(url) || String(url || '').trim();
     setLastScannedReceiptUrl(scannedUrl || '');
+    setShowSourceInput(false);
+    setPageSourceHtml('');
     pushClientLog(`URL extracted: ${scannedUrl || 'empty'}`);
     if (!isSoliqUrl(scannedUrl)) {
       pushClientLog('Validation failed: not_soliq_url');
@@ -1042,57 +1122,9 @@ export default function App() {
     pushClientLog('Validation passed');
 
     setShowUrlInput(false);
-    setScanResult(null);
-    setReportEntryStep('loading');
-    pushClientLog(`Sending POST ${scanApiUrl}`);
-
-    try {
-      const response = await fetch(scanApiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url: scannedUrl,
-          telegram_id: window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || 'anonymous',
-          city: selectedCity,
-        }),
-      });
-      pushClientLog(`HTTP response: ${response.status}`);
-
-      const result = await response.json();
-      setScanApiResponse(result);
-      pushClientLog(`API response received in ${Date.now() - startedAt}ms`);
-      pushServerTrace(result?.trace);
-
-      if (result?.ok) {
-        pushClientLog('Result: success');
-        setScanResult({
-          status: 'success',
-          storeName: result.store_name,
-          storeAddress: result.store_address,
-          city: result.city,
-          itemCount: result.item_count,
-          queuedWithoutParse: false,
-        });
-      } else if (result?.error === 'duplicate') {
-        pushClientLog('Result: duplicate');
-        setScanResult({ status: 'duplicate', errorCode: 'duplicate', errorDetail: result?.detail || result?.message || '' });
-      } else {
-        pushClientLog(`Result: error (${result?.error || 'scan_failed'})`);
-        setScanResult({
-          status: 'error',
-          errorCode: result?.error || 'scan_failed',
-          errorDetail: result?.detail || '',
-        });
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'network_error';
-      pushClientLog(`Request failed: ${message}`);
-      setScanResult({ status: 'error', errorCode: 'network_error', errorDetail: message });
-      setScanApiResponse({ ok: false, error: 'network_error', detail: message });
-    } finally {
-      pushClientLog('Flow finished');
-      setReportEntryStep('result');
-    }
+    setScanResult({ status: 'manual' });
+    setReportEntryStep('result');
+    pushClientLog('Manual-first flow: auto-check is paused');
   };
 
   const openNativeQrScanner = () => {
@@ -1116,6 +1148,8 @@ export default function App() {
 
   const retryScan = () => {
     setScanResult(null);
+    setShowSourceInput(false);
+    setPageSourceHtml('');
     setReportEntryStep('entry');
     openNativeQrScanner();
   };
@@ -1518,6 +1552,52 @@ export default function App() {
                 {lastScannedReceiptUrl && (
                   <button onClick={openReceiptLink} className="w-full rounded-xl border border-rose-300 bg-white px-4 py-3 text-sm font-semibold text-rose-700">{t.openReceiptLink}</button>
                 )}
+              </section>
+            )}
+
+            {reportEntryStep === 'result' && scanResult?.status === 'manual' && (
+              <section className="rounded-2xl border border-amber-200 bg-amber-50 p-6 space-y-4">
+                <div className="text-xl font-bold text-amber-900">{t.scanManualTitle}</div>
+                <div className="text-sm text-amber-800">{t.scanManualBody}</div>
+                <button onClick={openReceiptLink} className="w-full rounded-xl bg-amber-600 px-4 py-3 text-sm font-semibold text-white">{t.openReceiptLink}</button>
+
+                <button
+                  onClick={() => setShowSourceInput(prev => !prev)}
+                  className="w-full rounded-xl border border-amber-300 bg-white px-4 py-3 text-sm font-semibold text-amber-800"
+                >
+                  {t.scanManualPasteAction}
+                </button>
+
+                {showSourceInput && (
+                  <div className="space-y-3">
+                    <textarea
+                      value={pageSourceHtml}
+                      onChange={(e) => setPageSourceHtml(e.target.value)}
+                      placeholder={t.scanManualSourcePlaceholder}
+                      className="h-44 w-full rounded-xl border border-amber-200 bg-white px-3 py-3 text-xs text-stone-800"
+                    />
+                    <button
+                      onClick={extractFromPageSource}
+                      disabled={!pageSourceHtml.trim() || extractingFromSource}
+                      className="w-full rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
+                    >
+                      {extractingFromSource ? t.scanManualExtracting : t.scanManualExtract}
+                    </button>
+                  </div>
+                )}
+
+                <button
+                  onClick={submitForAuthorization}
+                  disabled={queuingForAuth}
+                  className="w-full rounded-xl border border-emerald-300 bg-white px-4 py-3 text-sm font-semibold text-emerald-700 disabled:opacity-50"
+                >
+                  {queuingForAuth ? `${t.submitting}...` : t.submitForAuth}
+                </button>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button onClick={retryScan} className="rounded-xl bg-amber-600 px-4 py-3 text-sm font-semibold text-white">{t.scanAgain}</button>
+                  <button onClick={goToManualEntry} className="rounded-xl border border-amber-300 bg-white px-4 py-3 text-sm font-semibold text-amber-800">{t.switchManual}</button>
+                </div>
               </section>
             )}
 
