@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Narxi Receipt Reader</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        background: #f5f5f4;
+        color: #1c1917;
+      }
+      .wrap {
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 16px;
+      }
+      .card {
+        background: #ffffff;
+        border: 1px solid #e7e5e4;
+        border-radius: 14px;
+        padding: 14px;
+        margin-bottom: 12px;
+      }
+      .title {
+        font-size: 20px;
+        font-weight: 700;
+        margin: 0 0 6px;
+      }
+      .muted {
+        color: #57534e;
+        font-size: 14px;
+      }
+      .actions {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      button {
+        border: 1px solid #059669;
+        background: #059669;
+        color: #ffffff;
+        border-radius: 10px;
+        padding: 10px 12px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button.alt {
+        background: #ffffff;
+        color: #065f46;
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+      textarea {
+        width: 100%;
+        min-height: 220px;
+        border-radius: 10px;
+        border: 1px solid #d6d3d1;
+        padding: 10px;
+        font-size: 12px;
+        box-sizing: border-box;
+      }
+      .log {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        background: #292524;
+        color: #f5f5f4;
+        border-radius: 10px;
+        padding: 10px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      code {
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <h1 class="title">Receipt Reader</h1>
+        <div class="muted" id="metaText">Preparing...</div>
+        <div class="actions">
+          <button id="openReceiptBtn">Open receipt in browser</button>
+          <button class="alt" id="copyExtractorBtn">Copy extractor JS</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="muted" style="margin-bottom: 8px;">
+          1) Open the receipt page 2) run copied JS in browser console 3) paste JSON below 4) submit.
+        </div>
+        <textarea id="jsonInput" placeholder="Paste extracted receipt_data JSON here"></textarea>
+        <div class="actions">
+          <button id="submitBtn">Submit to moderation</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="muted" style="margin-bottom: 6px;">Result</div>
+        <div id="result" class="log">No submission yet.</div>
+      </div>
+    </div>
+
+    <script>
+      (function () {
+        const params = new URLSearchParams(window.location.search);
+        const receiptUrl = (params.get('url') || '').trim();
+        const telegramId = (params.get('tid') || 'anonymous').trim();
+        const city = (params.get('city') || '').trim();
+
+        const metaText = document.getElementById('metaText');
+        const openReceiptBtn = document.getElementById('openReceiptBtn');
+        const copyExtractorBtn = document.getElementById('copyExtractorBtn');
+        const submitBtn = document.getElementById('submitBtn');
+        const jsonInput = document.getElementById('jsonInput');
+        const result = document.getElementById('result');
+
+        const extractorScript = `(function(){\n  const normalize = (v) => {\n    const cleaned = String(v || '').replace(/[^0-9,.-]/g, '').replace(/,/g, '.');\n    const n = Number(cleaned);\n    return Number.isFinite(n) ? n : 0;\n  };\n\n  const getText = (selector) => {\n    const el = document.querySelector(selector);\n    return (el?.innerText || '').trim();\n  };\n\n  const table = document.querySelector('.table-products table, table');\n  if (!table) {\n    alert('Products table not found');\n    return;\n  }\n\n  const rows = Array.from(table.querySelectorAll('.products-row, tbody tr'));\n  const items = rows.map((row) => {\n    const cells = Array.from(row.querySelectorAll('td'));\n    if (cells.length < 2) return null;\n    const name = (cells[0]?.innerText || '').trim();\n    const quantityRaw = (cells[1]?.innerText || '').trim();\n    const priceRaw = (cells[2]?.innerText || cells[cells.length - 1]?.innerText || '').trim();\n    const quantity = Math.max(1, normalize(quantityRaw));\n    const total = normalize(priceRaw);\n    if (!name || total <= 0) return null;\n    return {\n      name,\n      quantity,\n      total_price: total,\n      unit_price: quantity > 0 ? total / quantity : total,\n    };\n  }).filter(Boolean);\n\n  const payload = {\n    store_name: getText('.company-name, .store-name, .header .title') || 'Soliq receipt',\n    store_address: getText('.company-address, .store-address, .address') || '-',\n    receipt_date: getText('.receipt-date, .date, .check-date') || new Date().toISOString(),\n    items,\n  };\n\n  const text = JSON.stringify(payload, null, 2);\n  if (navigator.clipboard?.writeText) {\n    navigator.clipboard.writeText(text).then(() => alert('receipt_data copied')).catch(() => prompt('Copy receipt_data', text));\n  } else {\n    prompt('Copy receipt_data', text);\n  }\n})();`;
+
+        if (!receiptUrl) {
+          metaText.textContent = 'Invalid link: missing url query param.';
+          openReceiptBtn.disabled = true;
+          copyExtractorBtn.disabled = true;
+          submitBtn.disabled = true;
+          return;
+        }
+
+        metaText.textContent = `Receipt URL: ${receiptUrl}`;
+
+        openReceiptBtn.addEventListener('click', () => {
+          window.open(receiptUrl, '_blank', 'noopener,noreferrer');
+        });
+
+        copyExtractorBtn.addEventListener('click', async () => {
+          try {
+            if (navigator.clipboard?.writeText) {
+              await navigator.clipboard.writeText(extractorScript);
+              result.textContent = 'Extractor JS copied. Open receipt page and run it in browser console.';
+            } else {
+              window.prompt('Copy extractor JS', extractorScript);
+            }
+          } catch (error) {
+            result.textContent = `Copy failed: ${error?.message || String(error)}`;
+          }
+        });
+
+        submitBtn.addEventListener('click', async () => {
+          let receiptData = null;
+          try {
+            receiptData = JSON.parse(String(jsonInput.value || '').trim());
+          } catch {
+            result.textContent = 'Invalid JSON in textarea.';
+            return;
+          }
+
+          if (!receiptData || !Array.isArray(receiptData.items) || receiptData.items.length === 0) {
+            result.textContent = 'receipt_data.items is required and must be non-empty.';
+            return;
+          }
+
+          submitBtn.disabled = true;
+          submitBtn.textContent = 'Submitting...';
+          try {
+            const response = await fetch('/api/scan', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                url: receiptUrl,
+                telegram_id: telegramId || 'anonymous',
+                city: city || undefined,
+                receipt_data: receiptData,
+              }),
+            });
+            const data = await response.json();
+            result.textContent = JSON.stringify(data, null, 2);
+          } catch (error) {
+            result.textContent = `Submit failed: ${error?.message || String(error)}`;
+          } finally {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Submit to moderation';
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>

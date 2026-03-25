@@ -175,7 +175,7 @@ export default function App() {
         scanErrorGenerating: "Chek hali tayyorlanmoqda.\n1-2 daqiqadan so'ng qayta urinib ko'ring.",
         scanErrorNetwork: 'Tarmoq xatosi yuz berdi. Internetni tekshirib qayta urinib ko‘ring.',
         scanManualTitle: '🔗 Chekni qo‘lda oching',
-        scanManualBody: 'Avtomatik tekshiruv vaqtincha o‘chirildi. Avval chek havolasini oching, keyin page source HTML ni shu yerga joylab ajrating.',
+        scanManualBody: 'Chek real brauzer reader sahifasida ochiladi. U yerda extraction qilib yuboring, so‘ng mini app ga qayting.',
         scanManualPasteAction: 'Page source kiritish',
         scanManualExtract: 'Source dan ajratish',
         scanManualExtracting: 'Source ajratilmoqda...',
@@ -291,7 +291,7 @@ export default function App() {
         scanErrorGenerating: 'Чек ещё формируется.\nПовторите через 1-2 минуты.',
         scanErrorNetwork: 'Сетевая ошибка. Проверьте интернет и повторите попытку.',
         scanManualTitle: '🔗 Откройте чек вручную',
-        scanManualBody: 'Автопроверка временно отключена. Сначала откройте ссылку чека, затем вставьте HTML из page source сюда для извлечения.',
+        scanManualBody: 'Чек откроется в reader-странице реального браузера. Выполните извлечение и отправку там, затем вернитесь в мини‑приложение.',
         scanManualPasteAction: 'Вставить page source',
         scanManualExtract: 'Извлечь из source',
         scanManualExtracting: 'Извлечение из source...',
@@ -407,7 +407,7 @@ export default function App() {
         scanErrorGenerating: 'Receipt is still being generated.\nPlease try again in 1-2 minutes.',
         scanErrorNetwork: 'Network error. Check internet connection and try again.',
         scanManualTitle: '🔗 Open receipt manually',
-        scanManualBody: 'Automatic checking is temporarily paused. Open the receipt link first, then paste page source HTML here to extract.',
+        scanManualBody: 'The receipt opens in a real-browser reader page. Extract and submit there, then return to the Mini App.',
         scanManualPasteAction: 'Paste page source',
         scanManualExtract: 'Extract from source',
         scanManualExtracting: 'Extracting from source...',
@@ -929,10 +929,7 @@ export default function App() {
     setBrowserExtractedJson('');
   };
 
-  const openReceiptLink = () => {
-    const url = String(lastScannedReceiptUrl || '').trim();
-    if (!url) return;
-
+  const openExternalLink = (url: string) => {
     const tgOpenLink = window.Telegram?.WebApp && 'openLink' in window.Telegram.WebApp
       ? (window.Telegram.WebApp as unknown as { openLink?: (href: string) => void }).openLink
       : undefined;
@@ -943,6 +940,27 @@ export default function App() {
     }
 
     window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  const buildReaderUrl = (receiptUrl: string) => {
+    const readerUrl = new URL('/reader.html', window.location.origin);
+    readerUrl.searchParams.set('url', receiptUrl);
+    readerUrl.searchParams.set('tid', telegramUserId || 'anonymous');
+    readerUrl.searchParams.set('city', selectedCity);
+    readerUrl.searchParams.set('lang', lang);
+    return readerUrl.toString();
+  };
+
+  const openReaderPage = () => {
+    const url = String(lastScannedReceiptUrl || '').trim();
+    if (!url) return;
+    openExternalLink(buildReaderUrl(url));
+  };
+
+  const openReceiptLink = () => {
+    const url = String(lastScannedReceiptUrl || '').trim();
+    if (!url) return;
+    openExternalLink(url);
   };
 
   const submitForAuthorization = async () => {
@@ -1400,10 +1418,14 @@ export default function App() {
     }
     pushClientLog('Validation passed');
 
+    const readerUrl = buildReaderUrl(scannedUrl);
+    openExternalLink(readerUrl);
+    pushClientLog(`Reader page opened: ${readerUrl}`);
+
     setShowUrlInput(false);
     setScanResult({ status: 'manual' });
     setReportEntryStep('result');
-    pushClientLog('Manual-first flow: auto-check is paused');
+    pushClientLog('Reader-first flow activated');
   };
 
   const openNativeQrScanner = () => {
@@ -1842,7 +1864,7 @@ export default function App() {
                 <div className="text-xl font-bold text-amber-900">{t.scanManualTitle}</div>
                 <div className="text-sm text-amber-800">{t.scanManualBody}</div>
                 <div className="space-y-2">
-                  <button onClick={openReceiptInMiniWindow} className="w-full rounded-xl bg-amber-600 px-4 py-3 text-sm font-semibold text-white">{t.miniWindowOpenReceipt}</button>
+                  <button onClick={openReaderPage} className="w-full rounded-xl bg-amber-600 px-4 py-3 text-sm font-semibold text-white">{t.openReceiptLink}</button>
                   <button
                     onClick={openSourceInMiniWindow}
                     disabled={loadingMiniWindowSource}

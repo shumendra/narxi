@@ -105,6 +105,54 @@ function normalizeReceiptDataFromExtractedPayload(body) {
   };
 }
 
+function normalizeReceiptDataFromReceiptData(body) {
+  const payload = body?.receipt_data;
+  if (!payload || typeof payload !== 'object') return null;
+
+  const payloadItems = Array.isArray(payload.items) ? payload.items : [];
+  if (payloadItems.length === 0) return null;
+
+  const items = payloadItems
+    .map(item => {
+      const name = String(item?.name || '').trim();
+      const quantity = Number(item?.quantity) > 0 ? Number(item.quantity) : 1;
+      const totalPrice = Number(item?.total_price) > 0
+        ? Number(item.total_price)
+        : (Number(item?.price) > 0 ? Number(item.price) : 0);
+      const unitPrice = Number(item?.unit_price) > 0
+        ? Number(item.unit_price)
+        : (quantity > 0 && totalPrice > 0 ? totalPrice / quantity : totalPrice);
+
+      return {
+        name,
+        quantity,
+        totalPrice,
+        unitPrice,
+      };
+    })
+    .filter(item => item.name && item.totalPrice > 0);
+
+  if (items.length === 0) return null;
+
+  const rawReceiptDate = String(payload?.receipt_date || '').trim();
+  const normalizedReceiptDate =
+    rawReceiptDate && /^\d{2}\.\d{2}\.\d{4}$/.test(rawReceiptDate)
+      ? `${rawReceiptDate.split('.').reverse().join('-')}T00:00:00.000Z`
+      : rawReceiptDate || new Date().toISOString();
+
+  return {
+    storeName: String(payload?.store_name || '').trim() || 'Soliq receipt (reader)',
+    storeAddress: String(payload?.store_address || '').trim() || '-',
+    city: null,
+    detectedCity: null,
+    latitude: null,
+    longitude: null,
+    receiptDate: normalizedReceiptDate,
+    parseStage: 'reader_receipt_data',
+    items,
+  };
+}
+
 async function queueManualReceiptReview({
   supabaseClient,
   telegramId,
@@ -271,6 +319,7 @@ export default async function handler(req, res) {
     const url = normalizeSoliqUrl(rawUrl) || rawUrl;
     const rawHtml = String(body.raw_html || body.html || '').trim();
     const hasExtractedItems = Array.isArray(body.extracted_items) && body.extracted_items.length > 0;
+    const hasReceiptData = Boolean(body.receipt_data && typeof body.receipt_data === 'object');
     const telegramId = String(body.telegram_id || 'anonymous');
     const selectedCity = normalizeCityName(body.city || '') || null;
     const forceQueue = Boolean(body.force_queue);
@@ -282,6 +331,7 @@ export default async function handler(req, res) {
       hasRawHtml: Boolean(rawHtml),
       rawHtmlLength: rawHtml ? rawHtml.length : 0,
       hasExtractedItems,
+      hasReceiptData,
     });
 
     if (!isSoliqUrl(url)) {
@@ -333,7 +383,16 @@ export default async function handler(req, res) {
 
     let receiptData = null;
 
-    if (hasExtractedItems) {
+    if (hasReceiptData) {
+      pushTrace(trace, 'reader_receipt_data_parse_start');
+      const normalizedFromReceiptData = normalizeReceiptDataFromReceiptData(body);
+      if (!normalizedFromReceiptData || !Array.isArray(normalizedFromReceiptData.items) || normalizedFromReceiptData.items.length === 0) {
+        pushTrace(trace, 'reader_receipt_data_parse_failed', { error: 'parse_empty' });
+        return respond({ ok: false, error: 'parse_empty' });
+      }
+      receiptData = normalizedFromReceiptData;
+      pushTrace(trace, 'reader_receipt_data_parse_success', { itemCount: receiptData.items.length });
+    } else if (hasExtractedItems) {
       pushTrace(trace, 'client_extracted_parse_start', { itemCount: body.extracted_items.length });
       const normalizedFromExtracted = normalizeReceiptDataFromExtractedPayload(body);
       if (!normalizedFromExtracted || !Array.isArray(normalizedFromExtracted.items) || normalizedFromExtracted.items.length === 0) {

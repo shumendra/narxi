@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import dns from 'node:dns';
 import { extractCityFromAddress, getCityLabel, normalizeCityName } from '../../src/constants/cities.js';
-import { scrapesoliqReceipt, insertPendingPrice, fetchProductsIndex, isSoliqUrl } from '../../api/utils/receipt.js';
+import { isSoliqUrl } from '../../api/utils/receipt.js';
 
 dotenv.config();
 dotenv.config({ path: '.env.local', override: true });
@@ -27,8 +27,6 @@ const PRIMARY_ADMIN_TELEGRAM_ID = ADMIN_TELEGRAM_IDS[0] || '7240925672';
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 const DIAGNOSTIC_URL = 'https://ofd.soliq.uz/';
 
-const rateLimitCounter = {};
-
 const BOT_COPY = {
   uz: {
     chooseLang: "Tilni tanlang:",
@@ -44,6 +42,7 @@ const BOT_COPY = {
     serverError: "Server sozlamalarida xatolik. Keyinroq urinib ko'ring.",
     saveFailed: "Hozircha saqlab bo'lmadi. Keyinroq urinib ko'ring.",
     scrapeFailed: "Chekni o'qishda xatolik yuz berdi. Iltimos, havolani tekshirib qayta yuboring 🔄",
+    readerReady: 'Chekni real brauzerda ochib yuborish uchun tugmani bosing.',
     noItems: "Chekda mahsulotlar topilmadi. Bu chek bo'sh yoki format qo'llab-quvvatlanmaydi.",
     rateLimited: "Juda ko'p ma'lumot yuborildi. Iltimos keyinroq urinib ko'ring 🕐",
     blocked: "Siz tizimdan bloklangansiz.",
@@ -75,6 +74,7 @@ const BOT_COPY = {
     btnEditPrice: '💰 Jami',
     btnEditQty: '📦 Miqdor',
     btnEditUnit: '🧮 Birlik',
+    btnOpenReader: 'Readerni ochish 🌐',
     pendingCard: (item, matchedName, unitLabel) => {
       const unitPrice = item.unit_price || item.price || 0;
       const total = item.price || 0;
@@ -114,6 +114,7 @@ const BOT_COPY = {
     serverError: "Ошибка настроек сервера. Попробуйте позже.",
     saveFailed: "Сейчас не удалось сохранить. Попробуйте позже.",
     scrapeFailed: "Не удалось прочитать чек. Проверьте ссылку и отправьте снова 🔄",
+    readerReady: 'Нажмите кнопку, чтобы открыть чек в реальном браузере и отправить его.',
     noItems: "В чеке нет товаров. Возможно, чек пустой или формат не поддерживается.",
     rateLimited: "Слишком много данных. Попробуйте позже 🕐",
     blocked: "Вы заблокированы.",
@@ -145,6 +146,7 @@ const BOT_COPY = {
     btnEditPrice: '💰 Сумма',
     btnEditQty: '📦 Кол-во',
     btnEditUnit: '🧮 За единицу',
+    btnOpenReader: 'Открыть Reader 🌐',
     pendingCard: (item, matchedName, unitLabel) => {
       const unitPrice = item.unit_price || item.price || 0;
       const total = item.price || 0;
@@ -184,6 +186,7 @@ const BOT_COPY = {
     serverError: 'Server configuration error. Please try again later.',
     saveFailed: 'Could not save right now. Please try again later.',
     scrapeFailed: 'Could not read the receipt. Please check the link and resend 🔄',
+    readerReady: 'Tap the button to open the receipt in a real browser and submit it.',
     noItems: 'No items found on the receipt. It may be empty or unsupported.',
     rateLimited: 'Too much data sent. Please try again later 🕐',
     blocked: 'You are blocked from the system.',
@@ -215,6 +218,7 @@ const BOT_COPY = {
     btnEditPrice: '💰 Total',
     btnEditQty: '📦 Qty',
     btnEditUnit: '🧮 Unit',
+    btnOpenReader: 'Open Reader 🌐',
     pendingCard: (item, matchedName, unitLabel) => {
       const unitPrice = item.unit_price || item.price || 0;
       const total = item.price || 0;
@@ -418,6 +422,20 @@ function extractSoliqUrl(message) {
     return match[0];
   }
   return null;
+}
+
+function buildReaderUrl(receiptUrl, telegramId, lang) {
+  if (!MINI_APP_URL) return null;
+  try {
+    const miniApp = new URL(MINI_APP_URL);
+    const reader = new URL('/reader.html', `${miniApp.protocol}//${miniApp.host}`);
+    reader.searchParams.set('url', receiptUrl);
+    if (telegramId) reader.searchParams.set('tid', telegramId);
+    if (lang) reader.searchParams.set('lang', lang);
+    return reader.toString();
+  } catch {
+    return null;
+  }
 }
 
 function getCommand(text) {
@@ -834,74 +852,18 @@ async function handleMessage(message) {
       return;
     }
 
-    await sendTelegramMessage(chatId, { text: BOT_COPY[lang].processing });
-
-    if (!supabaseUrl || !supabaseKey) {
-      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].serverError });
+    const readerUrl = buildReaderUrl(receiptUrl, telegramId, lang);
+    if (!readerUrl) {
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].missingMiniApp });
       return;
     }
 
-    const { data: alreadyProcessed } = await supabase
-      .from('receipts_log')
-      .select('receipt_url')
-      .eq('receipt_url', receiptUrl)
-      .maybeSingle();
-
-    if (alreadyProcessed) {
-      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].alreadyAdded });
-      return;
-    }
-
-    const receiptData = await scrapesoliqReceipt(receiptUrl);
-    if (!receiptData) {
-      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].scrapeFailed });
-      return;
-    }
-
-    if (receiptData && receiptData.items.length > 0) {
-      try {
-        const currentCount = rateLimitCounter[telegramId] || 0;
-        if (currentCount + receiptData.items.length > 10) {
-          await sendTelegramMessage(chatId, { text: BOT_COPY[lang].rateLimited });
-          return;
-        }
-        rateLimitCounter[telegramId] = currentCount + receiptData.items.length;
-
-        const products = await fetchProductsIndex(supabase);
-
-        const inserts = receiptData.items.map(item => insertPendingPrice({
-          supabase,
-          item,
-          receiptData,
-          telegramId,
-          city: receiptData.city,
-          receiptUrl,
-          products,
-        }));
-
-        await Promise.all(inserts);
-
-        await supabase.from('receipts_log').insert({
-          receipt_url: receiptUrl,
-          submitted_by: telegramId,
-          item_count: receiptData.items.length,
-        });
-
-        await sendTelegramMessage(chatId, {
-          text: BOT_COPY[lang].receiptAccepted(
-            receiptData.storeName,
-            receiptData.storeAddress,
-            getCityLabel(receiptData.city, lang),
-            receiptData.items.length,
-          ),
-        });
-      } catch (error) {
-        console.error('Supabase insert error:', error);
-        await sendTelegramMessage(chatId, { text: BOT_COPY[lang].saveFailed });
-      }
-    } else {
-      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].noItems });
-    }
+    await sendTelegramMessage(chatId, {
+      text: BOT_COPY[lang].readerReady,
+      reply_markup: {
+        inline_keyboard: [[{ text: BOT_COPY[lang].btnOpenReader, url: readerUrl }]],
+      },
+    });
     return;
   }
 
