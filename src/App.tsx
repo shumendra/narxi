@@ -180,6 +180,15 @@ export default function App() {
         scanManualExtract: 'Source dan ajratish',
         scanManualExtracting: 'Source ajratilmoqda...',
         scanManualSourcePlaceholder: 'View Page Source dan olingan HTML ni shu yerga joylang',
+        miniWindowTitle: 'Mini oynada ko‘rish',
+        miniWindowOpenReceipt: 'Chekni mini oynada ochish',
+        miniWindowOpenSource: 'Page Source ni mini oynada ochish',
+        miniWindowCopySource: 'To‘liq source ni nusxalash',
+        miniWindowLoadingSource: 'Source yuklanmoqda...',
+        miniWindowCopySuccess: 'Source nusxalandi',
+        miniWindowCopyError: 'Source nusxalanmadi',
+        miniWindowSourceFetchError: 'Page source ni olishda xatolik',
+        miniWindowEmpty: 'Mini oyna hali ochilmagan',
         scanAgain: 'Yana skanerlash',
         goHome: 'Bosh sahifaga',
         retry: 'Qayta urinish',
@@ -278,6 +287,15 @@ export default function App() {
         scanManualExtract: 'Извлечь из source',
         scanManualExtracting: 'Извлечение из source...',
         scanManualSourcePlaceholder: 'Вставьте HTML из View Page Source сюда',
+        miniWindowTitle: 'Просмотр в мини-окне',
+        miniWindowOpenReceipt: 'Открыть чек в мини-окне',
+        miniWindowOpenSource: 'Открыть page source в мини-окне',
+        miniWindowCopySource: 'Скопировать весь source',
+        miniWindowLoadingSource: 'Загрузка source...',
+        miniWindowCopySuccess: 'Source скопирован',
+        miniWindowCopyError: 'Не удалось скопировать source',
+        miniWindowSourceFetchError: 'Ошибка получения page source',
+        miniWindowEmpty: 'Мини-окно пока не открыто',
         scanAgain: 'Сканировать снова',
         goHome: 'На главную',
         retry: 'Повторить',
@@ -376,6 +394,15 @@ export default function App() {
         scanManualExtract: 'Extract from source',
         scanManualExtracting: 'Extracting from source...',
         scanManualSourcePlaceholder: 'Paste HTML from View Page Source here',
+        miniWindowTitle: 'Mini window preview',
+        miniWindowOpenReceipt: 'Open receipt in mini window',
+        miniWindowOpenSource: 'Open page source in mini window',
+        miniWindowCopySource: 'Copy full source text',
+        miniWindowLoadingSource: 'Loading source...',
+        miniWindowCopySuccess: 'Source copied',
+        miniWindowCopyError: 'Failed to copy source',
+        miniWindowSourceFetchError: 'Failed to fetch page source',
+        miniWindowEmpty: 'Mini window is not opened yet',
         scanAgain: 'Scan again',
         goHome: 'Home',
         retry: 'Retry',
@@ -445,9 +472,12 @@ export default function App() {
   const [scanApiResponse, setScanApiResponse] = useState<unknown>(null);
   const [lastScannedReceiptUrl, setLastScannedReceiptUrl] = useState('');
   const [queuingForAuth, setQueuingForAuth] = useState(false);
-  const [showSourceInput, setShowSourceInput] = useState(false);
   const [pageSourceHtml, setPageSourceHtml] = useState('');
   const [extractingFromSource, setExtractingFromSource] = useState(false);
+  const [miniWindowMode, setMiniWindowMode] = useState<'none' | 'receipt' | 'source'>('none');
+  const [miniWindowReceiptUrl, setMiniWindowReceiptUrl] = useState('');
+  const [miniWindowSourceHtml, setMiniWindowSourceHtml] = useState('');
+  const [loadingMiniWindowSource, setLoadingMiniWindowSource] = useState(false);
 
 
   useEffect(() => {
@@ -843,8 +873,10 @@ export default function App() {
   const goToManualEntry = () => {
     setReportEntryStep('manual');
     setShowUrlInput(false);
-    setShowSourceInput(false);
     setPageSourceHtml('');
+    setMiniWindowMode('none');
+    setMiniWindowReceiptUrl('');
+    setMiniWindowSourceHtml('');
     setScanResult(null);
     setScanLogs([]);
     setScanApiResponse(null);
@@ -859,8 +891,10 @@ export default function App() {
     setScanLogs([]);
     setScanApiResponse(null);
     setLastScannedReceiptUrl('');
-    setShowSourceInput(false);
     setPageSourceHtml('');
+    setMiniWindowMode('none');
+    setMiniWindowReceiptUrl('');
+    setMiniWindowSourceHtml('');
   };
 
   const openReceiptLink = () => {
@@ -979,6 +1013,59 @@ export default function App() {
       setScanApiResponse({ ok: false, error: 'network_error', detail: message });
     } finally {
       setExtractingFromSource(false);
+    }
+  };
+
+  const escapeHtmlForPreview = (html: string) =>
+    html
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;');
+
+  const openReceiptInMiniWindow = () => {
+    const url = String(lastScannedReceiptUrl || '').trim();
+    if (!url) return;
+    setMiniWindowReceiptUrl(url);
+    setMiniWindowMode('receipt');
+  };
+
+  const openSourceInMiniWindow = async () => {
+    const url = String(lastScannedReceiptUrl || '').trim();
+    if (!url || loadingMiniWindowSource) return;
+
+    setLoadingMiniWindowSource(true);
+    pushClientLog('Mini window source fetch requested');
+    try {
+      const response = await fetch('/api/source', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+      const result = await response.json();
+
+      if (!response.ok || !result?.ok || typeof result?.source !== 'string') {
+        throw new Error(result?.error || 'source_fetch_failed');
+      }
+
+      setMiniWindowSourceHtml(result.source);
+      setMiniWindowMode('source');
+      pushClientLog(`Mini window source loaded (${result.source.length} chars)`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'source_fetch_failed';
+      pushClientLog(`Mini window source fetch failed: ${message}`);
+      window.Telegram?.WebApp?.showAlert(t.miniWindowSourceFetchError);
+    } finally {
+      setLoadingMiniWindowSource(false);
+    }
+  };
+
+  const copyMiniWindowSource = async () => {
+    if (!miniWindowSourceHtml) return;
+    try {
+      await navigator.clipboard.writeText(miniWindowSourceHtml);
+      window.Telegram?.WebApp?.showAlert(t.miniWindowCopySuccess);
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.miniWindowCopyError);
     }
   };
 
@@ -1110,8 +1197,10 @@ export default function App() {
     pushClientLog('QR scanned');
     const scannedUrl = extractSoliqUrlFromText(url) || String(url || '').trim();
     setLastScannedReceiptUrl(scannedUrl || '');
-    setShowSourceInput(false);
     setPageSourceHtml('');
+    setMiniWindowMode('none');
+    setMiniWindowReceiptUrl('');
+    setMiniWindowSourceHtml('');
     pushClientLog(`URL extracted: ${scannedUrl || 'empty'}`);
     if (!isSoliqUrl(scannedUrl)) {
       pushClientLog('Validation failed: not_soliq_url');
@@ -1148,8 +1237,10 @@ export default function App() {
 
   const retryScan = () => {
     setScanResult(null);
-    setShowSourceInput(false);
     setPageSourceHtml('');
+    setMiniWindowMode('none');
+    setMiniWindowReceiptUrl('');
+    setMiniWindowSourceHtml('');
     setReportEntryStep('entry');
     openNativeQrScanner();
   };
@@ -1559,32 +1650,69 @@ export default function App() {
               <section className="rounded-2xl border border-amber-200 bg-amber-50 p-6 space-y-4">
                 <div className="text-xl font-bold text-amber-900">{t.scanManualTitle}</div>
                 <div className="text-sm text-amber-800">{t.scanManualBody}</div>
-                <button onClick={openReceiptLink} className="w-full rounded-xl bg-amber-600 px-4 py-3 text-sm font-semibold text-white">{t.openReceiptLink}</button>
+                <div className="space-y-2">
+                  <button onClick={openReceiptInMiniWindow} className="w-full rounded-xl bg-amber-600 px-4 py-3 text-sm font-semibold text-white">{t.miniWindowOpenReceipt}</button>
+                  <button
+                    onClick={openSourceInMiniWindow}
+                    disabled={loadingMiniWindowSource}
+                    className="w-full rounded-xl border border-amber-300 bg-white px-4 py-3 text-sm font-semibold text-amber-800 disabled:opacity-50"
+                  >
+                    {loadingMiniWindowSource ? t.miniWindowLoadingSource : t.miniWindowOpenSource}
+                  </button>
+                  <button
+                    onClick={copyMiniWindowSource}
+                    disabled={!miniWindowSourceHtml}
+                    className="w-full rounded-xl border border-amber-300 bg-white px-4 py-3 text-sm font-semibold text-amber-800 disabled:opacity-50"
+                  >
+                    {t.miniWindowCopySource}
+                  </button>
+                </div>
+
+                <div className="rounded-xl border border-amber-200 bg-white p-3">
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-amber-700">{t.miniWindowTitle}</div>
+                  <div className="h-64 overflow-hidden rounded-lg border border-stone-200 bg-stone-50">
+                    {miniWindowMode === 'receipt' && miniWindowReceiptUrl ? (
+                      <iframe
+                        title="receipt-mini-window"
+                        src={miniWindowReceiptUrl}
+                        className="h-full w-full border-0"
+                        sandbox="allow-scripts allow-forms allow-same-origin allow-popups"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : miniWindowMode === 'source' && miniWindowSourceHtml ? (
+                      <iframe
+                        title="source-mini-window"
+                        srcDoc={`<pre style=\"white-space:pre-wrap;word-break:break-word;padding:12px;font-family:monospace;font-size:12px;\">${escapeHtmlForPreview(miniWindowSourceHtml)}</pre>`}
+                        className="h-full w-full border-0"
+                      />
+                    ) : (
+                      <div className="flex h-full items-center justify-center px-4 text-center text-xs text-stone-500">{t.miniWindowEmpty}</div>
+                    )}
+                  </div>
+                </div>
 
                 <button
-                  onClick={() => setShowSourceInput(prev => !prev)}
+                  onClick={openReceiptLink}
                   className="w-full rounded-xl border border-amber-300 bg-white px-4 py-3 text-sm font-semibold text-amber-800"
                 >
-                  {t.scanManualPasteAction}
+                  {t.openReceiptLink}
                 </button>
 
-                {showSourceInput && (
-                  <div className="space-y-3">
-                    <textarea
-                      value={pageSourceHtml}
-                      onChange={(e) => setPageSourceHtml(e.target.value)}
-                      placeholder={t.scanManualSourcePlaceholder}
-                      className="h-44 w-full rounded-xl border border-amber-200 bg-white px-3 py-3 text-xs text-stone-800"
-                    />
-                    <button
-                      onClick={extractFromPageSource}
-                      disabled={!pageSourceHtml.trim() || extractingFromSource}
-                      className="w-full rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
-                    >
-                      {extractingFromSource ? t.scanManualExtracting : t.scanManualExtract}
-                    </button>
-                  </div>
-                )}
+                <div className="space-y-3">
+                  <textarea
+                    value={pageSourceHtml}
+                    onChange={(e) => setPageSourceHtml(e.target.value)}
+                    placeholder={t.scanManualSourcePlaceholder}
+                    className="h-44 w-full rounded-xl border border-amber-200 bg-white px-3 py-3 text-xs text-stone-800"
+                  />
+                  <button
+                    onClick={extractFromPageSource}
+                    disabled={!pageSourceHtml.trim() || extractingFromSource}
+                    className="w-full rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
+                  >
+                    {extractingFromSource ? t.scanManualExtracting : t.scanManualExtract}
+                  </button>
+                </div>
 
                 <button
                   onClick={submitForAuthorization}
