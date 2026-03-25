@@ -527,7 +527,7 @@ async function fetchWithRetry(url, attempts = 3) {
   for (let i = 0; i < attempts; i += 1) {
     try {
       return await axios.get(url, {
-        timeout: 10000,
+        timeout: 30000,
         maxRedirects: 5,
         validateStatus: (status) => status >= 200 && status < 400,
         headers: {
