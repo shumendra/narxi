@@ -192,6 +192,12 @@ export default function App() {
         miniWindowContentCopyError: 'Sahifa kontentini nusxalab bo‘lmadi',
         miniWindowSourceFetchError: 'Page source ni olishda xatolik',
         miniWindowEmpty: 'Mini oyna hali ochilmagan',
+        browserJsCopy: 'Browser JS ni nusxalash',
+        browserJsCopied: 'Browser JS nusxalandi',
+        browserJsonPlaceholder: 'JS natijasidagi JSON ni shu yerga joylang',
+        browserJsonSubmit: 'JSON dan yuborish',
+        browserJsonSubmitting: 'JSON yuborilmoqda...',
+        browserJsonError: 'JSON format xato',
         scanAgain: 'Yana skanerlash',
         goHome: 'Bosh sahifaga',
         retry: 'Qayta urinish',
@@ -302,6 +308,12 @@ export default function App() {
         miniWindowContentCopyError: 'Не удалось скопировать контент страницы',
         miniWindowSourceFetchError: 'Ошибка получения page source',
         miniWindowEmpty: 'Мини-окно пока не открыто',
+        browserJsCopy: 'Скопировать Browser JS',
+        browserJsCopied: 'Browser JS скопирован',
+        browserJsonPlaceholder: 'Вставьте JSON из результата JS сюда',
+        browserJsonSubmit: 'Отправить из JSON',
+        browserJsonSubmitting: 'Отправка JSON...',
+        browserJsonError: 'Неверный формат JSON',
         scanAgain: 'Сканировать снова',
         goHome: 'На главную',
         retry: 'Повторить',
@@ -412,6 +424,12 @@ export default function App() {
         miniWindowContentCopyError: 'Failed to copy page content',
         miniWindowSourceFetchError: 'Failed to fetch page source',
         miniWindowEmpty: 'Mini window is not opened yet',
+        browserJsCopy: 'Copy browser JS extractor',
+        browserJsCopied: 'Browser JS copied',
+        browserJsonPlaceholder: 'Paste JSON output from extractor script here',
+        browserJsonSubmit: 'Submit from JSON',
+        browserJsonSubmitting: 'Submitting JSON...',
+        browserJsonError: 'Invalid JSON format',
         scanAgain: 'Scan again',
         goHome: 'Home',
         retry: 'Retry',
@@ -487,6 +505,8 @@ export default function App() {
   const [miniWindowReceiptUrl, setMiniWindowReceiptUrl] = useState('');
   const [miniWindowSourceHtml, setMiniWindowSourceHtml] = useState('');
   const [loadingMiniWindowSource, setLoadingMiniWindowSource] = useState(false);
+  const [browserExtractedJson, setBrowserExtractedJson] = useState('');
+  const [submittingExtractedJson, setSubmittingExtractedJson] = useState(false);
   const miniWindowIframeRef = useRef<HTMLIFrameElement | null>(null);
 
 
@@ -887,6 +907,7 @@ export default function App() {
     setMiniWindowMode('none');
     setMiniWindowReceiptUrl('');
     setMiniWindowSourceHtml('');
+    setBrowserExtractedJson('');
     setScanResult(null);
     setScanLogs([]);
     setScanApiResponse(null);
@@ -905,6 +926,7 @@ export default function App() {
     setMiniWindowMode('none');
     setMiniWindowReceiptUrl('');
     setMiniWindowSourceHtml('');
+    setBrowserExtractedJson('');
   };
 
   const openReceiptLink = () => {
@@ -1122,6 +1144,120 @@ export default function App() {
     }
   };
 
+  const copyBrowserExtractorScript = async () => {
+    const script = `(() => {
+  const normalize = (raw) => {
+    const cleaned = String(raw || '').replace(/[^\\d.,-]/g, '');
+    if (!cleaned) return 0;
+    const normalized = cleaned.includes(',') && cleaned.includes('.') ? cleaned.replace(/,/g, '') : cleaned.replace(/,/g, '.');
+    const value = parseFloat(normalized);
+    return Number.isFinite(value) ? value : 0;
+  };
+
+  const table = document.querySelector('.products-tables');
+  if (!table) {
+    alert('products-tables not found');
+    return;
+  }
+
+  const rows = Array.from(table.querySelectorAll('.products-row, tbody tr'));
+  const extracted = rows.map((row) => {
+    const cells = Array.from(row.querySelectorAll('td'));
+    if (cells.length < 2) return null;
+    const name = (cells[0]?.innerText || '').trim();
+    const quantityRaw = (cells[1]?.innerText || '').trim();
+    const priceRaw = (cells[2]?.innerText || cells[cells.length - 1]?.innerText || '').trim();
+    const quantity = Math.max(1, normalize(quantityRaw));
+    const total = normalize(priceRaw);
+    if (!name || total <= 0) return null;
+    return {
+      name,
+      quantity,
+      total_price: total,
+      unit_price: quantity > 0 ? total / quantity : total,
+    };
+  }).filter(Boolean);
+
+  const payload = JSON.stringify(extracted, null, 2);
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(payload).then(() => alert('JSON copied')).catch(() => prompt('Copy JSON', payload));
+  } else {
+    prompt('Copy JSON', payload);
+  }
+})();`;
+
+    try {
+      await navigator.clipboard.writeText(script);
+      window.Telegram?.WebApp?.showAlert(t.browserJsCopied);
+      pushClientLog('Browser extractor JS copied');
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.miniWindowCopyError);
+    }
+  };
+
+  const submitExtractedJson = async () => {
+    const url = String(lastScannedReceiptUrl || '').trim();
+    const raw = String(browserExtractedJson || '').trim();
+    if (!url || !raw || submittingExtractedJson) return;
+
+    let extractedItems: Array<{ name?: string; quantity?: number; total_price?: number; unit_price?: number }> = [];
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        window.Telegram?.WebApp?.showAlert(t.browserJsonError);
+        return;
+      }
+      extractedItems = parsed;
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.browserJsonError);
+      return;
+    }
+
+    setSubmittingExtractedJson(true);
+    pushClientLog('Extracted JSON submit requested');
+    try {
+      const response = await fetch(scanApiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url,
+          extracted_items: extractedItems,
+          telegram_id: window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || 'anonymous',
+          city: selectedCity,
+        }),
+      });
+
+      const result = await response.json();
+      setScanApiResponse(result);
+      pushServerTrace(result?.trace);
+
+      if (result?.ok) {
+        pushClientLog('Extracted JSON submit success');
+        setScanResult({
+          status: 'success',
+          storeName: result.store_name,
+          storeAddress: result.store_address,
+          city: result.city,
+          itemCount: result.item_count,
+          queuedWithoutParse: false,
+        });
+      } else {
+        pushClientLog(`Extracted JSON submit failed (${result?.error || 'scan_failed'})`);
+        setScanResult({
+          status: 'error',
+          errorCode: result?.error || 'scan_failed',
+          errorDetail: result?.detail || '',
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'network_error';
+      pushClientLog(`Extracted JSON submit network error: ${message}`);
+      setScanResult({ status: 'error', errorCode: 'network_error', errorDetail: message });
+    } finally {
+      setSubmittingExtractedJson(false);
+    }
+  };
+
   const pushClientLog = (message: string) => {
     setScanLogs(prev => [
       ...prev,
@@ -1254,6 +1390,7 @@ export default function App() {
     setMiniWindowMode('none');
     setMiniWindowReceiptUrl('');
     setMiniWindowSourceHtml('');
+    setBrowserExtractedJson('');
     pushClientLog(`URL extracted: ${scannedUrl || 'empty'}`);
     if (!isSoliqUrl(scannedUrl)) {
       pushClientLog('Validation failed: not_soliq_url');
@@ -1294,6 +1431,7 @@ export default function App() {
     setMiniWindowMode('none');
     setMiniWindowReceiptUrl('');
     setMiniWindowSourceHtml('');
+    setBrowserExtractedJson('');
     setReportEntryStep('entry');
     openNativeQrScanner();
   };
@@ -1725,6 +1863,12 @@ export default function App() {
                   >
                     {t.miniWindowCopyContent}
                   </button>
+                  <button
+                    onClick={copyBrowserExtractorScript}
+                    className="w-full rounded-xl border border-amber-300 bg-white px-4 py-3 text-sm font-semibold text-amber-800"
+                  >
+                    {t.browserJsCopy}
+                  </button>
                 </div>
 
                 <div className="rounded-xl border border-amber-200 bg-white p-3">
@@ -1771,6 +1915,22 @@ export default function App() {
                     className="w-full rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
                   >
                     {extractingFromSource ? t.scanManualExtracting : t.scanManualExtract}
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  <textarea
+                    value={browserExtractedJson}
+                    onChange={(e) => setBrowserExtractedJson(e.target.value)}
+                    placeholder={t.browserJsonPlaceholder}
+                    className="h-44 w-full rounded-xl border border-amber-200 bg-white px-3 py-3 text-xs text-stone-800"
+                  />
+                  <button
+                    onClick={submitExtractedJson}
+                    disabled={!browserExtractedJson.trim() || submittingExtractedJson}
+                    className="w-full rounded-xl bg-emerald-700 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
+                  >
+                    {submittingExtractedJson ? t.browserJsonSubmitting : t.browserJsonSubmit}
                   </button>
                 </div>
 
