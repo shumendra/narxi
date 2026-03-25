@@ -1,8 +1,7 @@
 ﻿import { createClient } from '@supabase/supabase-js';
 import { normalizeCityName } from '../src/constants/cities.js';
 import {
-  parseReceiptHtml,
-  extractCityFromAddress,
+  scrapesoliqReceipt,
   insertPendingPrice,
   fetchProductsIndex,
   normalizeSoliqUrl,
@@ -34,6 +33,14 @@ function ok(res, payload) {
   return res.status(200).json(payload);
 }
 
+function pushTrace(trace, stage, detail = null) {
+  trace.push({
+    ts: new Date().toISOString(),
+    stage,
+    detail,
+  });
+}
+
 /**
  * Vercel API endpoint (fallback).
  * Accepts { url, telegram_id, city, html? }.
@@ -41,10 +48,14 @@ function ok(res, payload) {
  */
 export default async function handler(req, res) {
   withCors(res);
+  const trace = [];
+  const respond = (payload) => ok(res, { ...payload, trace });
+
+  pushTrace(trace, 'request_received', { method: req.method });
 
   if (req.method === 'OPTIONS') return res.status(200).end();
-  if (!supabase) return ok(res, { ok: false, error: 'server_not_configured' });
-  if (req.method !== 'POST') return ok(res, { ok: false, error: 'method_not_allowed' });
+  if (!supabase) return respond({ ok: false, error: 'server_not_configured' });
+  if (req.method !== 'POST') return respond({ ok: false, error: 'method_not_allowed' });
 
   try {
     const body =
@@ -55,11 +66,17 @@ export default async function handler(req, res) {
     const url = normalizeSoliqUrl(rawUrl) || rawUrl;
     const telegramId = String(body.telegram_id || 'anonymous');
     const selectedCity = normalizeCityName(body.city || '') || null;
-    const clientHtml = body.html ? String(body.html) : null;
+    pushTrace(trace, 'request_parsed', {
+      telegramId,
+      selectedCity,
+      url,
+    });
 
     if (!isSoliqUrl(url)) {
-      return ok(res, { ok: false, error: 'not_soliq_url' });
+      pushTrace(trace, 'validation_failed', { error: 'not_soliq_url' });
+      return respond({ ok: false, error: 'not_soliq_url' });
     }
+    pushTrace(trace, 'validation_ok');
 
     /* blocked check */
     const { data: blocked } = await supabase
@@ -67,7 +84,11 @@ export default async function handler(req, res) {
       .select('telegram_id')
       .eq('telegram_id', telegramId)
       .maybeSingle();
-    if (blocked) return ok(res, { ok: false, error: 'blocked' });
+    if (blocked) {
+      pushTrace(trace, 'blocked_user', { telegramId });
+      return respond({ ok: false, error: 'blocked' });
+    }
+    pushTrace(trace, 'blocked_check_ok');
 
     /* duplicate check */
     const { data: alreadyProcessed } = await supabase
@@ -76,87 +97,63 @@ export default async function handler(req, res) {
       .eq('receipt_url', url)
       .maybeSingle();
     if (alreadyProcessed) {
-      return ok(res, { ok: false, error: 'duplicate', message: 'Bu chek avval yuborilgan edi' });
+      pushTrace(trace, 'duplicate_found', { receiptUrl: url });
+      return respond({ ok: false, error: 'duplicate', message: 'Bu chek avval yuborilgan edi' });
+    }
+    pushTrace(trace, 'duplicate_check_ok');
+
+    pushTrace(trace, 'scrape_start', { url });
+    const receiptData = await scrapesoliqReceipt(url);
+
+    if (!receiptData) {
+      pushTrace(trace, 'scrape_failed', { error: 'no_receipt_data' });
+      return respond({ ok: false, error: 'scrape_failed' });
     }
 
-    /* get HTML: prefer client-provided, otherwise try server fetch */
-    let html = clientHtml;
-    if (!html) {
-      try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 15000);
-        const response = await fetch(url, {
-          signal: controller.signal,
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
-            Accept: 'text/html',
-          },
-        });
-        clearTimeout(timeout);
-        if (response.ok) html = await response.text();
-      } catch (error) {
-        console.error('Server-side fetch failed:', error?.message);
-      }
+    if (receiptData._generating) {
+      pushTrace(trace, 'receipt_generating', { parseStage: receiptData.parseStage || null });
+      return respond({ ok: false, error: 'receipt_generating' });
     }
 
-    if (!html) return ok(res, { ok: false, error: 'fetch_failed' });
-
-    /* parse */
-    const parsed = parseReceiptHtml(html);
-    if (!parsed || !Array.isArray(parsed.items) || parsed.items.length === 0) {
-      return ok(res, { ok: false, error: 'parse_failed' });
+    if (!Array.isArray(receiptData.items) || receiptData.items.length === 0) {
+      pushTrace(trace, 'parse_failed', { error: 'no_items' });
+      return respond({ ok: false, error: 'parse_failed' });
     }
-
-    const normalizedReceiptDate =
-      parsed.receipt_date && /^\d{2}\.\d{2}\.\d{4}$/.test(parsed.receipt_date)
-        ? `${parsed.receipt_date.split('.').reverse().join('-')}T00:00:00.000Z`
-        : parsed.receipt_date || new Date().toISOString();
-
-    const detectedCity =
-      normalizeCityName(extractCityFromAddress(parsed.store_address || '')) || null;
-
-    const receiptData = {
-      storeName: parsed.store_name,
-      storeAddress: parsed.store_address,
-      city: detectedCity,
-      detectedCity,
-      receiptDate: normalizedReceiptDate,
-      latitude: null,
-      longitude: null,
-      items: parsed.items.map((item) => ({
-        name: item.name,
-        quantity: Number(item.quantity) || 1,
-        totalPrice: Number(item.price) || 0,
-        unitPrice: Number(item.unit_price) || Number(item.price) || 0,
-      })),
-    };
+    pushTrace(trace, 'parse_success', { itemCount: receiptData.items.length, storeName: receiptData.storeName || null });
 
     /* insert items */
     const products = await fetchProductsIndex(supabase);
-    for (const item of receiptData.items) {
+    pushTrace(trace, 'products_loaded', { count: products.length });
+    for (const item of receiptData.items || []) {
       await insertPendingPrice({
-        supabase, item, receiptData, telegramId,
+        supabase,
+        item,
+        receiptData,
+        telegramId,
         city: selectedCity, receiptUrl: url, products,
         source: 'soliq_qr',
       });
     }
+    pushTrace(trace, 'pending_prices_inserted', { itemCount: receiptData.items?.length || 0 });
 
     /* log receipt */
     await supabase.from('receipts_log').insert({
       receipt_url: url,
       submitted_by: telegramId,
-      item_count: receiptData.items.length,
+      item_count: receiptData.items?.length || 0,
     });
+    pushTrace(trace, 'receipt_logged');
 
-    return ok(res, {
+    return respond({
       ok: true,
-      store_name: receiptData.storeName,
-      store_address: receiptData.storeAddress,
-      city: detectedCity || selectedCity || 'Tashkent',
-      item_count: receiptData.items.length,
+      store_name: receiptData.storeName || null,
+      store_address: receiptData.storeAddress || null,
+      city: normalizeCityName(receiptData.city || '') || selectedCity || 'Tashkent',
+      item_count: receiptData.items?.length || 0,
     });
   } catch (error) {
     console.error('scan handler error:', error);
-    return ok(res, { ok: false, error: 'server_error' });
+    pushTrace(trace, 'server_error', { message: error?.message || String(error) });
+    return respond({ ok: false, error: 'server_error', detail: error?.message || String(error) });
   }
 }

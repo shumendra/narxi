@@ -4,13 +4,32 @@ import * as fuzzball from 'fuzzball';
 import { extractCityFromAddress as extractCityFromAddressBase, normalizeCityName } from '../../src/constants/cities.js';
 
 export function isSoliqUrl(url) {
-  const value = String(url || '').toLowerCase();
-  return value.includes('ofd.soliq.uz/check') || value.includes('soliq.uz/check');
+  try {
+    const parsed = new URL(String(url || ''));
+    return parsed.hostname.toLowerCase() === 'ofd.soliq.uz' && parsed.pathname.toLowerCase() === '/check';
+  } catch {
+    return false;
+  }
 }
 
 export function extractSoliqUrlFromText(input) {
   const raw = String(input || '').trim();
   if (!raw) return null;
+
+  const canonicalizeParsedUrl = (parsed) => {
+    const canonical = new URL('https://ofd.soliq.uz/check');
+    const t = parsed.searchParams.get('t');
+    const r = parsed.searchParams.get('r');
+    const c = parsed.searchParams.get('c');
+    const s = parsed.searchParams.get('s');
+
+    if (t) canonical.searchParams.set('t', t);
+    if (r) canonical.searchParams.set('r', r);
+    if (c) canonical.searchParams.set('c', c);
+    if (s) canonical.searchParams.set('s', s);
+
+    return canonical.toString();
+  };
 
   const buildCheckFromParams = (paramsSource) => {
     const search = new URLSearchParams(paramsSource);
@@ -33,7 +52,7 @@ export function extractSoliqUrlFromText(input) {
     try {
       const parsed = new URL(directMatch[0]);
       const fromDirectParams = buildCheckFromParams(parsed.search);
-      return fromDirectParams || parsed.toString();
+      return fromDirectParams || canonicalizeParsedUrl(parsed);
     } catch {
       return directMatch[0];
     }
@@ -66,10 +85,23 @@ export function normalizeSoliqUrl(input) {
     if (!/soliq\.uz$/i.test(parsed.hostname) && !/\.soliq\.uz$/i.test(parsed.hostname)) {
       return null;
     }
-    if (!isSoliqUrl(parsed.toString())) {
+
+    const canonical = new URL('https://ofd.soliq.uz/check');
+    const t = parsed.searchParams.get('t');
+    const r = parsed.searchParams.get('r');
+    const c = parsed.searchParams.get('c');
+    const s = parsed.searchParams.get('s');
+
+    if (t) canonical.searchParams.set('t', t);
+    if (r) canonical.searchParams.set('r', r);
+    if (c) canonical.searchParams.set('c', c);
+    if (s) canonical.searchParams.set('s', s);
+
+    if (!isSoliqUrl(canonical.toString())) {
       return null;
     }
-    return parsed.toString();
+
+    return canonical.toString();
   } catch {
     return null;
   }

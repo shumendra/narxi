@@ -417,6 +417,8 @@ export default function App() {
     errorCode?: string;
     errorDetail?: string;
   } | null>(null);
+  const [scanLogs, setScanLogs] = useState<Array<{ ts: string; source: 'client' | 'server'; message: string }>>([]);
+  const [scanApiResponse, setScanApiResponse] = useState<unknown>(null);
 
 
   useEffect(() => {
@@ -814,6 +816,7 @@ export default function App() {
     setShowUrlInput(false);
     setScanResult(null);
     setScanLogs([]);
+    setScanApiResponse(null);
   };
 
   const goToReportHome = () => {
@@ -822,11 +825,46 @@ export default function App() {
     setShowUrlInput(false);
     setScanResult(null);
     setScanUrlInput('');
+    setScanLogs([]);
+    setScanApiResponse(null);
+  };
+
+  const pushClientLog = (message: string) => {
+    setScanLogs(prev => [
+      ...prev,
+      { ts: new Date().toISOString(), source: 'client', message },
+    ]);
+  };
+
+  const pushServerTrace = (trace: Array<{ ts?: string; stage?: string; detail?: unknown }> | undefined) => {
+    if (!Array.isArray(trace) || trace.length === 0) return;
+    setScanLogs(prev => [
+      ...prev,
+      ...trace.map(entry => ({
+        ts: entry?.ts || new Date().toISOString(),
+        source: 'server' as const,
+        message: `${entry?.stage || 'unknown'}${entry?.detail ? `: ${JSON.stringify(entry.detail)}` : ''}`,
+      })),
+    ]);
   };
 
   const extractSoliqUrlFromText = (input: string) => {
     const raw = String(input || '').trim();
     if (!raw) return null;
+
+    const canonicalizeParsedUrl = (parsed: URL) => {
+      const canonical = new URL('https://ofd.soliq.uz/check');
+      const t = parsed.searchParams.get('t');
+      const r = parsed.searchParams.get('r');
+      const c = parsed.searchParams.get('c');
+      const s = parsed.searchParams.get('s');
+
+      if (t) canonical.searchParams.set('t', t);
+      if (r) canonical.searchParams.set('r', r);
+      if (c) canonical.searchParams.set('c', c);
+      if (s) canonical.searchParams.set('s', s);
+      return canonical.toString();
+    };
 
     const buildCheckFromParams = (paramsSource: string) => {
       const params = new URLSearchParams(paramsSource);
@@ -848,7 +886,7 @@ export default function App() {
     if (directMatch && /soliq\.uz/i.test(directMatch[0])) {
       try {
         const parsed = new URL(directMatch[0]);
-        return buildCheckFromParams(parsed.search) || parsed.toString();
+        return buildCheckFromParams(parsed.search) || canonicalizeParsedUrl(parsed);
       } catch {
         return directMatch[0];
       }
@@ -872,8 +910,12 @@ export default function App() {
   };
 
   const isSoliqUrl = (url: string) => {
-    const value = String(url || '').toLowerCase();
-    return value.includes('ofd.soliq.uz/check') || value.includes('soliq.uz/check');
+    try {
+      const parsed = new URL(String(url || ''));
+      return parsed.hostname.toLowerCase() === 'ofd.soliq.uz' && parsed.pathname.toLowerCase() === '/check';
+    } catch {
+      return false;
+    }
   };
 
   const getScanErrorBody = (errorCode?: string) => {
@@ -910,16 +952,24 @@ export default function App() {
   const scanApiUrl = import.meta.env.VITE_SCAN_API_URL || '/api/scan';
 
   const handleSoliqUrl = async (url: string) => {
+    const startedAt = Date.now();
+    setScanLogs([]);
+    setScanApiResponse(null);
+    pushClientLog('QR scanned');
     const scannedUrl = extractSoliqUrlFromText(url) || String(url || '').trim();
+    pushClientLog(`URL extracted: ${scannedUrl || 'empty'}`);
     if (!isSoliqUrl(scannedUrl)) {
+      pushClientLog('Validation failed: not_soliq_url');
       setScanResult({ status: 'error', errorCode: 'not_soliq_url', errorDetail: 'URL does not match soliq receipt domain' });
       setReportEntryStep('result');
       return;
     }
+    pushClientLog('Validation passed');
 
     setShowUrlInput(false);
     setScanResult(null);
     setReportEntryStep('loading');
+    pushClientLog(`Sending POST ${scanApiUrl}`);
 
     try {
       const response = await fetch(scanApiUrl, {
@@ -931,10 +981,15 @@ export default function App() {
           city: selectedCity,
         }),
       });
+      pushClientLog(`HTTP response: ${response.status}`);
 
       const result = await response.json();
+      setScanApiResponse(result);
+      pushClientLog(`API response received in ${Date.now() - startedAt}ms`);
+      pushServerTrace(result?.trace);
 
       if (result?.ok) {
+        pushClientLog('Result: success');
         setScanResult({
           status: 'success',
           storeName: result.store_name,
@@ -944,8 +999,10 @@ export default function App() {
           queuedWithoutParse: false,
         });
       } else if (result?.error === 'duplicate') {
-        setScanResult({ status: 'duplicate', errorCode: 'duplicate', errorDetail: result?.detail || '' });
+        pushClientLog('Result: duplicate');
+        setScanResult({ status: 'duplicate', errorCode: 'duplicate', errorDetail: result?.detail || result?.message || '' });
       } else {
+        pushClientLog(`Result: error (${result?.error || 'scan_failed'})`);
         setScanResult({
           status: 'error',
           errorCode: result?.error || 'scan_failed',
@@ -954,8 +1011,11 @@ export default function App() {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'network_error';
+      pushClientLog(`Request failed: ${message}`);
       setScanResult({ status: 'error', errorCode: 'network_error', errorDetail: message });
+      setScanApiResponse({ ok: false, error: 'network_error', detail: message });
     } finally {
+      pushClientLog('Flow finished');
       setReportEntryStep('result');
     }
   };
@@ -1304,6 +1364,18 @@ export default function App() {
                   </div>
                   <div className="mt-4 text-sm text-stone-600">{t.scanLoadingHint}</div>
                 </div>
+                <div className="rounded-2xl border border-stone-200 bg-white p-4">
+                  <div className="text-sm font-semibold text-stone-800">{t.scanLogTitle}</div>
+                  <div className="mt-3 max-h-64 overflow-auto rounded-xl bg-stone-50 p-3 text-xs font-mono text-stone-700 space-y-1">
+                    {scanLogs.length === 0 ? (
+                      <div className="text-stone-500">{t.scanLogEmpty}</div>
+                    ) : scanLogs.map((entry, index) => (
+                      <div key={`${entry.ts}-${index}`}>
+                        [{new Date(entry.ts).toLocaleTimeString()}] {entry.source === 'client' ? t.scanLogClient : t.scanLogServer}: {entry.message}
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </section>
             )}
 
@@ -1353,6 +1425,27 @@ export default function App() {
                   <button onClick={retryScan} className="rounded-xl bg-rose-600 px-4 py-3 text-sm font-semibold text-white">{t.retry}</button>
                   <button onClick={goToManualEntry} className="rounded-xl border border-rose-300 bg-white px-4 py-3 text-sm font-semibold text-rose-700">{t.switchManual}</button>
                 </div>
+              </section>
+            )}
+
+            {reportEntryStep === 'result' && (
+              <section className="rounded-2xl border border-stone-200 bg-white p-4 space-y-3">
+                <div className="text-sm font-semibold text-stone-800">{t.scanLogTitle}</div>
+                <div className="max-h-72 overflow-auto rounded-xl bg-stone-50 p-3 text-xs font-mono text-stone-700 space-y-1">
+                  {scanLogs.length === 0 ? (
+                    <div className="text-stone-500">{t.scanLogEmpty}</div>
+                  ) : scanLogs.map((entry, index) => (
+                    <div key={`${entry.ts}-${index}`}>
+                      [{new Date(entry.ts).toLocaleTimeString()}] {entry.source === 'client' ? t.scanLogClient : t.scanLogServer}: {entry.message}
+                    </div>
+                  ))}
+                </div>
+                {scanApiResponse && (
+                  <div>
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-stone-500">API Response</div>
+                    <pre className="max-h-72 overflow-auto rounded-xl bg-stone-900 p-3 text-xs text-stone-100 whitespace-pre-wrap break-all">{JSON.stringify(scanApiResponse, null, 2)}</pre>
+                  </div>
+                )}
               </section>
             )}
 
