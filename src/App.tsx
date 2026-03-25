@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { Search, MapPin, Plus, ChevronRight, Navigation, Camera, Check, QrCode, PencilLine, Loader2 } from 'lucide-react';
 import { MapContainer, TileLayer, CircleMarker, Popup, useMap, useMapEvents } from 'react-leaflet';
@@ -184,9 +184,12 @@ export default function App() {
         miniWindowOpenReceipt: 'Chekni mini oynada ochish',
         miniWindowOpenSource: 'Page Source ni mini oynada ochish',
         miniWindowCopySource: 'To‘liq source ni nusxalash',
+        miniWindowCopyContent: 'Sahifadagi kontentni nusxalash',
         miniWindowLoadingSource: 'Source yuklanmoqda...',
         miniWindowCopySuccess: 'Source nusxalandi',
         miniWindowCopyError: 'Source nusxalanmadi',
+        miniWindowContentCopySuccess: 'Sahifa kontenti nusxalandi',
+        miniWindowContentCopyError: 'Sahifa kontentini nusxalab bo‘lmadi',
         miniWindowSourceFetchError: 'Page source ni olishda xatolik',
         miniWindowEmpty: 'Mini oyna hali ochilmagan',
         scanAgain: 'Yana skanerlash',
@@ -291,9 +294,12 @@ export default function App() {
         miniWindowOpenReceipt: 'Открыть чек в мини-окне',
         miniWindowOpenSource: 'Открыть page source в мини-окне',
         miniWindowCopySource: 'Скопировать весь source',
+        miniWindowCopyContent: 'Скопировать контент страницы',
         miniWindowLoadingSource: 'Загрузка source...',
         miniWindowCopySuccess: 'Source скопирован',
         miniWindowCopyError: 'Не удалось скопировать source',
+        miniWindowContentCopySuccess: 'Контент страницы скопирован',
+        miniWindowContentCopyError: 'Не удалось скопировать контент страницы',
         miniWindowSourceFetchError: 'Ошибка получения page source',
         miniWindowEmpty: 'Мини-окно пока не открыто',
         scanAgain: 'Сканировать снова',
@@ -398,9 +404,12 @@ export default function App() {
         miniWindowOpenReceipt: 'Open receipt in mini window',
         miniWindowOpenSource: 'Open page source in mini window',
         miniWindowCopySource: 'Copy full source text',
+        miniWindowCopyContent: 'Copy page content text',
         miniWindowLoadingSource: 'Loading source...',
         miniWindowCopySuccess: 'Source copied',
         miniWindowCopyError: 'Failed to copy source',
+        miniWindowContentCopySuccess: 'Page content copied',
+        miniWindowContentCopyError: 'Failed to copy page content',
         miniWindowSourceFetchError: 'Failed to fetch page source',
         miniWindowEmpty: 'Mini window is not opened yet',
         scanAgain: 'Scan again',
@@ -478,6 +487,7 @@ export default function App() {
   const [miniWindowReceiptUrl, setMiniWindowReceiptUrl] = useState('');
   const [miniWindowSourceHtml, setMiniWindowSourceHtml] = useState('');
   const [loadingMiniWindowSource, setLoadingMiniWindowSource] = useState(false);
+  const miniWindowIframeRef = useRef<HTMLIFrameElement | null>(null);
 
 
   useEffect(() => {
@@ -1044,6 +1054,9 @@ export default function App() {
       const result = await response.json();
 
       if (!response.ok || !result?.ok || typeof result?.source !== 'string') {
+        if (result?.detail) {
+          pushClientLog(`Mini window source detail: ${JSON.stringify(result.detail)}`);
+        }
         throw new Error(result?.error || 'source_fetch_failed');
       }
 
@@ -1066,6 +1079,43 @@ export default function App() {
       window.Telegram?.WebApp?.showAlert(t.miniWindowCopySuccess);
     } catch {
       window.Telegram?.WebApp?.showAlert(t.miniWindowCopyError);
+    }
+  };
+
+  const copyMiniWindowPageContent = async () => {
+    try {
+      const iframeDoc = miniWindowIframeRef.current?.contentDocument;
+      const iframeText = iframeDoc?.body?.innerText?.trim();
+      if (iframeText) {
+        await navigator.clipboard.writeText(iframeText);
+        window.Telegram?.WebApp?.showAlert(t.miniWindowContentCopySuccess);
+        return;
+      }
+    } catch {
+      // cross-origin expected for many external pages
+    }
+
+    try {
+      const url = String(lastScannedReceiptUrl || '').trim();
+      if (!url) throw new Error('missing_url');
+
+      const response = await fetch('/api/source', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, mode: 'content' }),
+      });
+      const result = await response.json();
+
+      if (!response.ok || !result?.ok || typeof result?.content !== 'string') {
+        throw new Error(result?.error || 'content_extract_failed');
+      }
+
+      await navigator.clipboard.writeText(result.content);
+      window.Telegram?.WebApp?.showAlert(t.miniWindowContentCopySuccess);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'content_copy_failed';
+      pushClientLog(`Content copy failed: ${message}`);
+      window.Telegram?.WebApp?.showAlert(t.miniWindowContentCopyError);
     }
   };
 
@@ -1666,6 +1716,12 @@ export default function App() {
                   >
                     {t.miniWindowCopySource}
                   </button>
+                  <button
+                    onClick={copyMiniWindowPageContent}
+                    className="w-full rounded-xl border border-amber-300 bg-white px-4 py-3 text-sm font-semibold text-amber-800"
+                  >
+                    {t.miniWindowCopyContent}
+                  </button>
                 </div>
 
                 <div className="rounded-xl border border-amber-200 bg-white p-3">
@@ -1673,6 +1729,7 @@ export default function App() {
                   <div className="h-64 overflow-hidden rounded-lg border border-stone-200 bg-stone-50">
                     {miniWindowMode === 'receipt' && miniWindowReceiptUrl ? (
                       <iframe
+                        ref={miniWindowIframeRef}
                         title="receipt-mini-window"
                         src={miniWindowReceiptUrl}
                         className="h-full w-full border-0"

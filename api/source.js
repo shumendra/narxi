@@ -1,5 +1,11 @@
 import axios from 'axios';
 import { normalizeSoliqUrl, isSoliqUrl } from './utils/receipt.js';
+import * as cheerio from 'cheerio';
+
+export const config = {
+  api: { bodyParser: true },
+  maxDuration: 30,
+};
 
 function withCors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -44,8 +50,15 @@ function buildCandidateUrls(inputUrl) {
   return [...new Set(candidates)];
 }
 
+function extractVisibleContentFromHtml(html) {
+  const $ = cheerio.load(String(html || ''));
+  $('script, style, noscript').remove();
+  return $('body').text().replace(/\s+/g, ' ').trim();
+}
+
 async function fetchSource(url) {
   const candidates = buildCandidateUrls(url);
+  const attempts = [];
 
   for (const candidate of candidates) {
     try {
@@ -66,14 +79,17 @@ async function fetchSource(url) {
 
       const html = String(response.data || '').trim();
       if (html) {
-        return html;
+        attempts.push({ candidate, status: response.status, htmlLength: html.length, ok: true });
+        return { html, attempts };
       }
+      attempts.push({ candidate, status: response.status, htmlLength: 0, ok: false, error: 'empty_html' });
     } catch {
+      attempts.push({ candidate, ok: false, error: 'request_failed' });
       continue;
     }
   }
 
-  return null;
+  return { html: null, attempts };
 }
 
 export default async function handler(req, res) {
@@ -85,17 +101,26 @@ export default async function handler(req, res) {
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
     const normalized = normalizeSoliqUrl(String(body.url || '').trim());
+    const mode = String(body.mode || 'source').toLowerCase();
 
     if (!normalized || !isSoliqUrl(normalized)) {
       return ok(res, { ok: false, error: 'not_soliq_url' });
     }
 
-    const source = await fetchSource(normalized);
-    if (!source) {
-      return ok(res, { ok: false, error: 'source_fetch_failed' });
+    const { html, attempts } = await fetchSource(normalized);
+    if (!html) {
+      return ok(res, { ok: false, error: 'source_fetch_failed', detail: { attempts } });
     }
 
-    return ok(res, { ok: true, source });
+    if (mode === 'content') {
+      const content = extractVisibleContentFromHtml(html);
+      if (!content) {
+        return ok(res, { ok: false, error: 'content_extract_failed', detail: { attempts } });
+      }
+      return ok(res, { ok: true, content, detail: { attempts } });
+    }
+
+    return ok(res, { ok: true, source: html, detail: { attempts } });
   } catch (error) {
     return ok(res, { ok: false, error: 'server_error', detail: error?.message || String(error) });
   }
