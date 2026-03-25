@@ -43,6 +43,57 @@ function pushTrace(trace, stage, detail = null) {
   });
 }
 
+async function queueManualReceiptReview({
+  supabaseClient,
+  telegramId,
+  city,
+  receiptUrl,
+}) {
+  const finalCity = normalizeCityName(city || '') || 'Tashkent';
+  const now = new Date().toISOString();
+
+  const payload = {
+    product_name_raw: 'RECEIPT_MANUAL_REVIEW',
+    product_id: null,
+    match_confidence: 0,
+    status: 'pending',
+    price: 1,
+    quantity: 1,
+    unit_price: 1,
+    city: finalCity,
+    place_name: 'Soliq receipt (manual review)',
+    place_address: null,
+    receipt_url: receiptUrl,
+    receipt_date: now,
+    source: 'soliq_qr_manual_review',
+    submitted_by: telegramId,
+    latitude: null,
+    longitude: null,
+  };
+
+  const { error } = await supabaseClient
+    .from('pending_prices')
+    .insert(payload);
+  if (error) throw error;
+
+  const { error: logError } = await supabaseClient
+    .from('receipts_log')
+    .insert({
+      receipt_url: receiptUrl,
+      submitted_by: telegramId,
+      item_count: 0,
+    });
+  if (logError) throw logError;
+
+  return {
+    store_name: 'Soliq receipt (manual review)',
+    store_address: '-',
+    city: finalCity,
+    item_count: 0,
+    queued_without_parse: true,
+  };
+}
+
 function buildFallbackCandidateUrls(inputUrl) {
   const candidates = [inputUrl];
   try {
@@ -169,10 +220,12 @@ export default async function handler(req, res) {
     const url = normalizeSoliqUrl(rawUrl) || rawUrl;
     const telegramId = String(body.telegram_id || 'anonymous');
     const selectedCity = normalizeCityName(body.city || '') || null;
+    const forceQueue = Boolean(body.force_queue);
     pushTrace(trace, 'request_parsed', {
       telegramId,
       selectedCity,
       url,
+      forceQueue,
     });
 
     if (!isSoliqUrl(url)) {
@@ -204,6 +257,23 @@ export default async function handler(req, res) {
       return respond({ ok: false, error: 'duplicate', message: 'Bu chek avval yuborilgan edi' });
     }
     pushTrace(trace, 'duplicate_check_ok');
+
+    if (forceQueue) {
+      pushTrace(trace, 'force_queue_requested');
+      try {
+        const queued = await queueManualReceiptReview({
+          supabaseClient: supabase,
+          telegramId,
+          city: selectedCity,
+          receiptUrl: url,
+        });
+        pushTrace(trace, 'force_queue_success', { city: queued.city });
+        return respond({ ok: true, ...queued });
+      } catch (queueError) {
+        pushTrace(trace, 'force_queue_error', { message: queueError?.message || String(queueError) });
+        return respond({ ok: false, error: 'queue_failed', detail: queueError?.message || String(queueError) });
+      }
+    }
 
     pushTrace(trace, 'scrape_start', { url });
     let receiptData = await scrapesoliqReceipt(url);

@@ -179,6 +179,7 @@ export default function App() {
         retry: 'Qayta urinish',
         switchManual: "Qo'lda kiritish",
         openReceiptLink: 'Chek havolasini ochish',
+        submitForAuth: 'Tasdiqlash uchun yuborish',
         urlFallbackPlaceholder: 'soliq.uz havolasini kiriting',
         urlFallbackSubmit: 'Yuborish',
         scannerInvalidAlert: "QR kod soliq.uz havolasi bo'lishi kerak",
@@ -270,6 +271,7 @@ export default function App() {
         retry: 'Повторить',
         switchManual: 'Ввести вручную',
         openReceiptLink: 'Открыть ссылку чека',
+        submitForAuth: 'Отправить на подтверждение',
         urlFallbackPlaceholder: 'введите ссылку soliq.uz',
         urlFallbackSubmit: 'Отправить',
         scannerInvalidAlert: 'QR код должен содержать ссылку soliq.uz',
@@ -361,6 +363,7 @@ export default function App() {
         retry: 'Retry',
         switchManual: 'Manual entry',
         openReceiptLink: 'Open receipt link',
+        submitForAuth: 'Submit for authorization',
         urlFallbackPlaceholder: 'enter soliq.uz link',
         urlFallbackSubmit: 'Submit',
         scannerInvalidAlert: 'QR code must contain a soliq.uz URL',
@@ -423,6 +426,7 @@ export default function App() {
   const [scanLogs, setScanLogs] = useState<Array<{ ts: string; source: 'client' | 'server'; message: string }>>([]);
   const [scanApiResponse, setScanApiResponse] = useState<unknown>(null);
   const [lastScannedReceiptUrl, setLastScannedReceiptUrl] = useState('');
+  const [queuingForAuth, setQueuingForAuth] = useState(false);
 
 
   useEffect(() => {
@@ -848,6 +852,55 @@ export default function App() {
     }
 
     window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  const submitForAuthorization = async () => {
+    const url = String(lastScannedReceiptUrl || '').trim();
+    if (!url || queuingForAuth) return;
+
+    setQueuingForAuth(true);
+    pushClientLog('Force queue requested');
+    try {
+      const response = await fetch(scanApiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url,
+          force_queue: true,
+          telegram_id: window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || 'anonymous',
+          city: selectedCity,
+        }),
+      });
+
+      const result = await response.json();
+      setScanApiResponse(result);
+      pushServerTrace(result?.trace);
+
+      if (result?.ok) {
+        pushClientLog('Force queue success');
+        setScanResult({
+          status: 'success',
+          storeName: result.store_name,
+          storeAddress: result.store_address,
+          city: result.city,
+          itemCount: result.item_count,
+          queuedWithoutParse: true,
+        });
+      } else {
+        pushClientLog(`Force queue failed (${result?.error || 'queue_failed'})`);
+        setScanResult({
+          status: 'error',
+          errorCode: result?.error || 'queue_failed',
+          errorDetail: result?.detail || '',
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'network_error';
+      pushClientLog(`Force queue request failed: ${message}`);
+      setScanResult({ status: 'error', errorCode: 'network_error', errorDetail: message });
+    } finally {
+      setQueuingForAuth(false);
+    }
   };
 
   const pushClientLog = (message: string) => {
@@ -1453,6 +1506,15 @@ export default function App() {
                   <button onClick={retryScan} className="rounded-xl bg-rose-600 px-4 py-3 text-sm font-semibold text-white">{t.retry}</button>
                   <button onClick={goToManualEntry} className="rounded-xl border border-rose-300 bg-white px-4 py-3 text-sm font-semibold text-rose-700">{t.switchManual}</button>
                 </div>
+                {lastScannedReceiptUrl && (
+                  <button
+                    onClick={submitForAuthorization}
+                    disabled={queuingForAuth}
+                    className="w-full rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
+                  >
+                    {queuingForAuth ? `${t.submitting}...` : t.submitForAuth}
+                  </button>
+                )}
                 {lastScannedReceiptUrl && (
                   <button onClick={openReceiptLink} className="w-full rounded-xl border border-rose-300 bg-white px-4 py-3 text-sm font-semibold text-rose-700">{t.openReceiptLink}</button>
                 )}
