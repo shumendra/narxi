@@ -198,6 +198,7 @@ export default function App() {
         browserJsonSubmit: 'JSON dan yuborish',
         browserJsonSubmitting: 'JSON yuborilmoqda...',
         browserJsonError: 'JSON format xato',
+        readerSubmitHint: 'Reader sahifasida bitta tugma bilan yuboring',
         scanAgain: 'Yana skanerlash',
         goHome: 'Bosh sahifaga',
         retry: 'Qayta urinish',
@@ -314,6 +315,7 @@ export default function App() {
         browserJsonSubmit: 'Отправить из JSON',
         browserJsonSubmitting: 'Отправка JSON...',
         browserJsonError: 'Неверный формат JSON',
+        readerSubmitHint: 'На reader-странице отправьте одним нажатием',
         scanAgain: 'Сканировать снова',
         goHome: 'На главную',
         retry: 'Повторить',
@@ -430,6 +432,7 @@ export default function App() {
         browserJsonSubmit: 'Submit from JSON',
         browserJsonSubmitting: 'Submitting JSON...',
         browserJsonError: 'Invalid JSON format',
+        readerSubmitHint: 'On the reader page, submit with one tap',
         scanAgain: 'Scan again',
         goHome: 'Home',
         retry: 'Retry',
@@ -1865,19 +1868,10 @@ export default function App() {
                 <div className="text-sm text-amber-800">{t.scanManualBody}</div>
                 <div className="rounded-xl border border-amber-200 bg-white p-4 text-sm text-amber-900">
                   <div>1) {t.openReceiptLink}</div>
-                  <div className="mt-1">2) {t.browserJsCopy}</div>
-                  <div className="mt-1">3) {t.browserJsonSubmit}</div>
+                  <div className="mt-1">2) {t.readerSubmitHint}</div>
                 </div>
 
                 <button onClick={openReaderPage} className="w-full rounded-xl bg-amber-600 px-4 py-3 text-sm font-semibold text-white">1) {t.openReceiptLink}</button>
-
-                <button
-                  onClick={submitForAuthorization}
-                  disabled={queuingForAuth}
-                  className="w-full rounded-xl border border-emerald-300 bg-white px-4 py-3 text-sm font-semibold text-emerald-700 disabled:opacity-50"
-                >
-                  {queuingForAuth ? `${t.submitting}...` : `Fallback: ${t.submitForAuth}`}
-                </button>
 
                 <div className="grid grid-cols-2 gap-2">
                   <button onClick={retryScan} className="rounded-xl bg-amber-600 px-4 py-3 text-sm font-semibold text-white">{t.scanAgain}</button>
