@@ -1,0 +1,5 @@
+playwright
+supabase
+python-dotenv
+thefuzz
+beautifulsoup4

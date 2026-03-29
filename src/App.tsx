@@ -174,8 +174,8 @@ export default function App() {
         scanErrorTimeout: "Serverdan javob kutish vaqti tugadi.\nIltimos yana urinib ko'ring.",
         scanErrorGenerating: "Chek hali tayyorlanmoqda.\n1-2 daqiqadan so'ng qayta urinib ko'ring.",
         scanErrorNetwork: 'Tarmoq xatosi yuz berdi. Internetni tekshirib qayta urinib ko‘ring.',
-        scanManualTitle: '🔗 3 qadam bilan yuborish',
-        scanManualBody: '1) Readerni oching. 2) JS ni nusxalab chek sahifasida ishga tushiring. 3) JSON ni yuboring.',
+        scanManualTitle: '📥 Navbatga yuborish',
+        scanManualBody: 'QR skanerdan so‘ng chek havolasi navbatga tushadi. Narxlar administrator tomonidan keyinroq chiqariladi.',
         scanManualPasteAction: 'Page source kiritish',
         scanManualExtract: 'Source dan ajratish',
         scanManualExtracting: 'Source ajratilmoqda...',
@@ -291,8 +291,8 @@ export default function App() {
         scanErrorTimeout: 'Истекло время ожидания ответа сервера.\nПопробуйте снова.',
         scanErrorGenerating: 'Чек ещё формируется.\nПовторите через 1-2 минуты.',
         scanErrorNetwork: 'Сетевая ошибка. Проверьте интернет и повторите попытку.',
-        scanManualTitle: '🔗 Отправка в 3 шага',
-        scanManualBody: '1) Откройте Reader. 2) Скопируйте JS и запустите его на странице чека. 3) Отправьте JSON.',
+        scanManualTitle: '📥 Отправка в очередь',
+        scanManualBody: 'После сканирования ссылка чека отправляется в очередь. Цены будут извлечены позже администратором.',
         scanManualPasteAction: 'Вставить page source',
         scanManualExtract: 'Извлечь из source',
         scanManualExtracting: 'Извлечение из source...',
@@ -408,8 +408,8 @@ export default function App() {
         scanErrorTimeout: 'Server response timed out.\nPlease try again.',
         scanErrorGenerating: 'Receipt is still being generated.\nPlease try again in 1-2 minutes.',
         scanErrorNetwork: 'Network error. Check internet connection and try again.',
-        scanManualTitle: '🔗 Submit in 3 steps',
-        scanManualBody: '1) Open Reader. 2) Copy JS and run it on the receipt page. 3) Submit JSON.',
+        scanManualTitle: '📥 Queue submission',
+        scanManualBody: 'After scan, the receipt URL is queued. Prices will be extracted later by admin processing.',
         scanManualPasteAction: 'Paste page source',
         scanManualExtract: 'Extract from source',
         scanManualExtracting: 'Extracting from source...',
@@ -1421,14 +1421,52 @@ export default function App() {
     }
     pushClientLog('Validation passed');
 
-    const readerUrl = buildReaderUrl(scannedUrl);
-    openExternalLink(readerUrl);
-    pushClientLog(`Reader page opened: ${readerUrl}`);
-
     setShowUrlInput(false);
-    setScanResult({ status: 'manual' });
-    setReportEntryStep('result');
-    pushClientLog('Reader-first flow activated');
+    setReportEntryStep('loading');
+    pushClientLog('Queue request started');
+
+    try {
+      const response = await fetch(scanApiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: scannedUrl,
+          telegram_id: window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || 'anonymous',
+          city: selectedCity,
+        }),
+      });
+
+      const result = await response.json();
+      setScanApiResponse(result);
+
+      if (result?.ok) {
+        pushClientLog('Queue request success');
+        setScanResult({
+          status: 'success',
+          storeName: '-',
+          storeAddress: '-',
+          city: result?.city || selectedCity,
+          itemCount: 0,
+          queuedWithoutParse: true,
+        });
+      } else if (result?.error === 'duplicate') {
+        pushClientLog('Queue request duplicate');
+        setScanResult({ status: 'duplicate', errorCode: 'duplicate', errorDetail: result?.message || '' });
+      } else {
+        pushClientLog(`Queue request failed (${result?.error || 'queue_failed'})`);
+        setScanResult({
+          status: 'error',
+          errorCode: result?.error || 'queue_failed',
+          errorDetail: result?.detail || result?.message || '',
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'network_error';
+      pushClientLog(`Queue request network error: ${message}`);
+      setScanResult({ status: 'error', errorCode: 'network_error', errorDetail: message });
+    } finally {
+      setReportEntryStep('result');
+    }
   };
 
   const openNativeQrScanner = () => {

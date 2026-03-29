@@ -42,7 +42,7 @@ const BOT_COPY = {
     serverError: "Server sozlamalarida xatolik. Keyinroq urinib ko'ring.",
     saveFailed: "Hozircha saqlab bo'lmadi. Keyinroq urinib ko'ring.",
     scrapeFailed: "Chekni o'qishda xatolik yuz berdi. Iltimos, havolani tekshirib qayta yuboring 🔄",
-    readerReady: 'Chekni real brauzerda ochib yuborish uchun tugmani bosing.',
+    queueAccepted: "Chek navbatga qo'shildi. Tez orada qayta ishlanadi.",
     noItems: "Chekda mahsulotlar topilmadi. Bu chek bo'sh yoki format qo'llab-quvvatlanmaydi.",
     rateLimited: "Juda ko'p ma'lumot yuborildi. Iltimos keyinroq urinib ko'ring 🕐",
     blocked: "Siz tizimdan bloklangansiz.",
@@ -114,7 +114,7 @@ const BOT_COPY = {
     serverError: "Ошибка настроек сервера. Попробуйте позже.",
     saveFailed: "Сейчас не удалось сохранить. Попробуйте позже.",
     scrapeFailed: "Не удалось прочитать чек. Проверьте ссылку и отправьте снова 🔄",
-    readerReady: 'Нажмите кнопку, чтобы открыть чек в реальном браузере и отправить его.',
+    queueAccepted: 'Чек добавлен в очередь. Скоро будет обработан.',
     noItems: "В чеке нет товаров. Возможно, чек пустой или формат не поддерживается.",
     rateLimited: "Слишком много данных. Попробуйте позже 🕐",
     blocked: "Вы заблокированы.",
@@ -186,7 +186,7 @@ const BOT_COPY = {
     serverError: 'Server configuration error. Please try again later.',
     saveFailed: 'Could not save right now. Please try again later.',
     scrapeFailed: 'Could not read the receipt. Please check the link and resend 🔄',
-    readerReady: 'Tap the button to open the receipt in a real browser and submit it.',
+    queueAccepted: 'Receipt was queued and will be processed soon.',
     noItems: 'No items found on the receipt. It may be empty or unsupported.',
     rateLimited: 'Too much data sent. Please try again later 🕐',
     blocked: 'You are blocked from the system.',
@@ -422,20 +422,6 @@ function extractSoliqUrl(message) {
     return match[0];
   }
   return null;
-}
-
-function buildReaderUrl(receiptUrl, telegramId, lang) {
-  if (!MINI_APP_URL) return null;
-  try {
-    const miniApp = new URL(MINI_APP_URL);
-    const reader = new URL('/reader.html', `${miniApp.protocol}//${miniApp.host}`);
-    reader.searchParams.set('url', receiptUrl);
-    if (telegramId) reader.searchParams.set('tid', telegramId);
-    if (lang) reader.searchParams.set('lang', lang);
-    return reader.toString();
-  } catch {
-    return null;
-  }
 }
 
 function getCommand(text) {
@@ -852,18 +838,56 @@ async function handleMessage(message) {
       return;
     }
 
-    const readerUrl = buildReaderUrl(receiptUrl, telegramId, lang);
-    if (!readerUrl) {
-      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].missingMiniApp });
+    if (!supabaseUrl || !supabaseKey) {
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].serverError });
       return;
     }
 
-    await sendTelegramMessage(chatId, {
-      text: BOT_COPY[lang].readerReady,
-      reply_markup: {
-        inline_keyboard: [[{ text: BOT_COPY[lang].btnOpenReader, url: readerUrl }]],
-      },
+    const { data: blocked } = await supabase
+      .from('blocked_users')
+      .select('telegram_id')
+      .eq('telegram_id', telegramId)
+      .maybeSingle();
+    if (blocked) {
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].blocked });
+      return;
+    }
+
+    const { data: alreadyLogged } = await supabase
+      .from('receipts_log')
+      .select('receipt_url')
+      .eq('receipt_url', receiptUrl)
+      .maybeSingle();
+    if (alreadyLogged) {
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].alreadyAdded });
+      return;
+    }
+
+    const { data: existingQueue } = await supabase
+      .from('receipt_queue')
+      .select('id')
+      .eq('receipt_url', receiptUrl)
+      .maybeSingle();
+    if (existingQueue) {
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].alreadyAdded });
+      return;
+    }
+
+    const city = 'Tashkent';
+    const { error: queueError } = await supabase.from('receipt_queue').insert({
+      receipt_url: receiptUrl,
+      telegram_id: telegramId || 'anonymous',
+      city,
+      status: 'pending',
     });
+
+    if (queueError) {
+      console.error('Bot queue insert error:', queueError);
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].saveFailed });
+      return;
+    }
+
+    await sendTelegramMessage(chatId, { text: BOT_COPY[lang].queueAccepted });
     return;
   }
 
