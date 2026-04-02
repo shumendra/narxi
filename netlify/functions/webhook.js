@@ -853,23 +853,30 @@ async function handleMessage(message) {
       return;
     }
 
-    const { data: alreadyLogged } = await supabase
-      .from('receipts_log')
-      .select('receipt_url')
-      .eq('receipt_url', receiptUrl)
-      .maybeSingle();
-    if (alreadyLogged) {
-      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].alreadyAdded });
-      return;
-    }
-
     const { data: existingQueue } = await supabase
       .from('receipt_queue')
       .select('id')
       .eq('receipt_url', receiptUrl)
       .maybeSingle();
     if (existingQueue) {
-      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].alreadyAdded });
+      const { error: requeueError } = await supabase
+        .from('receipt_queue')
+        .update({
+          telegram_id: telegramId || 'anonymous',
+          city: 'Tashkent',
+          status: 'pending',
+          error_message: null,
+          processed_at: null,
+        })
+        .eq('id', existingQueue.id);
+
+      if (requeueError) {
+        console.error('Bot queue requeue error:', requeueError);
+        await sendTelegramMessage(chatId, { text: BOT_COPY[lang].saveFailed });
+        return;
+      }
+
+      await sendTelegramMessage(chatId, { text: BOT_COPY[lang].queueAccepted });
       return;
     }
 

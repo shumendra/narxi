@@ -301,6 +301,23 @@ async function approvePending(id) {
   return { productId };
 }
 
+async function approveMany(ids) {
+  const targetIds = Array.isArray(ids) ? ids.filter(Boolean) : [];
+  let approvedCount = 0;
+  const failedIds = [];
+
+  for (const id of targetIds) {
+    try {
+      await approvePending(id);
+      approvedCount += 1;
+    } catch {
+      failedIds.push(id);
+    }
+  }
+
+  return { approvedCount, failedIds };
+}
+
 async function rejectPending(id) {
   const { error } = await supabase.from('pending_prices').update({ status: 'rejected' }).eq('id', id);
   if (error) throw error;
@@ -343,6 +360,10 @@ export default async function moderation(req, res) {
       }
       case 'approve': {
         const result = await approvePending(body.id);
+        return send(res, 200, { ok: true, ...result });
+      }
+      case 'approveMany': {
+        const result = await approveMany(body.ids);
         return send(res, 200, { ok: true, ...result });
       }
       case 'reject': {

@@ -55,20 +55,6 @@ export default async function handler(req, res) {
       return ok(res, { ok: false, error: 'blocked' });
     }
 
-    const { data: alreadyLogged } = await supabase
-      .from('receipts_log')
-      .select('receipt_url')
-      .eq('receipt_url', url)
-      .maybeSingle();
-
-    if (alreadyLogged) {
-      return ok(res, {
-        ok: false,
-        error: 'duplicate',
-        message: 'Bu chek allaqachon qayta ishlangan',
-      });
-    }
-
     const { data: existingQueue } = await supabase
       .from('receipt_queue')
       .select('id, status')
@@ -76,10 +62,28 @@ export default async function handler(req, res) {
       .maybeSingle();
 
     if (existingQueue) {
+      const { error: requeueError } = await supabase
+        .from('receipt_queue')
+        .update({
+          telegram_id: telegramId,
+          city,
+          status: 'pending',
+          error_message: null,
+          processed_at: null,
+        })
+        .eq('id', existingQueue.id);
+
+      if (requeueError) {
+        console.error('receipt_queue requeue error:', requeueError);
+        return ok(res, { ok: false, error: 'db_error', detail: requeueError.message || 'queue_requeue_failed' });
+      }
+
       return ok(res, {
-        ok: false,
-        error: 'duplicate',
-        message: 'Bu chek allaqachon navbatda',
+        ok: true,
+        queued: true,
+        requeued: true,
+        city,
+        message: "Chek qayta navbatga qo'shildi.",
       });
     }
 

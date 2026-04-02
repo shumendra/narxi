@@ -13,7 +13,7 @@ SUPABASE_KEY=your_supabase_service_role_key
 ```
 
 3. Double-click [scripts/worker_setup_windows.bat](scripts/worker_setup_windows.bat).
-	- This installs Python packages and Playwright Chromium.
+   - This installs Python packages and Playwright Chromium.
 
 ## 2) Daily use (click-only)
 
@@ -21,6 +21,7 @@ SUPABASE_KEY=your_supabase_service_role_key
 2. App stores URL in `receipt_queue` with `status='pending'`.
 3. On your PC, double-click [scripts/worker_run_windows.bat](scripts/worker_run_windows.bat).
 4. Worker opens Chromium, parses queued receipts, inserts items to `pending_prices`, and updates queue status.
+5. Failed rows are retried automatically on the next run.
 
 ## 3) Optional automation (hourly)
 
@@ -37,9 +38,13 @@ After running worker:
 - New rows appear in `pending_prices`
 - New rows appear in `receipts_log`
 
-## 5) Troubleshooting
+## 5) Moderation improvements
+
+- In admin moderation UI, you can select multiple pending rows and approve them together.
+- Worker skips already existing item/location/date rows to avoid duplicate insertions.
+
+## 6) Troubleshooting
 
 - If setup fails: rerun [scripts/worker_setup_windows.bat](scripts/worker_setup_windows.bat).
 - If scheduled task fails: run [scripts/worker_enable_hourly_windows.bat](scripts/worker_enable_hourly_windows.bat) as Administrator.
 - If no rows process: confirm users actually scanned and rows exist in `receipt_queue` with `pending` status.
-

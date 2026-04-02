@@ -209,7 +209,47 @@ def mark_queue_status(queue_id: str, status: str, error_message: str | None = No
     supabase.table('receipt_queue').update(payload).eq('id', queue_id).execute()
 
 
-async def process_single_receipt(page, queue_item: dict, products: list[dict]) -> bool:
+def item_exists_already(payload: dict) -> bool:
+    receipt_url = payload.get('receipt_url')
+    product_name_raw = payload.get('product_name_raw')
+    place_name = payload.get('place_name')
+    place_address = payload.get('place_address')
+    receipt_date = payload.get('receipt_date')
+    unit_price = payload.get('unit_price')
+    city = payload.get('city')
+
+    pending_query = (
+        supabase.table('pending_prices')
+        .select('id')
+        .eq('receipt_url', receipt_url)
+        .eq('product_name_raw', product_name_raw)
+        .eq('place_name', place_name)
+        .eq('place_address', place_address)
+        .eq('receipt_date', receipt_date)
+        .eq('unit_price', unit_price)
+        .eq('city', city)
+        .limit(1)
+        .execute()
+    )
+    if pending_query.data:
+        return True
+
+    approved_query = (
+        supabase.table('prices')
+        .select('id')
+        .eq('product_name_raw', product_name_raw)
+        .eq('place_name', place_name)
+        .eq('place_address', place_address)
+        .eq('receipt_date', receipt_date)
+        .eq('price', unit_price)
+        .eq('city', city)
+        .limit(1)
+        .execute()
+    )
+    return bool(approved_query.data)
+
+
+async def process_single_receipt(context, queue_item: dict, products: list[dict]) -> bool:
     url = queue_item.get('receipt_url')
     queue_id = queue_item.get('id')
     telegram_id = queue_item.get('telegram_id') or 'anonymous'
@@ -217,7 +257,9 @@ async def process_single_receipt(page, queue_item: dict, products: list[dict]) -
 
     print(f"→ Processing {url}")
 
+    page = None
     try:
+        page = await context.new_page()
         await page.goto(url, wait_until='networkidle', timeout=45000)
         await asyncio.sleep(1.5)
 
@@ -253,15 +295,26 @@ async def process_single_receipt(page, queue_item: dict, products: list[dict]) -
                 'status': 'pending',
             }
 
+            if item_exists_already(payload):
+                continue
+
             result = supabase.table('pending_prices').insert(payload).execute()
             if result.data:
                 inserted += 1
 
-        supabase.table('receipts_log').insert({
-            'receipt_url': url,
-            'submitted_by': telegram_id,
-            'item_count': len(items),
-        }).execute()
+        existing_log = (
+            supabase.table('receipts_log')
+            .select('receipt_url')
+            .eq('receipt_url', url)
+            .limit(1)
+            .execute()
+        )
+        if not existing_log.data:
+            supabase.table('receipts_log').insert({
+                'receipt_url': url,
+                'submitted_by': telegram_id,
+                'item_count': len(items),
+            }).execute()
 
         mark_queue_status(queue_id, 'processed')
         print(f"  ✓ Saved {inserted}/{len(items)} items")
@@ -271,6 +324,9 @@ async def process_single_receipt(page, queue_item: dict, products: list[dict]) -
         mark_queue_status(queue_id, 'failed', str(error))
         print(f"  ✗ Error: {error}")
         return False
+    finally:
+        if page is not None:
+            await page.close()
 
 
 async def main():
@@ -281,7 +337,7 @@ async def main():
     queue_result = (
         supabase.table('receipt_queue')
         .select('*')
-        .eq('status', 'pending')
+        .in_('status', ['pending', 'failed'])
         .order('created_at')
         .limit(100)
         .execute()
@@ -304,12 +360,20 @@ async def main():
             locale='en-US',
         )
 
-        page = await context.new_page()
         success = 0
         failed = 0
 
         for queue_item in queue_items:
-            is_ok = await process_single_receipt(page, queue_item, products)
+            try:
+                is_ok = await asyncio.wait_for(
+                    process_single_receipt(context, queue_item, products),
+                    timeout=120,
+                )
+            except asyncio.TimeoutError:
+                mark_queue_status(queue_item.get('id'), 'failed', 'Processing timeout (120s)')
+                print(f"→ Processing {queue_item.get('receipt_url')}\n  ✗ Error: Processing timeout (120s)")
+                is_ok = False
+
             if is_ok:
                 success += 1
             else:
