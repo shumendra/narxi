@@ -42,6 +42,24 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def normalize_receipt_date(raw_value: str | None) -> str:
+    value = (raw_value or '').strip()
+    if not value:
+        return now_iso()
+
+    if re.fullmatch(r'\d{2}\.\d{2}\.\d{4}', value):
+        day, month, year = value.split('.')
+        try:
+            return datetime(int(year), int(month), int(day), tzinfo=timezone.utc).isoformat()
+        except Exception:
+            return now_iso()
+
+    try:
+        return datetime.fromisoformat(value.replace('Z', '+00:00')).astimezone(timezone.utc).isoformat()
+    except Exception:
+        return now_iso()
+
+
 def extract_city(address: str | None) -> str:
     if not address:
         return 'Tashkent'
@@ -228,7 +246,7 @@ async def process_single_receipt(page, queue_item: dict, products: list[dict]) -
                 'place_name': receipt.get('store_name') or "Noma'lum do'kon",
                 'place_address': receipt.get('store_address') or '',
                 'receipt_url': url,
-                'receipt_date': receipt.get('receipt_date') or now_iso(),
+                'receipt_date': normalize_receipt_date(receipt.get('receipt_date')),
                 'source': 'soliq_qr',
                 'submitted_by': telegram_id,
                 'city': city,
