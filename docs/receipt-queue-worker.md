@@ -42,8 +42,15 @@ After running worker:
 
 - In admin moderation UI, you can select multiple pending rows and approve them together.
 - Worker skips already existing item/location/date rows to avoid duplicate insertions.
+- Worker geocodes store address and fills `latitude`/`longitude` for map usage.
 
-## 6) Troubleshooting
+## 6) Cheapest map behavior
+
+- App loads prices in ascending order (`cheapest first`).
+- Map shows receipt points that have coordinates.
+- Cheapest places list and map are both based on stored prices.
+
+## 7) Troubleshooting
 
 - If setup fails: rerun [scripts/worker_setup_windows.bat](scripts/worker_setup_windows.bat).
 - If scheduled task fails: run [scripts/worker_enable_hourly_windows.bat](scripts/worker_enable_hourly_windows.bat) as Administrator.

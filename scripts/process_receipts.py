@@ -1,6 +1,9 @@
 import asyncio
+import json
 import os
 import re
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 
 from bs4 import BeautifulSoup
@@ -36,6 +39,21 @@ SKIP_KEYWORDS = [
     'jami', 'итого', 'qqs', 'ндс', 'chegirma', 'скидка',
     'naqd', 'наличн', 'bank', 'банк', 'shtrix', 'mxik', "o'lchov"
 ]
+
+CITY_CENTERS = {
+    'Tashkent': (41.2995, 69.2401),
+    'Samarkand': (39.6542, 66.9597),
+    'Bukhara': (39.7747, 64.4286),
+    'Namangan': (41.0000, 71.6726),
+    'Andijan': (40.7833, 72.3500),
+    'Fergana': (40.3842, 71.7843),
+    'Qarshi': (38.8606, 65.7891),
+    'Nukus': (42.4600, 59.6200),
+    'Termiz': (37.2242, 67.2783),
+    'Jizzakh': (40.1158, 67.8422),
+}
+
+_GEOCODE_CACHE: dict[str, tuple[float | None, float | None]] = {}
 
 
 def now_iso() -> str:
@@ -79,6 +97,47 @@ def normalize_num(raw: str) -> float:
         return float(cleaned)
     except Exception:
         return 0.0
+
+
+def geocode_address(address: str | None, city: str | None) -> tuple[float | None, float | None]:
+    city_name = city or 'Tashkent'
+    key = f"{address or ''}|{city_name}"
+    if key in _GEOCODE_CACHE:
+        return _GEOCODE_CACHE[key]
+
+    query_parts = []
+    if address:
+        query_parts.append(address.strip())
+    if city_name:
+        query_parts.append(city_name)
+    query_parts.append('Uzbekistan')
+    query = ', '.join([part for part in query_parts if part])
+
+    if not query.strip():
+        _GEOCODE_CACHE[key] = (None, None)
+        return _GEOCODE_CACHE[key]
+
+    try:
+        params = urllib.parse.urlencode({'q': query, 'format': 'json', 'limit': 1})
+        request = urllib.request.Request(
+            f"https://nominatim.openstreetmap.org/search?{params}",
+            headers={
+                'User-Agent': 'narxi-receipt-worker/1.0 (receipt geocoding)'
+            },
+        )
+        with urllib.request.urlopen(request, timeout=15) as response:
+            payload = json.loads(response.read().decode('utf-8'))
+            if isinstance(payload, list) and len(payload) > 0:
+                lat = float(payload[0].get('lat'))
+                lon = float(payload[0].get('lon'))
+                _GEOCODE_CACHE[key] = (lat, lon)
+                return _GEOCODE_CACHE[key]
+    except Exception:
+        pass
+
+    fallback = CITY_CENTERS.get(city_name, (None, None))
+    _GEOCODE_CACHE[key] = fallback
+    return fallback
 
 
 def parse_receipt_html(html_content: str) -> dict:
@@ -273,6 +332,7 @@ async def process_single_receipt(context, queue_item: dict, products: list[dict]
             return False
 
         city = extract_city(receipt.get('store_address')) or fallback_city
+        latitude, longitude = geocode_address(receipt.get('store_address'), city)
         inserted = 0
 
         for item in items:
@@ -292,6 +352,8 @@ async def process_single_receipt(context, queue_item: dict, products: list[dict]
                 'source': 'soliq_qr',
                 'submitted_by': telegram_id,
                 'city': city,
+                'latitude': latitude,
+                'longitude': longitude,
                 'status': 'pending',
             }
 
