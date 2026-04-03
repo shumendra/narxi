@@ -395,6 +395,24 @@ async function deleteProduct(id) {
   if (error) throw error;
 }
 
+async function deleteProductsMany(ids) {
+  const targetIds = Array.isArray(ids) ? ids.filter(Boolean) : [];
+  if (targetIds.length === 0) return { deletedCount: 0 };
+
+  await supabase.from('prices').delete().in('product_id', targetIds);
+  await supabase.from('pending_prices').delete().in('product_id', targetIds);
+  const { error } = await supabase.from('products').delete().in('id', targetIds);
+  if (error) throw error;
+  return { deletedCount: targetIds.length };
+}
+
+async function purgeAllProductsData() {
+  await supabase.from('prices').delete().neq('id', '');
+  await supabase.from('pending_prices').delete().neq('id', '');
+  await supabase.from('products').delete().neq('id', '');
+  return { ok: true };
+}
+
 async function updatePending(id, changes) {
   const payload = {};
 
@@ -648,6 +666,14 @@ export default async function moderation(req, res) {
       case 'deleteProduct': {
         await deleteProduct(body.id);
         return send(res, 200, { ok: true });
+      }
+      case 'deleteProductsMany': {
+        const result = await deleteProductsMany(body.ids || []);
+        return send(res, 200, { ok: true, ...result });
+      }
+      case 'purgeAllProductsData': {
+        const result = await purgeAllProductsData();
+        return send(res, 200, { ok: true, ...result });
       }
       default:
         return send(res, 400, { ok: false, error: 'UNKNOWN_ACTION' });

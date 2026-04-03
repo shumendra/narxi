@@ -150,6 +150,15 @@ export default function App() {
   const [approvedItems, setApprovedItems] = useState<ApprovedModerationItem[]>([]);
   const [productAdminItems, setProductAdminItems] = useState<ProductAdminItem[]>([]);
   const [moderationSection, setModerationSection] = useState<'prices' | 'products'>('prices');
+  const [activeProductId, setActiveProductId] = useState<string | null>(null);
+  const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
+  const [productFilterQuery, setProductFilterQuery] = useState('');
+  const [productFilterCategory, setProductFilterCategory] = useState('all');
+  const [productFilterCity, setProductFilterCity] = useState('all');
+  const [productFilterHasPrices, setProductFilterHasPrices] = useState<'all' | 'yes' | 'no'>('all');
+  const [productFilterHasPending, setProductFilterHasPending] = useState<'all' | 'yes' | 'no'>('all');
+  const [productSortBy, setProductSortBy] = useState<'name' | 'category' | 'price_count' | 'pending_count' | 'latest_receipt'>('name');
+  const [productSortDir, setProductSortDir] = useState<'asc' | 'desc'>('asc');
   const [moderationLoading, setModerationLoading] = useState(false);
   const [moderationSavingId, setModerationSavingId] = useState<string | null>(null);
   const [productAdminLoading, setProductAdminLoading] = useState(false);
@@ -327,6 +336,32 @@ export default function App() {
         productPendingCount: 'Kutilayotganlar soni',
         productLinkedPrices: 'Bog\'liq narxlar',
         productLinkedPending: 'Bog\'liq kutilayotganlar',
+        productDeleteSelected: 'Tanlanganlarni o\'chirish',
+        productSelectAll: 'Hammasini tanlash',
+        productClearSelection: 'Tanlovni tozalash',
+        productFilterSearch: 'Qidiruv',
+        productFilterCategory: 'Kategoriya filtri',
+        productFilterCity: 'Shahar filtri',
+        productFilterHasPrices: 'Narxlar borligi',
+        productFilterHasPending: 'Kutilayotganlar borligi',
+        productSortBy: 'Saralash',
+        productSortDir: 'Tartib',
+        productSortAsc: 'Oshish bo\'yicha',
+        productSortDesc: 'Kamayish bo\'yicha',
+        productPurgeAll: 'Barcha mahsulot ma\'lumotlarini o\'chirish',
+        productPurgeDone: 'Barcha mahsulot ma\'lumotlari o\'chirildi ✅',
+        confirmDeleteSelectedProducts: 'Tanlangan mahsulotlarni va bog\'liq barcha narx ma\'lumotlarini o\'chirasizmi?',
+        confirmPurgeAllProducts: 'Barcha mahsulotlar, narxlar va kutilayotgan yozuvlar to\'liq o\'chiriladi. Davom etasizmi?',
+        yesLabel: 'Ha',
+        noLabel: 'Yo\'q',
+        allLabel: 'Barchasi',
+        yesState: 'Bor',
+        noState: 'Yo\'q',
+        sortName: 'Nom',
+        sortCategory: 'Kategoriya',
+        sortPriceCount: 'Narxlar soni',
+        sortPendingCount: 'Kutilayotganlar soni',
+        sortLatestReceipt: 'Oxirgi sana',
       },
       ru: {
         appName: 'Narxi',
@@ -469,6 +504,32 @@ export default function App() {
         productPendingCount: 'Кол-во ожиданий',
         productLinkedPrices: 'Связанные цены',
         productLinkedPending: 'Связанные ожидания',
+        productDeleteSelected: 'Удалить выбранные',
+        productSelectAll: 'Выбрать все',
+        productClearSelection: 'Снять выбор',
+        productFilterSearch: 'Поиск',
+        productFilterCategory: 'Фильтр категории',
+        productFilterCity: 'Фильтр города',
+        productFilterHasPrices: 'Есть цены',
+        productFilterHasPending: 'Есть ожидания',
+        productSortBy: 'Сортировка',
+        productSortDir: 'Порядок',
+        productSortAsc: 'По возрастанию',
+        productSortDesc: 'По убыванию',
+        productPurgeAll: 'Удалить все данные товаров',
+        productPurgeDone: 'Все данные товаров удалены ✅',
+        confirmDeleteSelectedProducts: 'Удалить выбранные товары и все связанные цены?',
+        confirmPurgeAllProducts: 'Будут удалены все товары, цены и ожидающие записи. Продолжить?',
+        yesLabel: 'Да',
+        noLabel: 'Нет',
+        allLabel: 'Все',
+        yesState: 'Да',
+        noState: 'Нет',
+        sortName: 'Название',
+        sortCategory: 'Категория',
+        sortPriceCount: 'Кол-во цен',
+        sortPendingCount: 'Кол-во ожиданий',
+        sortLatestReceipt: 'Последняя дата',
       },
       en: {
         appName: 'Narxi',
@@ -611,6 +672,32 @@ export default function App() {
         productPendingCount: 'Pending count',
         productLinkedPrices: 'Linked prices',
         productLinkedPending: 'Linked pending',
+        productDeleteSelected: 'Delete selected',
+        productSelectAll: 'Select all',
+        productClearSelection: 'Clear selection',
+        productFilterSearch: 'Search',
+        productFilterCategory: 'Category filter',
+        productFilterCity: 'City filter',
+        productFilterHasPrices: 'Has prices',
+        productFilterHasPending: 'Has pending',
+        productSortBy: 'Sort by',
+        productSortDir: 'Order',
+        productSortAsc: 'Ascending',
+        productSortDesc: 'Descending',
+        productPurgeAll: 'Delete all product data',
+        productPurgeDone: 'All product data deleted ✅',
+        confirmDeleteSelectedProducts: 'Delete selected products and all related pricing data?',
+        confirmPurgeAllProducts: 'This will permanently remove all products, prices, and pending rows. Continue?',
+        yesLabel: 'Yes',
+        noLabel: 'No',
+        allLabel: 'All',
+        yesState: 'Yes',
+        noState: 'No',
+        sortName: 'Name',
+        sortCategory: 'Category',
+        sortPriceCount: 'Price count',
+        sortPendingCount: 'Pending count',
+        sortLatestReceipt: 'Latest receipt',
       },
     }),
     []
@@ -757,13 +844,68 @@ export default function App() {
     setProductAdminLoading(true);
     try {
       const result = await callModerationApi('listProducts');
-      setProductAdminItems((result.items || []).map(normalizeProductAdminItem));
+      const normalized = (result.items || []).map(normalizeProductAdminItem);
+      setProductAdminItems(normalized);
+      setSelectedProductIds(prev => prev.filter(id => normalized.some(item => item.id === id)));
+      setActiveProductId(prev => (prev && normalized.some(item => item.id === prev) ? prev : (normalized[0]?.id || null)));
     } catch {
       window.Telegram?.WebApp?.showAlert(t.moderationError);
     } finally {
       setProductAdminLoading(false);
     }
   };
+
+  const productCategoryOptions = useMemo(() => {
+    return (Array.from(new Set(productAdminItems.map(item => String(item.category || '').trim()).filter(Boolean))) as string[])
+      .sort((a, b) => a.localeCompare(b));
+  }, [productAdminItems]);
+
+  const productCityOptions = useMemo(() => {
+    return (Array.from(new Set(productAdminItems.flatMap(item => item.available_cities || []).map(city => String(city || '').trim()).filter(Boolean))) as string[])
+      .sort((a, b) => a.localeCompare(b));
+  }, [productAdminItems]);
+
+  const filteredSortedProductAdminItems = useMemo(() => {
+    const query = productFilterQuery.trim().toLowerCase();
+    const rows = productAdminItems.filter(item => {
+      const byQuery = !query || [item.name_uz, item.name_ru, item.name_en, item.category, item.unit, item.id]
+        .filter(Boolean)
+        .some(value => String(value).toLowerCase().includes(query));
+
+      const byCategory = productFilterCategory === 'all' || String(item.category || '') === productFilterCategory;
+      const byCity = productFilterCity === 'all' || (item.available_cities || []).includes(productFilterCity);
+      const byHasPrices = productFilterHasPrices === 'all'
+        || (productFilterHasPrices === 'yes' && (Number(item.price_count) || 0) > 0)
+        || (productFilterHasPrices === 'no' && (Number(item.price_count) || 0) === 0);
+      const byHasPending = productFilterHasPending === 'all'
+        || (productFilterHasPending === 'yes' && (Number(item.pending_count) || 0) > 0)
+        || (productFilterHasPending === 'no' && (Number(item.pending_count) || 0) === 0);
+
+      return byQuery && byCategory && byCity && byHasPrices && byHasPending;
+    });
+
+    const sorted = [...rows].sort((left, right) => {
+      let compare = 0;
+      if (productSortBy === 'name') compare = String(left.name_uz || '').localeCompare(String(right.name_uz || ''));
+      if (productSortBy === 'category') compare = String(left.category || '').localeCompare(String(right.category || ''));
+      if (productSortBy === 'price_count') compare = (Number(left.price_count) || 0) - (Number(right.price_count) || 0);
+      if (productSortBy === 'pending_count') compare = (Number(left.pending_count) || 0) - (Number(right.pending_count) || 0);
+      if (productSortBy === 'latest_receipt') {
+        const leftTime = left.latest_price?.receipt_date ? new Date(left.latest_price.receipt_date).getTime() : 0;
+        const rightTime = right.latest_price?.receipt_date ? new Date(right.latest_price.receipt_date).getTime() : 0;
+        compare = leftTime - rightTime;
+      }
+      return productSortDir === 'asc' ? compare : -compare;
+    });
+
+    return sorted;
+  }, [productAdminItems, productFilterQuery, productFilterCategory, productFilterCity, productFilterHasPrices, productFilterHasPending, productSortBy, productSortDir]);
+
+  const activeProductItem = useMemo(() => {
+    return filteredSortedProductAdminItems.find(item => item.id === activeProductId)
+      || productAdminItems.find(item => item.id === activeProductId)
+      || null;
+  }, [filteredSortedProductAdminItems, productAdminItems, activeProductId]);
 
   const updateModerationField = (id: string, field: keyof PendingModerationItem, value: string) => {
     setModerationItems(items => items.map(item => {
@@ -1048,6 +1190,55 @@ export default function App() {
       await fetchModerationProducts();
       await fetchProducts();
       window.Telegram?.WebApp?.showAlert(t.productDeleted);
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } finally {
+      setModerationSavingId(null);
+    }
+  };
+
+  const toggleProductSelection = (id: string) => {
+    setSelectedProductIds(prev => (prev.includes(id) ? prev.filter(itemId => itemId !== id) : [...prev, id]));
+  };
+
+  const selectAllFilteredProducts = () => {
+    setSelectedProductIds(filteredSortedProductAdminItems.map(item => item.id));
+  };
+
+  const clearProductSelection = () => {
+    setSelectedProductIds([]);
+  };
+
+  const deleteSelectedProducts = async () => {
+    if (selectedProductIds.length === 0) return;
+    if (!window.confirm(t.confirmDeleteSelectedProducts)) return;
+
+    setModerationSavingId('bulk-delete-products');
+    try {
+      await callModerationApi('deleteProductsMany', { ids: selectedProductIds });
+      await fetchModerationProducts();
+      await fetchProducts();
+      setSelectedProductIds([]);
+      setActiveProductId(null);
+      window.Telegram?.WebApp?.showAlert(t.productDeleted);
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } finally {
+      setModerationSavingId(null);
+    }
+  };
+
+  const purgeAllProductsData = async () => {
+    if (!window.confirm(t.confirmPurgeAllProducts)) return;
+
+    setModerationSavingId('purge-all-products');
+    try {
+      await callModerationApi('purgeAllProductsData');
+      await fetchModerationProducts();
+      await fetchProducts();
+      setSelectedProductIds([]);
+      setActiveProductId(null);
+      window.Telegram?.WebApp?.showAlert(t.productPurgeDone);
     } catch {
       window.Telegram?.WebApp?.showAlert(t.moderationError);
     } finally {
@@ -2851,32 +3042,160 @@ export default function App() {
                   </button>
                 </section>
 
+                <section className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm space-y-3">
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <input
+                      value={productFilterQuery}
+                      onChange={(e) => setProductFilterQuery(e.target.value)}
+                      placeholder={t.productFilterSearch}
+                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                    />
+                    <select
+                      value={productFilterCategory}
+                      onChange={(e) => setProductFilterCategory(e.target.value)}
+                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                    >
+                      <option value="all">{t.productFilterCategory}: {t.allLabel}</option>
+                      {productCategoryOptions.map(category => <option key={category} value={category}>{category}</option>)}
+                    </select>
+                    <select
+                      value={productFilterCity}
+                      onChange={(e) => setProductFilterCity(e.target.value)}
+                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                    >
+                      <option value="all">{t.productFilterCity}: {t.allLabel}</option>
+                      {productCityOptions.map(city => <option key={city} value={city}>{city}</option>)}
+                    </select>
+                    <select
+                      value={productFilterHasPrices}
+                      onChange={(e) => setProductFilterHasPrices(e.target.value as 'all' | 'yes' | 'no')}
+                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                    >
+                      <option value="all">{t.productFilterHasPrices}: {t.allLabel}</option>
+                      <option value="yes">{t.productFilterHasPrices}: {t.yesState}</option>
+                      <option value="no">{t.productFilterHasPrices}: {t.noState}</option>
+                    </select>
+                    <select
+                      value={productFilterHasPending}
+                      onChange={(e) => setProductFilterHasPending(e.target.value as 'all' | 'yes' | 'no')}
+                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                    >
+                      <option value="all">{t.productFilterHasPending}: {t.allLabel}</option>
+                      <option value="yes">{t.productFilterHasPending}: {t.yesState}</option>
+                      <option value="no">{t.productFilterHasPending}: {t.noState}</option>
+                    </select>
+                    <div className="grid grid-cols-2 gap-2">
+                      <select
+                        value={productSortBy}
+                        onChange={(e) => setProductSortBy(e.target.value as 'name' | 'category' | 'price_count' | 'pending_count' | 'latest_receipt')}
+                        className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                      >
+                        <option value="name">{t.sortName}</option>
+                        <option value="category">{t.sortCategory}</option>
+                        <option value="price_count">{t.sortPriceCount}</option>
+                        <option value="pending_count">{t.sortPendingCount}</option>
+                        <option value="latest_receipt">{t.sortLatestReceipt}</option>
+                      </select>
+                      <select
+                        value={productSortDir}
+                        onChange={(e) => setProductSortDir(e.target.value as 'asc' | 'desc')}
+                        className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                      >
+                        <option value="asc">{t.productSortAsc}</option>
+                        <option value="desc">{t.productSortDesc}</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      onClick={selectAllFilteredProducts}
+                      className="rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-medium text-stone-700"
+                    >
+                      {t.productSelectAll}
+                    </button>
+                    <button
+                      onClick={clearProductSelection}
+                      className="rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-medium text-stone-700"
+                    >
+                      {t.productClearSelection}
+                    </button>
+                    <button
+                      onClick={deleteSelectedProducts}
+                      disabled={selectedProductIds.length === 0 || moderationSavingId === 'bulk-delete-products'}
+                      className="rounded-xl bg-rose-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+                    >
+                      {t.productDeleteSelected} ({selectedProductIds.length})
+                    </button>
+                    <button
+                      onClick={purgeAllProductsData}
+                      disabled={moderationSavingId === 'purge-all-products'}
+                      className="rounded-xl bg-rose-700 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+                    >
+                      {t.productPurgeAll}
+                    </button>
+                  </div>
+                </section>
+
                 {productAdminLoading ? (
                   <div className="animate-pulse space-y-3">
-                    {[1, 2, 3].map(i => <div key={i} className="h-44 bg-stone-200 rounded-xl" />)}
+                    {[1, 2, 3].map(i => <div key={i} className="h-20 bg-stone-200 rounded-xl" />)}
                   </div>
-                ) : productAdminItems.length === 0 ? (
+                ) : filteredSortedProductAdminItems.length === 0 ? (
                   <div className="rounded-2xl border border-stone-200 bg-white p-8 text-center text-stone-500">
                     {t.productsEmpty}
                   </div>
-                ) : productAdminItems.map(item => (
-                  <section key={item.id} className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm space-y-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-xs font-semibold uppercase tracking-wider text-stone-400">ID</div>
-                        <div className="text-sm font-medium text-stone-700">{item.id}</div>
-                      </div>
+                ) : (
+                  <div className="rounded-2xl border border-stone-200 bg-white shadow-sm overflow-hidden">
+                    {filteredSortedProductAdminItems.map(item => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => setActiveProductId(item.id)}
+                        className={cn(
+                          'w-full border-b border-stone-100 px-4 py-3 text-left transition-colors last:border-b-0',
+                          activeProductId === item.id ? 'bg-emerald-50' : 'bg-white hover:bg-stone-50'
+                        )}
+                      >
+                        <div className="grid items-center gap-2 md:grid-cols-[24px,1.5fr,1fr,0.8fr,0.8fr,1.2fr]">
+                          <input
+                            type="checkbox"
+                            checked={selectedProductIds.includes(item.id)}
+                            onChange={(e) => {
+                              e.stopPropagation();
+                              toggleProductSelection(item.id);
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                          <div>
+                            <div className="text-sm font-semibold text-stone-900">{item.name_uz}</div>
+                            <div className="text-xs text-stone-500">{item.id}</div>
+                          </div>
+                          <div className="text-xs text-stone-600">{item.category || '-'}</div>
+                          <div className="text-xs text-stone-600">{t.productPriceCount}: {item.price_count || 0}</div>
+                          <div className="text-xs text-stone-600">{t.productPendingCount}: {item.pending_count || 0}</div>
+                          <div className="text-xs text-stone-600 truncate">{(item.available_cities || []).join(', ') || '-'}</div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {activeProductItem && (
+                  <section className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm space-y-4">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-semibold text-stone-800">{activeProductItem.name_uz}</div>
                       <div className="flex items-center gap-2">
                         <button
-                          onClick={() => saveProductItem(item)}
-                          disabled={moderationSavingId === item.id}
+                          onClick={() => saveProductItem(activeProductItem)}
+                          disabled={moderationSavingId === activeProductItem.id}
                           className="rounded-xl border border-stone-200 bg-stone-100 px-4 py-2 text-sm font-semibold text-stone-700 disabled:opacity-50"
                         >
                           {t.productSave}
                         </button>
                         <button
-                          onClick={() => deleteProductItem(item)}
-                          disabled={moderationSavingId === item.id}
+                          onClick={() => deleteProductItem(activeProductItem)}
+                          disabled={moderationSavingId === activeProductItem.id}
                           className="rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
                         >
                           {t.productDelete}
@@ -2886,55 +3205,50 @@ export default function App() {
 
                     <div className="grid gap-3 md:grid-cols-2">
                       <input
-                        value={item.name_uz || ''}
-                        onChange={(e) => updateProductField(item.id, 'name_uz', e.target.value)}
+                        value={activeProductItem.name_uz || ''}
+                        onChange={(e) => updateProductField(activeProductItem.id, 'name_uz', e.target.value)}
                         placeholder={t.productNameUz}
                         className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
                       />
                       <input
-                        value={item.name_ru || ''}
-                        onChange={(e) => updateProductField(item.id, 'name_ru', e.target.value)}
+                        value={activeProductItem.name_ru || ''}
+                        onChange={(e) => updateProductField(activeProductItem.id, 'name_ru', e.target.value)}
                         placeholder={t.productNameRu}
                         className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
                       />
                       <input
-                        value={item.name_en || ''}
-                        onChange={(e) => updateProductField(item.id, 'name_en', e.target.value)}
+                        value={activeProductItem.name_en || ''}
+                        onChange={(e) => updateProductField(activeProductItem.id, 'name_en', e.target.value)}
                         placeholder={t.productNameEn}
                         className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
                       />
                       <input
-                        value={item.category || ''}
-                        onChange={(e) => updateProductField(item.id, 'category', e.target.value)}
+                        value={activeProductItem.category || ''}
+                        onChange={(e) => updateProductField(activeProductItem.id, 'category', e.target.value)}
                         placeholder={t.productCategory}
                         className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
                       />
                       <input
-                        value={item.unit || ''}
-                        onChange={(e) => updateProductField(item.id, 'unit', e.target.value)}
+                        value={activeProductItem.unit || ''}
+                        onChange={(e) => updateProductField(activeProductItem.id, 'unit', e.target.value)}
                         placeholder={t.productUnit}
                         className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
                       />
                       <input
-                        value={(item.available_cities || []).join(', ')}
-                        onChange={(e) => updateProductField(item.id, 'available_cities', e.target.value)}
+                        value={(activeProductItem.available_cities || []).join(', ')}
+                        onChange={(e) => updateProductField(activeProductItem.id, 'available_cities', e.target.value)}
                         placeholder={t.productCities}
                         className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
                       />
-                    </div>
-
-                    <div className="grid gap-2 text-xs text-stone-500 md:grid-cols-2">
-                      <div>{t.productPriceCount}: {item.price_count || 0}</div>
-                      <div>{t.productPendingCount}: {item.pending_count || 0}</div>
                     </div>
 
                     <div className="grid gap-3 md:grid-cols-2">
                       <div className="rounded-xl border border-stone-200 bg-stone-50 p-3">
                         <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-stone-500">{t.productLinkedPrices}</div>
                         <div className="max-h-40 space-y-2 overflow-auto text-xs text-stone-600">
-                          {(item.prices || []).length === 0 ? (
+                          {(activeProductItem.prices || []).length === 0 ? (
                             <div className="text-stone-400">{t.noData}</div>
-                          ) : (item.prices || []).slice(0, 20).map(price => (
+                          ) : (activeProductItem.prices || []).slice(0, 20).map(price => (
                             <div key={price.id} className="rounded-lg bg-white p-2">
                               <div className="font-medium">{price.product_name_raw}</div>
                               <div>{priceFormatter.format(Number(price.price) || 0)} {t.sumLabel}</div>
@@ -2944,13 +3258,12 @@ export default function App() {
                           ))}
                         </div>
                       </div>
-
                       <div className="rounded-xl border border-stone-200 bg-stone-50 p-3">
                         <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-stone-500">{t.productLinkedPending}</div>
                         <div className="max-h-40 space-y-2 overflow-auto text-xs text-stone-600">
-                          {(item.pending || []).length === 0 ? (
+                          {(activeProductItem.pending || []).length === 0 ? (
                             <div className="text-stone-400">{t.noData}</div>
-                          ) : (item.pending || []).slice(0, 20).map(pendingItem => (
+                          ) : (activeProductItem.pending || []).slice(0, 20).map(pendingItem => (
                             <div key={pendingItem.id} className="rounded-lg bg-white p-2">
                               <div className="font-medium">{pendingItem.product_name_raw}</div>
                               <div>{pendingItem.city || '-'}</div>
@@ -2961,7 +3274,7 @@ export default function App() {
                       </div>
                     </div>
                   </section>
-                ))}
+                )}
               </div>
             )}
           </div>
