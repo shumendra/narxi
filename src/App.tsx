@@ -83,6 +83,38 @@ interface ApprovedModerationItem {
   city?: string | null;
 }
 
+interface ProductAdminItem {
+  id: string;
+  name_uz: string;
+  name_ru: string;
+  name_en?: string | null;
+  category: string;
+  unit?: string | null;
+  available_cities?: string[] | null;
+  price_count?: number;
+  pending_count?: number;
+  latest_price?: {
+    price: number;
+    city?: string | null;
+    receipt_date?: string;
+  } | null;
+  prices?: Array<{
+    id: string;
+    product_name_raw: string;
+    price: number;
+    city?: string | null;
+    place_name?: string | null;
+    receipt_date?: string;
+  }>;
+  pending?: Array<{
+    id: string;
+    product_name_raw: string;
+    status?: string | null;
+    city?: string | null;
+    created_at?: string;
+  }>;
+}
+
 // Map Updater Component
 function ChangeView({ center, zoom }: { center: [number, number]; zoom: number }) {
   const map = useMap();
@@ -116,8 +148,11 @@ export default function App() {
   const [prices, setPrices] = useState<PriceRecord[]>([]);
   const [moderationItems, setModerationItems] = useState<PendingModerationItem[]>([]);
   const [approvedItems, setApprovedItems] = useState<ApprovedModerationItem[]>([]);
+  const [productAdminItems, setProductAdminItems] = useState<ProductAdminItem[]>([]);
+  const [moderationSection, setModerationSection] = useState<'prices' | 'products'>('prices');
   const [moderationLoading, setModerationLoading] = useState(false);
   const [moderationSavingId, setModerationSavingId] = useState<string | null>(null);
+  const [productAdminLoading, setProductAdminLoading] = useState(false);
   const [selectedModerationIds, setSelectedModerationIds] = useState<string[]>([]);
   const [selectedApprovedIds, setSelectedApprovedIds] = useState<string[]>([]);
   const [newApprovedItem, setNewApprovedItem] = useState({
@@ -127,6 +162,14 @@ export default function App() {
     place_name: '',
     place_address: '',
     city: DEFAULT_CITY,
+  });
+  const [newProductItem, setNewProductItem] = useState({
+    name_uz: '',
+    name_ru: '',
+    name_en: '',
+    category: 'Boshqa',
+    unit: 'dona',
+    available_cities: DEFAULT_CITY,
   });
   const [loading, setLoading] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
@@ -266,6 +309,24 @@ export default function App() {
         moderationApproveSelected: 'Tanlanganlarni tasdiqlash',
         moderationSelectAll: 'Barchasini tanlash',
         moderationClearSelection: 'Tanlovni tozalash',
+        productsTab: 'Mahsulotlar',
+        pricesTab: 'Narxlar',
+        productsTitle: 'Mahsulotlar va bog\'liq ma\'lumotlar',
+        productsEmpty: 'Mahsulotlar topilmadi',
+        productCreate: 'Yangi mahsulot qo\'shish',
+        productSave: 'Mahsulotni saqlash',
+        productDelete: 'Mahsulotni o\'chirish',
+        productDeleted: 'Mahsulot o\'chirildi ✅',
+        productNameUz: 'Nomi (UZ)',
+        productNameRu: 'Nomi (RU)',
+        productNameEn: 'Nomi (EN)',
+        productCategory: 'Kategoriya',
+        productUnit: 'O\'lchov birligi',
+        productCities: 'Shaharlar (vergul bilan)',
+        productPriceCount: 'Narxlar soni',
+        productPendingCount: 'Kutilayotganlar soni',
+        productLinkedPrices: 'Bog\'liq narxlar',
+        productLinkedPending: 'Bog\'liq kutilayotganlar',
       },
       ru: {
         appName: 'Narxi',
@@ -390,6 +451,24 @@ export default function App() {
         moderationApproveSelected: 'Одобрить выбранные',
         moderationSelectAll: 'Выбрать все',
         moderationClearSelection: 'Очистить выбор',
+        productsTab: 'Товары',
+        pricesTab: 'Цены',
+        productsTitle: 'Товары и связанные данные',
+        productsEmpty: 'Товары не найдены',
+        productCreate: 'Добавить товар',
+        productSave: 'Сохранить товар',
+        productDelete: 'Удалить товар',
+        productDeleted: 'Товар удален ✅',
+        productNameUz: 'Название (UZ)',
+        productNameRu: 'Название (RU)',
+        productNameEn: 'Название (EN)',
+        productCategory: 'Категория',
+        productUnit: 'Единица',
+        productCities: 'Города (через запятую)',
+        productPriceCount: 'Кол-во цен',
+        productPendingCount: 'Кол-во ожиданий',
+        productLinkedPrices: 'Связанные цены',
+        productLinkedPending: 'Связанные ожидания',
       },
       en: {
         appName: 'Narxi',
@@ -514,6 +593,24 @@ export default function App() {
         moderationApproveSelected: 'Approve selected',
         moderationSelectAll: 'Select all',
         moderationClearSelection: 'Clear selection',
+        productsTab: 'Products',
+        pricesTab: 'Prices',
+        productsTitle: 'Products and linked data',
+        productsEmpty: 'No products found',
+        productCreate: 'Create product',
+        productSave: 'Save product',
+        productDelete: 'Delete product',
+        productDeleted: 'Product deleted ✅',
+        productNameUz: 'Name (UZ)',
+        productNameRu: 'Name (RU)',
+        productNameEn: 'Name (EN)',
+        productCategory: 'Category',
+        productUnit: 'Unit',
+        productCities: 'Cities (comma-separated)',
+        productPriceCount: 'Price count',
+        productPendingCount: 'Pending count',
+        productLinkedPrices: 'Linked prices',
+        productLinkedPending: 'Linked pending',
       },
     }),
     []
@@ -612,6 +709,15 @@ export default function App() {
     quantity: Number(item.quantity) || 1,
   });
 
+  const normalizeProductAdminItem = (item: any): ProductAdminItem => ({
+    ...item,
+    available_cities: Array.isArray(item.available_cities) ? item.available_cities : [],
+    prices: Array.isArray(item.prices) ? item.prices : [],
+    pending: Array.isArray(item.pending) ? item.pending : [],
+    price_count: Number(item.price_count) || 0,
+    pending_count: Number(item.pending_count) || 0,
+  });
+
   const callModerationApi = async (action: string, payload: Record<string, unknown> = {}) => {
     const response = await fetch('/api/moderation', {
       method: 'POST',
@@ -643,6 +749,19 @@ export default function App() {
       window.Telegram?.WebApp?.showAlert(t.moderationError);
     } finally {
       setModerationLoading(false);
+    }
+  };
+
+  const fetchModerationProducts = async () => {
+    if (!isAdminUser || !telegramInitData) return;
+    setProductAdminLoading(true);
+    try {
+      const result = await callModerationApi('listProducts');
+      setProductAdminItems((result.items || []).map(normalizeProductAdminItem));
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } finally {
+      setProductAdminLoading(false);
     }
   };
 
@@ -885,6 +1004,93 @@ export default function App() {
     }
   };
 
+  const updateProductField = (id: string, field: keyof ProductAdminItem, value: string) => {
+    setProductAdminItems(items => items.map(item => {
+      if (item.id !== id) return item;
+      if (field === 'available_cities') {
+        return {
+          ...item,
+          available_cities: value.split(',').map(city => city.trim()).filter(Boolean),
+        };
+      }
+      return { ...item, [field]: value };
+    }));
+  };
+
+  const saveProductItem = async (item: ProductAdminItem) => {
+    setModerationSavingId(item.id);
+    try {
+      await callModerationApi('updateProduct', {
+        id: item.id,
+        changes: {
+          name_uz: item.name_uz,
+          name_ru: item.name_ru,
+          name_en: item.name_en,
+          category: item.category,
+          unit: item.unit,
+          available_cities: item.available_cities || [],
+        },
+      });
+      await fetchModerationProducts();
+      await fetchProducts();
+      window.Telegram?.WebApp?.showAlert(t.moderationSaved);
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } finally {
+      setModerationSavingId(null);
+    }
+  };
+
+  const deleteProductItem = async (item: ProductAdminItem) => {
+    setModerationSavingId(item.id);
+    try {
+      await callModerationApi('deleteProduct', { id: item.id });
+      await fetchModerationProducts();
+      await fetchProducts();
+      window.Telegram?.WebApp?.showAlert(t.productDeleted);
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } finally {
+      setModerationSavingId(null);
+    }
+  };
+
+  const createProductItem = async () => {
+    if (!newProductItem.name_uz.trim()) {
+      window.Telegram?.WebApp?.showAlert(t.alertFill);
+      return;
+    }
+
+    setModerationSavingId('create-product');
+    try {
+      await callModerationApi('createProduct', {
+        payload: {
+          name_uz: newProductItem.name_uz.trim(),
+          name_ru: newProductItem.name_ru.trim() || newProductItem.name_uz.trim(),
+          name_en: newProductItem.name_en.trim() || newProductItem.name_uz.trim(),
+          category: newProductItem.category.trim() || 'Boshqa',
+          unit: newProductItem.unit.trim() || 'dona',
+          available_cities: newProductItem.available_cities.split(',').map(city => city.trim()).filter(Boolean),
+        },
+      });
+      setNewProductItem({
+        name_uz: '',
+        name_ru: '',
+        name_en: '',
+        category: 'Boshqa',
+        unit: 'dona',
+        available_cities: selectedCity,
+      });
+      await fetchModerationProducts();
+      await fetchProducts();
+      window.Telegram?.WebApp?.showAlert(t.moderationSaved);
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } finally {
+      setModerationSavingId(null);
+    }
+  };
+
   useEffect(() => {
     if (mode === 'moderate' && isAdminUser) {
       fetchModerationItems();
@@ -892,7 +1098,17 @@ export default function App() {
   }, [mode, isAdminUser, selectedCity]);
 
   useEffect(() => {
+    if (mode === 'moderate' && isAdminUser && moderationSection === 'products') {
+      fetchModerationProducts();
+    }
+  }, [mode, isAdminUser, moderationSection]);
+
+  useEffect(() => {
     setNewApprovedItem(prev => ({ ...prev, city: selectedCity }));
+  }, [selectedCity]);
+
+  useEffect(() => {
+    setNewProductItem(prev => ({ ...prev, available_cities: selectedCity }));
   }, [selectedCity]);
 
   useEffect(() => {
@@ -2276,51 +2492,75 @@ export default function App() {
         ) : (
           <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">{t.moderationTitle}</h2>
+              <h2 className="text-lg font-semibold">
+                {moderationSection === 'prices' ? t.moderationTitle : t.productsTitle}
+              </h2>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={fetchModerationItems}
+                  onClick={() => setModerationSection('prices')}
+                  className={cn(
+                    'rounded-xl px-3 py-2 text-sm font-semibold',
+                    moderationSection === 'prices' ? 'bg-emerald-600 text-white' : 'border border-stone-200 bg-white text-stone-700'
+                  )}
+                >
+                  {t.pricesTab}
+                </button>
+                <button
+                  onClick={() => setModerationSection('products')}
+                  className={cn(
+                    'rounded-xl px-3 py-2 text-sm font-semibold',
+                    moderationSection === 'products' ? 'bg-emerald-600 text-white' : 'border border-stone-200 bg-white text-stone-700'
+                  )}
+                >
+                  {t.productsTab}
+                </button>
+                <button
+                  onClick={moderationSection === 'prices' ? fetchModerationItems : fetchModerationProducts}
                   className="rounded-xl border border-stone-200 bg-white px-4 py-2 text-sm font-medium text-stone-700"
                 >
                   {t.moderationRefresh}
                 </button>
-                <button
-                  onClick={approveSelectedModerationItems}
-                  disabled={selectedModerationIds.length === 0 || moderationSavingId === 'bulk-approve'}
-                  className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                >
-                  {t.moderationApproveSelected} ({selectedModerationIds.length})
-                </button>
+                {moderationSection === 'prices' && (
+                  <button
+                    onClick={approveSelectedModerationItems}
+                    disabled={selectedModerationIds.length === 0 || moderationSavingId === 'bulk-approve'}
+                    className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                  >
+                    {t.moderationApproveSelected} ({selectedModerationIds.length})
+                  </button>
+                )}
               </div>
             </div>
 
-            {moderationItems.length > 0 && (
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={selectAllModerationItems}
-                  className="rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-medium text-stone-700"
-                >
-                  {t.moderationSelectAll}
-                </button>
-                <button
-                  onClick={clearModerationSelection}
-                  className="rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-medium text-stone-700"
-                >
-                  {t.moderationClearSelection}
-                </button>
-              </div>
-            )}
+            {moderationSection === 'prices' ? (
+              <>
+                {moderationItems.length > 0 && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={selectAllModerationItems}
+                      className="rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-medium text-stone-700"
+                    >
+                      {t.moderationSelectAll}
+                    </button>
+                    <button
+                      onClick={clearModerationSelection}
+                      className="rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-medium text-stone-700"
+                    >
+                      {t.moderationClearSelection}
+                    </button>
+                  </div>
+                )}
 
-            {moderationLoading ? (
-              <div className="animate-pulse space-y-3">
-                {[1, 2, 3].map(i => <div key={i} className="h-44 bg-stone-200 rounded-xl" />)}
-              </div>
-            ) : moderationItems.length === 0 ? (
-              <div className="rounded-2xl border border-stone-200 bg-white p-8 text-center text-stone-500">
-                {t.moderationEmpty}
-              </div>
-            ) : (
-              <div className="space-y-6">
+                {moderationLoading ? (
+                  <div className="animate-pulse space-y-3">
+                    {[1, 2, 3].map(i => <div key={i} className="h-44 bg-stone-200 rounded-xl" />)}
+                  </div>
+                ) : moderationItems.length === 0 ? (
+                  <div className="rounded-2xl border border-stone-200 bg-white p-8 text-center text-stone-500">
+                    {t.moderationEmpty}
+                  </div>
+                ) : (
+                  <div className="space-y-6">
                 <section className="space-y-4">
                   {moderationItems.map(item => (
                     <div key={item.id} className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm space-y-4">
@@ -2558,6 +2798,170 @@ export default function App() {
                     </div>
                   ))}
                 </section>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="space-y-4">
+                <section className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm space-y-3">
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <input
+                      value={newProductItem.name_uz}
+                      onChange={(e) => setNewProductItem(prev => ({ ...prev, name_uz: e.target.value }))}
+                      placeholder={t.productNameUz}
+                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                    />
+                    <input
+                      value={newProductItem.name_ru}
+                      onChange={(e) => setNewProductItem(prev => ({ ...prev, name_ru: e.target.value }))}
+                      placeholder={t.productNameRu}
+                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                    />
+                    <input
+                      value={newProductItem.name_en}
+                      onChange={(e) => setNewProductItem(prev => ({ ...prev, name_en: e.target.value }))}
+                      placeholder={t.productNameEn}
+                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                    />
+                    <input
+                      value={newProductItem.category}
+                      onChange={(e) => setNewProductItem(prev => ({ ...prev, category: e.target.value }))}
+                      placeholder={t.productCategory}
+                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                    />
+                    <input
+                      value={newProductItem.unit}
+                      onChange={(e) => setNewProductItem(prev => ({ ...prev, unit: e.target.value }))}
+                      placeholder={t.productUnit}
+                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                    />
+                    <input
+                      value={newProductItem.available_cities}
+                      onChange={(e) => setNewProductItem(prev => ({ ...prev, available_cities: e.target.value }))}
+                      placeholder={t.productCities}
+                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                    />
+                  </div>
+                  <button
+                    onClick={createProductItem}
+                    disabled={moderationSavingId === 'create-product'}
+                    className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                  >
+                    {t.productCreate}
+                  </button>
+                </section>
+
+                {productAdminLoading ? (
+                  <div className="animate-pulse space-y-3">
+                    {[1, 2, 3].map(i => <div key={i} className="h-44 bg-stone-200 rounded-xl" />)}
+                  </div>
+                ) : productAdminItems.length === 0 ? (
+                  <div className="rounded-2xl border border-stone-200 bg-white p-8 text-center text-stone-500">
+                    {t.productsEmpty}
+                  </div>
+                ) : productAdminItems.map(item => (
+                  <section key={item.id} className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm space-y-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-wider text-stone-400">ID</div>
+                        <div className="text-sm font-medium text-stone-700">{item.id}</div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => saveProductItem(item)}
+                          disabled={moderationSavingId === item.id}
+                          className="rounded-xl border border-stone-200 bg-stone-100 px-4 py-2 text-sm font-semibold text-stone-700 disabled:opacity-50"
+                        >
+                          {t.productSave}
+                        </button>
+                        <button
+                          onClick={() => deleteProductItem(item)}
+                          disabled={moderationSavingId === item.id}
+                          className="rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                        >
+                          {t.productDelete}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <input
+                        value={item.name_uz || ''}
+                        onChange={(e) => updateProductField(item.id, 'name_uz', e.target.value)}
+                        placeholder={t.productNameUz}
+                        className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                      />
+                      <input
+                        value={item.name_ru || ''}
+                        onChange={(e) => updateProductField(item.id, 'name_ru', e.target.value)}
+                        placeholder={t.productNameRu}
+                        className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                      />
+                      <input
+                        value={item.name_en || ''}
+                        onChange={(e) => updateProductField(item.id, 'name_en', e.target.value)}
+                        placeholder={t.productNameEn}
+                        className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                      />
+                      <input
+                        value={item.category || ''}
+                        onChange={(e) => updateProductField(item.id, 'category', e.target.value)}
+                        placeholder={t.productCategory}
+                        className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                      />
+                      <input
+                        value={item.unit || ''}
+                        onChange={(e) => updateProductField(item.id, 'unit', e.target.value)}
+                        placeholder={t.productUnit}
+                        className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                      />
+                      <input
+                        value={(item.available_cities || []).join(', ')}
+                        onChange={(e) => updateProductField(item.id, 'available_cities', e.target.value)}
+                        placeholder={t.productCities}
+                        className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                      />
+                    </div>
+
+                    <div className="grid gap-2 text-xs text-stone-500 md:grid-cols-2">
+                      <div>{t.productPriceCount}: {item.price_count || 0}</div>
+                      <div>{t.productPendingCount}: {item.pending_count || 0}</div>
+                    </div>
+
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div className="rounded-xl border border-stone-200 bg-stone-50 p-3">
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-stone-500">{t.productLinkedPrices}</div>
+                        <div className="max-h-40 space-y-2 overflow-auto text-xs text-stone-600">
+                          {(item.prices || []).length === 0 ? (
+                            <div className="text-stone-400">{t.noData}</div>
+                          ) : (item.prices || []).slice(0, 20).map(price => (
+                            <div key={price.id} className="rounded-lg bg-white p-2">
+                              <div className="font-medium">{price.product_name_raw}</div>
+                              <div>{priceFormatter.format(Number(price.price) || 0)} {t.sumLabel}</div>
+                              <div>{price.city || '-'}</div>
+                              <div>{price.place_name || '-'}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-stone-200 bg-stone-50 p-3">
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-stone-500">{t.productLinkedPending}</div>
+                        <div className="max-h-40 space-y-2 overflow-auto text-xs text-stone-600">
+                          {(item.pending || []).length === 0 ? (
+                            <div className="text-stone-400">{t.noData}</div>
+                          ) : (item.pending || []).slice(0, 20).map(pendingItem => (
+                            <div key={pendingItem.id} className="rounded-lg bg-white p-2">
+                              <div className="font-medium">{pendingItem.product_name_raw}</div>
+                              <div>{pendingItem.city || '-'}</div>
+                              <div>{pendingItem.status || 'pending'}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+                ))}
               </div>
             )}
           </div>

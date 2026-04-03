@@ -80,6 +80,38 @@ async function syncProductAvailableCities(productId, city) {
   if (updateError) throw updateError;
 }
 
+async function ensureProductForName(rawName, city) {
+  const normalizedName = String(rawName || '').trim();
+  if (!normalizedName) return null;
+
+  const { data: existingProduct } = await supabase
+    .from('products')
+    .select('id')
+    .eq('name_uz', normalizedName)
+    .maybeSingle();
+
+  if (existingProduct?.id) {
+    await syncProductAvailableCities(existingProduct.id, city);
+    return existingProduct.id;
+  }
+
+  const { data: created, error: createError } = await supabase
+    .from('products')
+    .insert({
+      name_uz: normalizedName,
+      name_ru: normalizedName,
+      name_en: normalizedName,
+      category: 'Boshqa',
+      unit: 'dona',
+      available_cities: city ? [city] : [],
+    })
+    .select('id')
+    .single();
+
+  if (createError) throw createError;
+  return created?.id || null;
+}
+
 async function listPending(city) {
   let query = supabase
     .from('pending_prices')
@@ -169,8 +201,10 @@ async function createApproved(payload) {
     throw invalid;
   }
 
+  const productId = payload.product_id || await ensureProductForName(payload.product_name_raw, city);
+
   const insertPayload = {
-    product_id: payload.product_id || null,
+    product_id: productId,
     product_name_raw: String(payload.product_name_raw).trim(),
     price: Math.round(unitPrice),
     quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
@@ -186,10 +220,19 @@ async function createApproved(payload) {
 
   const { data, error } = await supabase.from('prices').insert(insertPayload).select('*').single();
   if (error) throw error;
+  await syncProductAvailableCities(productId, city);
   return data;
 }
 
 async function updateApproved(id, changes) {
+  const { data: currentApproved, error: currentApprovedError } = await supabase
+    .from('prices')
+    .select('product_id, city, product_name_raw')
+    .eq('id', id)
+    .maybeSingle();
+
+  if (currentApprovedError) throw currentApprovedError;
+
   const payload = {};
 
   if (typeof changes.product_name_raw === 'string' && changes.product_name_raw.trim()) {
@@ -212,6 +255,13 @@ async function updateApproved(id, changes) {
     payload.quantity = changes.quantity;
   }
 
+  const nextCity = payload.city || currentApproved?.city || 'Tashkent';
+  const nextProductName = payload.product_name_raw || currentApproved?.product_name_raw;
+  const resolvedProductId = currentApproved?.product_id || await ensureProductForName(nextProductName, nextCity);
+  if (resolvedProductId) {
+    payload.product_id = resolvedProductId;
+  }
+
   const { data, error } = await supabase
     .from('prices')
     .update(payload)
@@ -220,7 +270,129 @@ async function updateApproved(id, changes) {
     .single();
 
   if (error) throw error;
+  if (resolvedProductId) {
+    await syncProductAvailableCities(resolvedProductId, nextCity);
+  }
   return data;
+}
+
+async function listProducts() {
+  const { data: products, error: productsError } = await supabase
+    .from('products')
+    .select('*')
+    .order('name_uz', { ascending: true })
+    .limit(1000);
+
+  if (productsError) throw productsError;
+
+  const productIds = (products || []).map(item => item.id);
+  if (productIds.length === 0) return [];
+
+  const [{ data: prices, error: pricesError }, { data: pending, error: pendingError }] = await Promise.all([
+    supabase
+      .from('prices')
+      .select('id,product_id,product_name_raw,price,city,place_name,place_address,receipt_date,source')
+      .in('product_id', productIds)
+      .order('receipt_date', { ascending: false })
+      .limit(5000),
+    supabase
+      .from('pending_prices')
+      .select('id,product_id,product_name_raw,status,city,created_at')
+      .in('product_id', productIds)
+      .or('status.eq.pending,status.is.null')
+      .order('created_at', { ascending: false })
+      .limit(3000),
+  ]);
+
+  if (pricesError) throw pricesError;
+  if (pendingError) throw pendingError;
+
+  const pricesByProduct = new Map();
+  for (const row of prices || []) {
+    const list = pricesByProduct.get(row.product_id) || [];
+    list.push(row);
+    pricesByProduct.set(row.product_id, list);
+  }
+
+  const pendingByProduct = new Map();
+  for (const row of pending || []) {
+    const list = pendingByProduct.get(row.product_id) || [];
+    list.push(row);
+    pendingByProduct.set(row.product_id, list);
+  }
+
+  return (products || []).map(product => {
+    const productPrices = pricesByProduct.get(product.id) || [];
+    const productPending = pendingByProduct.get(product.id) || [];
+    return {
+      ...product,
+      prices: productPrices,
+      pending: productPending,
+      price_count: productPrices.length,
+      pending_count: productPending.length,
+      latest_price: productPrices[0] || null,
+    };
+  });
+}
+
+async function createProduct(payload) {
+  const nameUz = String(payload.name_uz || '').trim();
+  if (!nameUz) {
+    const invalid = new Error('name_uz is required');
+    invalid.statusCode = 400;
+    throw invalid;
+  }
+
+  const availableCities = Array.isArray(payload.available_cities)
+    ? payload.available_cities.map(city => normalizeCityName(city || '')).filter(Boolean)
+    : [];
+
+  const { data, error } = await supabase
+    .from('products')
+    .insert({
+      name_uz: nameUz,
+      name_ru: String(payload.name_ru || nameUz).trim(),
+      name_en: String(payload.name_en || nameUz).trim(),
+      category: String(payload.category || 'Boshqa').trim(),
+      unit: String(payload.unit || 'dona').trim(),
+      available_cities: availableCities,
+    })
+    .select('*')
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+async function updateProduct(id, changes) {
+  const payload = {};
+  if (typeof changes.name_uz === 'string' && changes.name_uz.trim()) payload.name_uz = changes.name_uz.trim();
+  if (typeof changes.name_ru === 'string' && changes.name_ru.trim()) payload.name_ru = changes.name_ru.trim();
+  if (typeof changes.name_en === 'string' && changes.name_en.trim()) payload.name_en = changes.name_en.trim();
+  if (typeof changes.category === 'string' && changes.category.trim()) payload.category = changes.category.trim();
+  if (typeof changes.unit === 'string' && changes.unit.trim()) payload.unit = changes.unit.trim();
+  if (Array.isArray(changes.available_cities)) {
+    payload.available_cities = changes.available_cities
+      .map(city => normalizeCityName(city || ''))
+      .filter(Boolean);
+  }
+
+  const { data, error } = await supabase
+    .from('products')
+    .update(payload)
+    .eq('id', id)
+    .select('*')
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+async function deleteProduct(id) {
+  await supabase.from('prices').delete().eq('product_id', id);
+  await supabase.from('pending_prices').delete().eq('product_id', id);
+  const { error } = await supabase.from('products').delete().eq('id', id);
+  if (error) throw error;
 }
 
 async function updatePending(id, changes) {
@@ -460,6 +632,22 @@ export default async function moderation(req, res) {
       case 'deleteApprovedMany': {
         const result = await deleteApprovedMany(body.ids || []);
         return send(res, 200, { ok: true, ...result });
+      }
+      case 'listProducts': {
+        const items = await listProducts();
+        return send(res, 200, { ok: true, items });
+      }
+      case 'createProduct': {
+        const item = await createProduct(body.payload || {});
+        return send(res, 200, { ok: true, item });
+      }
+      case 'updateProduct': {
+        const item = await updateProduct(body.id, body.changes || {});
+        return send(res, 200, { ok: true, item });
+      }
+      case 'deleteProduct': {
+        await deleteProduct(body.id);
+        return send(res, 200, { ok: true });
       }
       default:
         return send(res, 400, { ok: false, error: 'UNKNOWN_ACTION' });
