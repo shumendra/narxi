@@ -53,6 +53,15 @@ CITY_CENTERS = {
     'Jizzakh': (40.1158, 67.8422),
 }
 
+STORE_BRANDS = {
+    'Korzinka': ['korzinka', 'korzинка'],
+    'Makro': ['makro'],
+    'Yaponamama': ['yaponamama', 'японамама'],
+    'Havas': ['havas'],
+    'Baraka Market': ['baraka'],
+    'Carrefour': ['carrefour'],
+}
+
 _GEOCODE_CACHE: dict[str, tuple[float | None, float | None]] = {}
 
 
@@ -140,6 +149,14 @@ def geocode_address(address: str | None, city: str | None) -> tuple[float | None
     return fallback
 
 
+def normalize_store_name(raw_name: str | None, raw_address: str | None) -> str:
+    combined = f"{raw_name or ''} {raw_address or ''}".lower()
+    for brand, keywords in STORE_BRANDS.items():
+        if any(keyword in combined for keyword in keywords):
+            return brand
+    return (raw_name or "Noma'lum do'kon").strip() or "Noma'lum do'kon"
+
+
 def parse_receipt_html(html_content: str) -> dict:
     soup = BeautifulSoup(html_content or '', 'html.parser')
 
@@ -166,6 +183,17 @@ def parse_receipt_html(html_content: str) -> dict:
     date_match = re.search(r'(\d{2}\.\d{2}\.\d{4})', body_text)
     if date_match:
         receipt_date = date_match.group(1)
+
+    latitude = None
+    longitude = None
+    coord_match = re.search(r'Placemark\s*\(\s*\[\s*(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)\s*\]', html_content)
+    if coord_match:
+        try:
+            latitude = float(coord_match.group(1))
+            longitude = float(coord_match.group(2))
+        except Exception:
+            latitude = None
+            longitude = None
 
     for table in soup.find_all('table'):
         first_row = table.find('tr')
@@ -227,9 +255,11 @@ def parse_receipt_html(html_content: str) -> dict:
             break
 
     return {
-        'store_name': store_name or "Noma'lum do'kon",
+        'store_name': normalize_store_name(store_name, store_address),
         'store_address': store_address,
         'receipt_date': receipt_date,
+        'latitude': latitude,
+        'longitude': longitude,
         'items': items,
     }
 
@@ -332,7 +362,10 @@ async def process_single_receipt(context, queue_item: dict, products: list[dict]
             return False
 
         city = extract_city(receipt.get('store_address')) or fallback_city
-        latitude, longitude = geocode_address(receipt.get('store_address'), city)
+        latitude = receipt.get('latitude')
+        longitude = receipt.get('longitude')
+        if latitude is None or longitude is None:
+            latitude, longitude = geocode_address(receipt.get('store_address'), city)
         inserted = 0
 
         for item in items:

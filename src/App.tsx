@@ -88,6 +88,14 @@ function ChangeView({ center, zoom }: { center: [number, number]; zoom: number }
   return null;
 }
 
+function FlyToView({ center, zoom, trigger }: { center: [number, number]; zoom: number; trigger: number }) {
+  const map = useMap();
+  useEffect(() => {
+    map.flyTo(center, zoom, { duration: 0.8 });
+  }, [map, center[0], center[1], zoom, trigger]);
+  return null;
+}
+
 function ReportMapPicker({ onPick }: { onPick: (lat: number, lng: number) => void }) {
   useMapEvents({
     click(e) {
@@ -114,6 +122,7 @@ export default function App() {
   const [selectedCity, setSelectedCity] = useState(DEFAULT_CITY);
   const [nearbyEnabled, setNearbyEnabled] = useState(false);
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [findMapFocus, setFindMapFocus] = useState<{ lat: number; lng: number; zoom: number; trigger: number } | null>(null);
   const [geoError, setGeoError] = useState('');
   const priceFormatter = useMemo(() => new Intl.NumberFormat('en-US'), []);
   const telegramUserId = window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || '';
@@ -857,13 +866,26 @@ export default function App() {
   };
 
   const findMapCenter = useMemo<[number, number]>(() => {
+    if (findMapFocus) {
+      return [findMapFocus.lat, findMapFocus.lng];
+    }
     if (nearbyEnabled && userLocation) {
       return [userLocation.lat, userLocation.lng];
     }
     return selectedCityOption.center;
-  }, [nearbyEnabled, userLocation, selectedCityOption]);
+  }, [findMapFocus, nearbyEnabled, userLocation, selectedCityOption]);
 
-  const findMapZoom = nearbyEnabled && userLocation ? 13 : selectedCityOption.zoom;
+  const findMapZoom = findMapFocus?.zoom ?? (nearbyEnabled && userLocation ? 13 : selectedCityOption.zoom);
+
+  const focusPriceOnMap = (price: PriceRecord) => {
+    if (price.latitude === null || price.longitude === null) return;
+    setFindMapFocus({
+      lat: price.latitude,
+      lng: price.longitude,
+      zoom: 16,
+      trigger: Date.now(),
+    });
+  };
 
   const requestUserLocation = (onSuccess?: (coords: { lat: number; lng: number }) => void) => {
     if (!navigator.geolocation) {
@@ -901,6 +923,10 @@ export default function App() {
 
     requestUserLocation(() => setNearbyEnabled(true));
   };
+
+  useEffect(() => {
+    setFindMapFocus(null);
+  }, [selectedCity, selectedProduct?.id, nearbyEnabled]);
 
   const handleReportSubmit = async () => {
     if (!reportPrice || (!selectedProduct && !searchQuery.trim())) {
@@ -1719,6 +1745,7 @@ export default function App() {
                               <h4 className="font-bold text-stone-900">{priceFormatter.format(p.price)} {t.sumLabel}</h4>
                             </div>
                             <p className="text-sm text-stone-600 truncate">{p.place_name || t.unknownStore}</p>
+                            <p className="text-xs text-stone-500 truncate">{p.place_address || '-'}</p>
                             <p className="text-xs text-stone-400 truncate">{p.city || selectedCityLabel}</p>
                             <p className="text-xs text-stone-400">
                               {formatDistanceToNow(new Date(p.receipt_date), { addSuffix: true, locale: reportLocale })}
@@ -1730,7 +1757,12 @@ export default function App() {
                             )}
                           </div>
                           <div className="text-right">
-                            <button title={t.mapTitle} className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors">
+                            <button
+                              title={t.mapTitle}
+                              onClick={() => focusPriceOnMap(p)}
+                              disabled={p.latitude === null || p.longitude === null}
+                              className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-40"
+                            >
                               <Navigation className="w-5 h-5" />
                             </button>
                           </div>
@@ -1749,11 +1781,15 @@ export default function App() {
                     <MapContainer 
                       center={findMapCenter}
                       zoom={findMapZoom}
+                      dragging={true}
+                      scrollWheelZoom={true}
+                      doubleClickZoom={true}
+                      touchZoom={true}
                       style={{ height: '100%', width: '100%' }}
-                      zoomControl={false}
+                      zoomControl={true}
                     >
                       <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-                      <ChangeView center={findMapCenter} zoom={findMapZoom} />
+                      <FlyToView center={findMapCenter} zoom={findMapZoom} trigger={findMapFocus?.trigger || 0} />
                       {mapPrices.map(p => (
                         <CircleMarker
                           key={p.id}
@@ -1768,6 +1804,7 @@ export default function App() {
                             <div className="p-1">
                               <div className="font-bold text-lg">{priceFormatter.format(p.price)} {t.sumLabel}</div>
                               <div className="text-sm text-stone-600">{p.place_name || t.unknownStore}</div>
+                              <div className="text-xs text-stone-500">{p.place_address || '-'}</div>
                               <div className="text-xs text-stone-500">{p.city || selectedCityLabel}</div>
                             </div>
                           </Popup>
