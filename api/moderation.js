@@ -144,7 +144,7 @@ async function listApproved(city) {
     .from('prices')
     .select('*')
     .order('receipt_date', { ascending: false })
-    .limit(100);
+    .limit(1000);
 
   const normalizedCity = normalizeCityName(city || '');
   if (normalizedCity) {
@@ -155,6 +155,72 @@ async function listApproved(city) {
 
   if (error) throw error;
   return data || [];
+}
+
+async function createApproved(payload) {
+  const city = normalizeCityName(payload.city || '') || extractCityFromAddress(payload.place_address || '') || 'Tashkent';
+  const price = Number(payload.price);
+  const quantity = Number(payload.quantity);
+  const unitPrice = Number(payload.unit_price) || (price > 0 && quantity > 0 ? Math.round(price / quantity) : price);
+
+  if (!payload.product_name_raw || !Number.isFinite(price) || price <= 0) {
+    const invalid = new Error('Invalid payload for createApproved');
+    invalid.statusCode = 400;
+    throw invalid;
+  }
+
+  const insertPayload = {
+    product_id: payload.product_id || null,
+    product_name_raw: String(payload.product_name_raw).trim(),
+    price: Math.round(unitPrice),
+    quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
+    city,
+    place_name: payload.place_name || null,
+    place_address: payload.place_address || null,
+    latitude: payload.latitude ?? null,
+    longitude: payload.longitude ?? null,
+    receipt_date: payload.receipt_date || new Date().toISOString(),
+    submitted_by: payload.submitted_by || 'admin',
+    source: payload.source || 'admin_manual',
+  };
+
+  const { data, error } = await supabase.from('prices').insert(insertPayload).select('*').single();
+  if (error) throw error;
+  return data;
+}
+
+async function updateApproved(id, changes) {
+  const payload = {};
+
+  if (typeof changes.product_name_raw === 'string' && changes.product_name_raw.trim()) {
+    payload.product_name_raw = changes.product_name_raw.trim();
+  }
+  if (typeof changes.place_name === 'string') payload.place_name = changes.place_name;
+  if (typeof changes.place_address === 'string') payload.place_address = changes.place_address;
+  if (typeof changes.city === 'string') payload.city = normalizeCityName(changes.city) || changes.city;
+  if (typeof changes.source === 'string') payload.source = changes.source;
+  if (typeof changes.submitted_by === 'string') payload.submitted_by = changes.submitted_by;
+  if (typeof changes.receipt_date === 'string' && changes.receipt_date.trim()) payload.receipt_date = changes.receipt_date;
+
+  if (typeof changes.latitude === 'number' || changes.latitude === null) payload.latitude = changes.latitude;
+  if (typeof changes.longitude === 'number' || changes.longitude === null) payload.longitude = changes.longitude;
+
+  if (typeof changes.price === 'number' && Number.isFinite(changes.price) && changes.price > 0) {
+    payload.price = Math.round(changes.price);
+  }
+  if (typeof changes.quantity === 'number' && Number.isFinite(changes.quantity) && changes.quantity > 0) {
+    payload.quantity = changes.quantity;
+  }
+
+  const { data, error } = await supabase
+    .from('prices')
+    .update(payload)
+    .eq('id', id)
+    .select('*')
+    .single();
+
+  if (error) throw error;
+  return data;
 }
 
 async function updatePending(id, changes) {
@@ -328,6 +394,15 @@ async function deleteApproved(id) {
   if (error) throw error;
 }
 
+async function deleteApprovedMany(ids) {
+  const targetIds = Array.isArray(ids) ? ids.filter(Boolean) : [];
+  if (targetIds.length === 0) return { deletedCount: 0 };
+
+  const { error } = await supabase.from('prices').delete().in('id', targetIds);
+  if (error) throw error;
+  return { deletedCount: targetIds.length };
+}
+
 export default async function moderation(req, res) {
   if (!supabase) {
     return send(res, 500, { ok: false, error: 'SUPABASE_NOT_CONFIGURED' });
@@ -373,6 +448,18 @@ export default async function moderation(req, res) {
       case 'deleteApproved': {
         await deleteApproved(body.id);
         return send(res, 200, { ok: true });
+      }
+      case 'updateApproved': {
+        const item = await updateApproved(body.id, body.changes || {});
+        return send(res, 200, { ok: true, item });
+      }
+      case 'createApproved': {
+        const item = await createApproved(body.payload || {});
+        return send(res, 200, { ok: true, item });
+      }
+      case 'deleteApprovedMany': {
+        const result = await deleteApprovedMany(body.ids || []);
+        return send(res, 200, { ok: true, ...result });
       }
       default:
         return send(res, 400, { ok: false, error: 'UNKNOWN_ACTION' });

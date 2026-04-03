@@ -74,6 +74,21 @@ def normalize_receipt_date(raw_value: str | None) -> str:
     if not value:
         return now_iso()
 
+    datetime_match = re.fullmatch(r'(\d{2})\.(\d{2})\.(\d{4}),?\s*(\d{2}):(\d{2})', value)
+    if datetime_match:
+        day, month, year, hour, minute = datetime_match.groups()
+        try:
+            return datetime(
+                int(year),
+                int(month),
+                int(day),
+                int(hour),
+                int(minute),
+                tzinfo=timezone.utc,
+            ).isoformat()
+        except Exception:
+            return now_iso()
+
     if re.fullmatch(r'\d{2}\.\d{2}\.\d{4}', value):
         day, month, year = value.split('.')
         try:
@@ -180,7 +195,9 @@ def parse_receipt_html(html_content: str) -> dict:
             store_address = value
             break
 
-    date_match = re.search(r'(\d{2}\.\d{2}\.\d{4})', body_text)
+    date_match = re.search(r'(\d{2}\.\d{2}\.\d{4},\s*\d{2}:\d{2})', body_text)
+    if not date_match:
+        date_match = re.search(r'(\d{2}\.\d{2}\.\d{4})', body_text)
     if date_match:
         receipt_date = date_match.group(1)
 
@@ -397,21 +414,7 @@ async def process_single_receipt(context, queue_item: dict, products: list[dict]
             if result.data:
                 inserted += 1
 
-        existing_log = (
-            supabase.table('receipts_log')
-            .select('receipt_url')
-            .eq('receipt_url', url)
-            .limit(1)
-            .execute()
-        )
-        if not existing_log.data:
-            supabase.table('receipts_log').insert({
-                'receipt_url': url,
-                'submitted_by': telegram_id,
-                'item_count': len(items),
-            }).execute()
-
-        mark_queue_status(queue_id, 'processed')
+        supabase.table('receipt_queue').delete().eq('id', queue_id).execute()
         print(f"  ✓ Saved {inserted}/{len(items)} items")
         return True
 

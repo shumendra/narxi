@@ -75,6 +75,8 @@ interface ApprovedModerationItem {
   quantity: number;
   place_name: string | null;
   place_address: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
   receipt_date: string;
   submitted_by: string;
   source: string;
@@ -117,6 +119,15 @@ export default function App() {
   const [moderationLoading, setModerationLoading] = useState(false);
   const [moderationSavingId, setModerationSavingId] = useState<string | null>(null);
   const [selectedModerationIds, setSelectedModerationIds] = useState<string[]>([]);
+  const [selectedApprovedIds, setSelectedApprovedIds] = useState<string[]>([]);
+  const [newApprovedItem, setNewApprovedItem] = useState({
+    product_name_raw: '',
+    price: '',
+    quantity: '1',
+    place_name: '',
+    place_address: '',
+    city: DEFAULT_CITY,
+  });
   const [loading, setLoading] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const [selectedCity, setSelectedCity] = useState(DEFAULT_CITY);
@@ -248,6 +259,10 @@ export default function App() {
         approvedEmpty: 'Tasdiqlangan narxlar yo‘q',
         moderationDeleteApproved: 'Tasdiqlanganni o‘chirish',
         moderationDeleted: 'O‘chirildi ✅',
+        approvedSave: 'Saqlash',
+        approvedCreate: "Yangi narx qo'shish",
+        approvedDeleteSelected: "Tanlanganlarni o'chirish",
+        approvedBulkDeleted: "Tanlangan narxlar o'chirildi ✅",
         moderationApproveSelected: 'Tanlanganlarni tasdiqlash',
         moderationSelectAll: 'Barchasini tanlash',
         moderationClearSelection: 'Tanlovni tozalash',
@@ -368,6 +383,10 @@ export default function App() {
         approvedEmpty: 'Нет одобренных цен',
         moderationDeleteApproved: 'Удалить одобренное',
         moderationDeleted: 'Удалено ✅',
+        approvedSave: 'Сохранить',
+        approvedCreate: 'Добавить новую цену',
+        approvedDeleteSelected: 'Удалить выбранные',
+        approvedBulkDeleted: 'Выбранные цены удалены ✅',
         moderationApproveSelected: 'Одобрить выбранные',
         moderationSelectAll: 'Выбрать все',
         moderationClearSelection: 'Очистить выбор',
@@ -488,6 +507,10 @@ export default function App() {
         approvedEmpty: 'No approved prices',
         moderationDeleteApproved: 'Delete approved',
         moderationDeleted: 'Deleted ✅',
+        approvedSave: 'Save',
+        approvedCreate: 'Add new price',
+        approvedDeleteSelected: 'Delete selected',
+        approvedBulkDeleted: 'Selected prices deleted ✅',
         moderationApproveSelected: 'Approve selected',
         moderationSelectAll: 'Select all',
         moderationClearSelection: 'Clear selection',
@@ -615,6 +638,7 @@ export default function App() {
       setModerationItems((pendingResult.items || []).map(normalizePendingItem));
       setApprovedItems((approvedResult.items || []).map(normalizeApprovedItem));
       setSelectedModerationIds([]);
+      setSelectedApprovedIds([]);
     } catch {
       window.Telegram?.WebApp?.showAlert(t.moderationError);
     } finally {
@@ -752,11 +776,124 @@ export default function App() {
     }
   };
 
+  const toggleApprovedSelection = (id: string) => {
+    setSelectedApprovedIds(prev => (
+      prev.includes(id)
+        ? prev.filter(itemId => itemId !== id)
+        : [...prev, id]
+    ));
+  };
+
+  const clearApprovedSelection = () => {
+    setSelectedApprovedIds([]);
+  };
+
+  const deleteSelectedApprovedItems = async () => {
+    if (selectedApprovedIds.length === 0) return;
+    setModerationSavingId('bulk-delete-approved');
+    try {
+      await callModerationApi('deleteApprovedMany', { ids: selectedApprovedIds });
+      await fetchModerationItems();
+      setSelectedApprovedIds([]);
+      window.Telegram?.WebApp?.showAlert(t.approvedBulkDeleted);
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } finally {
+      setModerationSavingId(null);
+    }
+  };
+
+  const updateApprovedField = (id: string, field: keyof ApprovedModerationItem, value: string) => {
+    setApprovedItems(items => items.map(item => {
+      if (item.id !== id) return item;
+      if (field === 'price' || field === 'quantity') {
+        const numericValue = Number(value);
+        return { ...item, [field]: Number.isFinite(numericValue) ? numericValue : 0 };
+      }
+      if (field === 'latitude' || field === 'longitude') {
+        const numericValue = Number(value);
+        return { ...item, [field]: Number.isFinite(numericValue) ? numericValue : null };
+      }
+      return { ...item, [field]: value };
+    }));
+  };
+
+  const saveApprovedItem = async (item: ApprovedModerationItem) => {
+    setModerationSavingId(item.id);
+    try {
+      await callModerationApi('updateApproved', {
+        id: item.id,
+        changes: {
+          product_name_raw: item.product_name_raw,
+          price: item.price,
+          quantity: item.quantity,
+          place_name: item.place_name,
+          place_address: item.place_address,
+          city: item.city,
+          receipt_date: item.receipt_date,
+          latitude: item.latitude,
+          longitude: item.longitude,
+          submitted_by: item.submitted_by,
+          source: item.source,
+        },
+      });
+      await fetchModerationItems();
+      window.Telegram?.WebApp?.showAlert(t.moderationSaved);
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } finally {
+      setModerationSavingId(null);
+    }
+  };
+
+  const createApprovedItem = async () => {
+    const price = Number(newApprovedItem.price);
+    const quantity = Number(newApprovedItem.quantity);
+    if (!newApprovedItem.product_name_raw.trim() || !Number.isFinite(price) || price <= 0) {
+      window.Telegram?.WebApp?.showAlert(t.alertFill);
+      return;
+    }
+
+    setModerationSavingId('create-approved');
+    try {
+      await callModerationApi('createApproved', {
+        payload: {
+          product_name_raw: newApprovedItem.product_name_raw.trim(),
+          price,
+          quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
+          place_name: newApprovedItem.place_name.trim() || null,
+          place_address: newApprovedItem.place_address.trim() || null,
+          city: newApprovedItem.city || selectedCity,
+          source: 'admin_manual',
+          submitted_by: telegramUserId || 'admin',
+        },
+      });
+      setNewApprovedItem({
+        product_name_raw: '',
+        price: '',
+        quantity: '1',
+        place_name: '',
+        place_address: '',
+        city: selectedCity,
+      });
+      await fetchModerationItems();
+      window.Telegram?.WebApp?.showAlert(t.moderationSaved);
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } finally {
+      setModerationSavingId(null);
+    }
+  };
+
   useEffect(() => {
     if (mode === 'moderate' && isAdminUser) {
       fetchModerationItems();
     }
   }, [mode, isAdminUser, selectedCity]);
+
+  useEffect(() => {
+    setNewApprovedItem(prev => ({ ...prev, city: selectedCity }));
+  }, [selectedCity]);
 
   useEffect(() => {
     if (mode === 'find' && selectedProduct) {
@@ -2279,6 +2416,68 @@ export default function App() {
 
                 <section className="space-y-4">
                   <h3 className="text-sm font-semibold uppercase tracking-wider text-stone-500">{t.approvedTitle}</h3>
+                  <div className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm space-y-3">
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <input
+                        value={newApprovedItem.product_name_raw}
+                        onChange={(e) => setNewApprovedItem(prev => ({ ...prev, product_name_raw: e.target.value }))}
+                        placeholder={t.moderationName}
+                        className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                      />
+                      <input
+                        type="number"
+                        value={newApprovedItem.price}
+                        onChange={(e) => setNewApprovedItem(prev => ({ ...prev, price: e.target.value }))}
+                        placeholder={t.moderationPrice}
+                        className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                      />
+                      <input
+                        type="number"
+                        value={newApprovedItem.quantity}
+                        onChange={(e) => setNewApprovedItem(prev => ({ ...prev, quantity: e.target.value }))}
+                        placeholder={t.moderationQty}
+                        className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                      />
+                      <input
+                        value={newApprovedItem.place_name}
+                        onChange={(e) => setNewApprovedItem(prev => ({ ...prev, place_name: e.target.value }))}
+                        placeholder={t.unknownStore}
+                        className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                      />
+                      <input
+                        value={newApprovedItem.place_address}
+                        onChange={(e) => setNewApprovedItem(prev => ({ ...prev, place_address: e.target.value }))}
+                        placeholder={t.locationLabel}
+                        className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm md:col-span-2"
+                      />
+                    </div>
+                    <button
+                      onClick={createApprovedItem}
+                      disabled={moderationSavingId === 'create-approved'}
+                      className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                    >
+                      {t.approvedCreate}
+                    </button>
+                  </div>
+
+                  {approvedItems.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={clearApprovedSelection}
+                        className="rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-medium text-stone-700"
+                      >
+                        {t.moderationClearSelection}
+                      </button>
+                      <button
+                        onClick={deleteSelectedApprovedItems}
+                        disabled={selectedApprovedIds.length === 0 || moderationSavingId === 'bulk-delete-approved'}
+                        className="rounded-xl bg-rose-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+                      >
+                        {t.approvedDeleteSelected} ({selectedApprovedIds.length})
+                      </button>
+                    </div>
+                  )}
+
                   {approvedItems.length === 0 ? (
                     <div className="rounded-2xl border border-stone-200 bg-white p-8 text-center text-stone-500">
                       {t.approvedEmpty}
@@ -2287,16 +2486,67 @@ export default function App() {
                     <div key={item.id} className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm space-y-3">
                       <div className="flex items-start justify-between gap-3">
                         <div>
+                          <label className="mb-2 flex items-center gap-2 text-xs text-stone-500">
+                            <input
+                              type="checkbox"
+                              checked={selectedApprovedIds.includes(item.id)}
+                              onChange={() => toggleApprovedSelection(item.id)}
+                            />
+                            {item.id}
+                          </label>
                           <div className="text-sm font-semibold text-stone-900">{item.product_name_raw}</div>
                           <div className="text-xs text-stone-500">{priceFormatter.format(item.price)} {t.sumLabel}</div>
                         </div>
-                        <button
-                          onClick={() => deleteApprovedItem(item)}
-                          disabled={moderationSavingId === item.id}
-                          className="rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                        >
-                          {t.moderationDeleteApproved}
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => saveApprovedItem(item)}
+                            disabled={moderationSavingId === item.id}
+                            className="rounded-xl border border-stone-200 bg-stone-100 px-4 py-2 text-sm font-semibold text-stone-700 disabled:opacity-50"
+                          >
+                            {t.approvedSave}
+                          </button>
+                          <button
+                            onClick={() => deleteApprovedItem(item)}
+                            disabled={moderationSavingId === item.id}
+                            className="rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                          >
+                            {t.moderationDeleteApproved}
+                          </button>
+                        </div>
+                      </div>
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <input
+                          value={item.product_name_raw}
+                          onChange={(e) => updateApprovedField(item.id, 'product_name_raw', e.target.value)}
+                          className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                        />
+                        <input
+                          type="number"
+                          value={item.price}
+                          onChange={(e) => updateApprovedField(item.id, 'price', e.target.value)}
+                          className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                        />
+                        <input
+                          type="number"
+                          value={item.quantity}
+                          onChange={(e) => updateApprovedField(item.id, 'quantity', e.target.value)}
+                          className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                        />
+                        <input
+                          value={item.city || ''}
+                          onChange={(e) => updateApprovedField(item.id, 'city', e.target.value)}
+                          className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                        />
+                        <input
+                          value={item.place_name || ''}
+                          onChange={(e) => updateApprovedField(item.id, 'place_name', e.target.value)}
+                          className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                        />
+                        <input
+                          value={item.place_address || ''}
+                          onChange={(e) => updateApprovedField(item.id, 'place_address', e.target.value)}
+                          className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                        />
                       </div>
                       <div className="text-xs text-stone-500">
                         <div>{t.moderationUser}: {item.submitted_by}</div>
