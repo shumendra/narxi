@@ -282,13 +282,26 @@ def parse_receipt_html(html_content: str) -> dict:
 
 
 def get_all_products() -> list[dict]:
-    result = supabase.table('products').select('id, name_uz, name_ru, name_en, search_text').execute()
-    return result.data or []
+    try:
+        result = supabase.table('products').select('id, name_uz, name_ru, name_en, search_text').execute()
+        return result.data or []
+    except Exception as error:
+        # Backward compatibility for DBs that have not run data-foundation migration yet.
+        if 'search_text' in str(error):
+            fallback = supabase.table('products').select('id, name_uz, name_ru, name_en').execute()
+            return fallback.data or []
+        raise
 
 
 def get_all_aliases() -> list[dict]:
-    result = supabase.table('product_aliases').select('product_id, alias_text, store_name').execute()
-    return result.data or []
+    try:
+        result = supabase.table('product_aliases').select('product_id, alias_text, store_name').execute()
+        return result.data or []
+    except Exception as error:
+        # Alias table is optional until migration is applied.
+        if 'product_aliases' in str(error):
+            return []
+        raise
 
 
 def alias_exact_match(raw_name: str, store_name: str | None, aliases: list[dict]) -> str | None:
@@ -321,15 +334,20 @@ def upsert_product_alias(product_id: str | None, alias_text: str, store_name: st
     normalized_alias = alias_text.strip()
     normalized_store = (store_name or '').strip() or None
 
-    existing = (
-        supabase.table('product_aliases')
-        .select('id,times_seen')
-        .eq('product_id', product_id)
-        .ilike('alias_text', normalized_alias)
-        .is_('store_name', normalized_store)
-        .limit(1)
-        .execute()
-    )
+    try:
+        existing = (
+            supabase.table('product_aliases')
+            .select('id,times_seen')
+            .eq('product_id', product_id)
+            .ilike('alias_text', normalized_alias)
+            .is_('store_name', normalized_store)
+            .limit(1)
+            .execute()
+        )
+    except Exception as error:
+        if 'product_aliases' in str(error):
+            return
+        raise
 
     rows = existing.data or []
     if rows:
@@ -339,13 +357,18 @@ def upsert_product_alias(product_id: str | None, alias_text: str, store_name: st
         return
 
     language = 'ru' if re.search(r'[\u0400-\u04FF]', normalized_alias) else 'uz'
-    supabase.table('product_aliases').insert({
-        'product_id': product_id,
-        'alias_text': normalized_alias,
-        'language': language,
-        'store_name': normalized_store,
-        'times_seen': 1,
-    }).execute()
+    try:
+        supabase.table('product_aliases').insert({
+            'product_id': product_id,
+            'alias_text': normalized_alias,
+            'language': language,
+            'store_name': normalized_store,
+            'times_seen': 1,
+        }).execute()
+    except Exception as error:
+        if 'product_aliases' in str(error):
+            return
+        raise
 
 
 def fuzzy_match(raw_name: str, products: list[dict]) -> tuple[dict | None, int]:

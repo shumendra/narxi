@@ -5,5 +5,7 @@ coverage/
 .DS_Store
 .history/
 *.log
+__pycache__/
+*.pyc
 .env*
 !.env.example
