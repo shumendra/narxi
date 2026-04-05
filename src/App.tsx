@@ -34,6 +34,7 @@ interface Product {
   name_uz: string;
   name_ru: string;
   name_en?: string | null;
+  search_text?: string | null;
   category: string;
   unit?: string | null;
   available_cities?: string[] | null;
@@ -189,6 +190,7 @@ export default function App() {
   const [geoError, setGeoError] = useState('');
   const priceFormatter = useMemo(() => new Intl.NumberFormat('en-US'), []);
   const telegramUserId = window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || '';
+  const telegramUser = window.Telegram?.WebApp?.initDataUnsafe?.user;
   const telegramInitData = window.Telegram?.WebApp?.initData || '';
   const isAdminUser = adminTelegramIds.includes(telegramUserId);
   const selectedCityOption = useMemo(() => getCityOption(selectedCity), [selectedCity]);
@@ -1331,7 +1333,8 @@ export default function App() {
     return cityProducts.filter(p => 
       p.name_uz.toLowerCase().includes(searchQuery.toLowerCase()) ||
       p.name_ru.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (p.name_en || '').toLowerCase().includes(searchQuery.toLowerCase())
+      (p.name_en || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (p.search_text || '').toLowerCase().includes(searchQuery.toLowerCase())
     );
   }, [searchQuery, cityProducts]);
 
@@ -1591,6 +1594,9 @@ export default function App() {
           url,
           force_queue: true,
           telegram_id: window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || 'anonymous',
+          telegram_username: telegramUser?.username || null,
+          telegram_first_name: telegramUser?.first_name || null,
+          telegram_language_code: telegramUser?.language_code || lang,
           city: selectedCity,
         }),
       });
@@ -1641,6 +1647,9 @@ export default function App() {
           url,
           raw_html: rawHtml,
           telegram_id: window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || 'anonymous',
+          telegram_username: telegramUser?.username || null,
+          telegram_first_name: telegramUser?.first_name || null,
+          telegram_language_code: telegramUser?.language_code || lang,
           city: selectedCity,
         }),
       });
@@ -1855,6 +1864,9 @@ export default function App() {
           url,
           extracted_items: extractedItems,
           telegram_id: window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || 'anonymous',
+          telegram_username: telegramUser?.username || null,
+          telegram_first_name: telegramUser?.first_name || null,
+          telegram_language_code: telegramUser?.language_code || lang,
           city: selectedCity,
         }),
       });
@@ -2043,6 +2055,9 @@ export default function App() {
         body: JSON.stringify({
           url: scannedUrl,
           telegram_id: window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || 'anonymous',
+          telegram_username: telegramUser?.username || null,
+          telegram_first_name: telegramUser?.first_name || null,
+          telegram_language_code: telegramUser?.language_code || lang,
           city: selectedCity,
         }),
       });
@@ -3327,6 +3342,8 @@ declare global {
           user?: {
             id: number;
             first_name: string;
+            username?: string;
+            language_code?: string;
           };
         };
       };

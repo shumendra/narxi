@@ -282,8 +282,70 @@ def parse_receipt_html(html_content: str) -> dict:
 
 
 def get_all_products() -> list[dict]:
-    result = supabase.table('products').select('id, name_uz, name_ru, name_en').execute()
+    result = supabase.table('products').select('id, name_uz, name_ru, name_en, search_text').execute()
     return result.data or []
+
+
+def get_all_aliases() -> list[dict]:
+    result = supabase.table('product_aliases').select('product_id, alias_text, store_name').execute()
+    return result.data or []
+
+
+def alias_exact_match(raw_name: str, store_name: str | None, aliases: list[dict]) -> str | None:
+    normalized_raw = (raw_name or '').strip().lower()
+    normalized_store = (store_name or '').strip().lower()
+    if not normalized_raw:
+        return None
+
+    # Prefer store-specific aliases first.
+    for alias in aliases:
+        if (alias.get('store_name') or '').strip().lower() != normalized_store:
+            continue
+        if (alias.get('alias_text') or '').strip().lower() == normalized_raw:
+            return alias.get('product_id')
+
+    # Fall back to global aliases.
+    for alias in aliases:
+        if alias.get('store_name'):
+            continue
+        if (alias.get('alias_text') or '').strip().lower() == normalized_raw:
+            return alias.get('product_id')
+
+    return None
+
+
+def upsert_product_alias(product_id: str | None, alias_text: str, store_name: str | None = None):
+    if not product_id or not alias_text.strip():
+        return
+
+    normalized_alias = alias_text.strip()
+    normalized_store = (store_name or '').strip() or None
+
+    existing = (
+        supabase.table('product_aliases')
+        .select('id,times_seen')
+        .eq('product_id', product_id)
+        .ilike('alias_text', normalized_alias)
+        .is_('store_name', normalized_store)
+        .limit(1)
+        .execute()
+    )
+
+    rows = existing.data or []
+    if rows:
+        alias_id = rows[0].get('id')
+        times_seen = int(rows[0].get('times_seen') or 1)
+        supabase.table('product_aliases').update({'times_seen': times_seen + 1}).eq('id', alias_id).execute()
+        return
+
+    language = 'ru' if re.search(r'[\u0400-\u04FF]', normalized_alias) else 'uz'
+    supabase.table('product_aliases').insert({
+        'product_id': product_id,
+        'alias_text': normalized_alias,
+        'language': language,
+        'store_name': normalized_store,
+        'times_seen': 1,
+    }).execute()
 
 
 def fuzzy_match(raw_name: str, products: list[dict]) -> tuple[dict | None, int]:
@@ -355,7 +417,7 @@ def item_exists_already(payload: dict) -> bool:
     return bool(approved_query.data)
 
 
-async def process_single_receipt(context, queue_item: dict, products: list[dict]) -> bool:
+async def process_single_receipt(context, queue_item: dict, products: list[dict], aliases: list[dict]) -> bool:
     url = queue_item.get('receipt_url')
     queue_id = queue_item.get('id')
     telegram_id = queue_item.get('telegram_id') or 'anonymous'
@@ -385,8 +447,18 @@ async def process_single_receipt(context, queue_item: dict, products: list[dict]
             latitude, longitude = geocode_address(receipt.get('store_address'), city)
         inserted = 0
 
+        product_by_id = {p.get('id'): p for p in products}
+
         for item in items:
-            matched_product, confidence = fuzzy_match(item['name'], products)
+            matched_product = None
+            confidence = 0
+
+            alias_product_id = alias_exact_match(item['name'], receipt.get('store_name'), aliases)
+            if alias_product_id and alias_product_id in product_by_id:
+                matched_product = product_by_id[alias_product_id]
+                confidence = 100
+            else:
+                matched_product, confidence = fuzzy_match(item['name'], products)
 
             payload = {
                 'product_name_raw': item['name'],
@@ -413,6 +485,8 @@ async def process_single_receipt(context, queue_item: dict, products: list[dict]
             result = supabase.table('pending_prices').insert(payload).execute()
             if result.data:
                 inserted += 1
+                if payload.get('product_id'):
+                    upsert_product_alias(payload.get('product_id'), item['name'], receipt.get('store_name'))
 
         supabase.table('receipt_queue').delete().eq('id', queue_id).execute()
         print(f"  ✓ Saved {inserted}/{len(items)} items")
@@ -448,7 +522,9 @@ async def main():
 
     print(f"→ Found {len(queue_items)} pending receipts")
     products = get_all_products()
+    aliases = get_all_aliases()
     print(f"→ Loaded {len(products)} products")
+    print(f"→ Loaded {len(aliases)} product aliases")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False)
@@ -464,7 +540,7 @@ async def main():
         for queue_item in queue_items:
             try:
                 is_ok = await asyncio.wait_for(
-                    process_single_receipt(context, queue_item, products),
+                    process_single_receipt(context, queue_item, products, aliases),
                     timeout=120,
                 )
             except asyncio.TimeoutError:

@@ -54,6 +54,69 @@ function isAdminUser(telegramId) {
   return Boolean(telegramId) && adminTelegramIds.includes(String(telegramId));
 }
 
+function detectAliasLanguage(text) {
+  const value = String(text || '');
+  if (/\p{Script=Cyrillic}/u.test(value)) return 'ru';
+  if (/[A-Za-zʻ’'`]/.test(value)) return 'uz';
+  return 'unknown';
+}
+
+function buildProductSearchText(productLike) {
+  return [productLike?.name_uz, productLike?.name_ru, productLike?.name_en]
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+}
+
+async function syncProductSearchText(productId) {
+  if (!productId) return;
+
+  const { data: product, error: productError } = await supabase
+    .from('products')
+    .select('name_uz,name_ru,name_en')
+    .eq('id', productId)
+    .maybeSingle();
+
+  if (productError || !product) return;
+
+  const searchText = buildProductSearchText(product);
+  await supabase.from('products').update({ search_text: searchText }).eq('id', productId);
+}
+
+async function upsertProductAlias(productId, aliasText, storeName = null) {
+  const normalizedAlias = String(aliasText || '').trim();
+  if (!productId || !normalizedAlias) return;
+
+  const language = detectAliasLanguage(normalizedAlias);
+  const normalizedStore = storeName ? String(storeName).trim() : null;
+
+  const { data: existing, error: existingError } = await supabase
+    .from('product_aliases')
+    .select('id,times_seen')
+    .eq('product_id', productId)
+    .ilike('alias_text', normalizedAlias)
+    .is('store_name', normalizedStore)
+    .maybeSingle();
+
+  if (existingError) return;
+
+  if (existing?.id) {
+    await supabase
+      .from('product_aliases')
+      .update({ times_seen: (Number(existing.times_seen) || 1) + 1, language })
+      .eq('id', existing.id);
+    return;
+  }
+
+  await supabase.from('product_aliases').insert({
+    product_id: productId,
+    alias_text: normalizedAlias,
+    language,
+    store_name: normalizedStore,
+    times_seen: 1,
+  });
+}
+
 async function syncProductAvailableCities(productId, city) {
   const normalizedCity = normalizeCityName(city || '');
   if (!productId || !normalizedCity) return;
@@ -101,6 +164,7 @@ async function ensureProductForName(rawName, city) {
       name_uz: normalizedName,
       name_ru: normalizedName,
       name_en: normalizedName,
+      search_text: normalizedName,
       category: 'Boshqa',
       unit: 'dona',
       available_cities: city ? [city] : [],
@@ -221,6 +285,7 @@ async function createApproved(payload) {
   const { data, error } = await supabase.from('prices').insert(insertPayload).select('*').single();
   if (error) throw error;
   await syncProductAvailableCities(productId, city);
+  await upsertProductAlias(productId, insertPayload.product_name_raw, insertPayload.place_name);
   return data;
 }
 
@@ -272,6 +337,7 @@ async function updateApproved(id, changes) {
   if (error) throw error;
   if (resolvedProductId) {
     await syncProductAvailableCities(resolvedProductId, nextCity);
+    await upsertProductAlias(resolvedProductId, data?.product_name_raw || nextProductName, data?.place_name || null);
   }
   return data;
 }
@@ -353,6 +419,7 @@ async function createProduct(payload) {
       name_uz: nameUz,
       name_ru: String(payload.name_ru || nameUz).trim(),
       name_en: String(payload.name_en || nameUz).trim(),
+      search_text: [nameUz, String(payload.name_ru || nameUz).trim(), String(payload.name_en || nameUz).trim()].join(' ').trim(),
       category: String(payload.category || 'Boshqa').trim(),
       unit: String(payload.unit || 'dona').trim(),
       available_cities: availableCities,
@@ -361,6 +428,7 @@ async function createProduct(payload) {
     .single();
 
   if (error) throw error;
+  await syncProductSearchText(id);
   return data;
 }
 
@@ -546,6 +614,7 @@ async function approvePending(id) {
   }
 
   await syncProductAvailableCities(productId, city);
+  await upsertProductAlias(productId, pending.product_name_raw, pending.place_name || null);
 
   const { error: updateError } = await supabase
     .from('pending_prices')

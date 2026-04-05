@@ -26,6 +26,36 @@ function ok(res, payload) {
   return res.status(200).json(payload);
 }
 
+async function upsertUserProfile(profile) {
+  const telegramId = String(profile.telegram_id || '').trim();
+  if (!telegramId || telegramId === 'anonymous') return;
+
+  const nowIso = new Date().toISOString();
+  const payload = {
+    telegram_id: telegramId,
+    username: profile.username || null,
+    first_name: profile.first_name || null,
+    language_code: profile.language_code || null,
+    preferred_city: profile.city || 'Tashkent',
+    preferred_language: profile.language_code || 'uz',
+    last_seen: nowIso,
+  };
+
+  await supabase.from('user_profiles').upsert(payload, { onConflict: 'telegram_id' });
+
+  const { data: current } = await supabase
+    .from('user_profiles')
+    .select('receipts_scanned')
+    .eq('telegram_id', telegramId)
+    .maybeSingle();
+
+  const nextCount = (Number(current?.receipts_scanned) || 0) + 1;
+  await supabase
+    .from('user_profiles')
+    .update({ receipts_scanned: nextCount, last_seen: nowIso })
+    .eq('telegram_id', telegramId);
+}
+
 export default async function handler(req, res) {
   withCors(res);
 
@@ -39,7 +69,18 @@ export default async function handler(req, res) {
     const rawUrl = String(body.url || '').trim();
     const url = normalizeSoliqUrl(rawUrl) || rawUrl;
     const telegramId = String(body.telegram_id || 'anonymous');
+    const telegramUsername = body.telegram_username ? String(body.telegram_username) : null;
+    const telegramFirstName = body.telegram_first_name ? String(body.telegram_first_name) : null;
+    const telegramLanguageCode = body.telegram_language_code ? String(body.telegram_language_code) : null;
     const city = normalizeCityName(body.city || '') || 'Tashkent';
+
+    await upsertUserProfile({
+      telegram_id: telegramId,
+      username: telegramUsername,
+      first_name: telegramFirstName,
+      language_code: telegramLanguageCode,
+      city,
+    });
 
     if (!isSoliqUrl(url)) {
       return ok(res, { ok: false, error: 'not_soliq_url' });

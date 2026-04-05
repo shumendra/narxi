@@ -21,9 +21,9 @@ npm install react-native-webview
 ## 2) Minimal working component
 
 ```tsx
-import React, { useMemo } from 'react';
-import { Alert, View } from 'react-native';
-import { WebView, WebViewMessageEvent } from 'react-native-webview';
+import React, { useMemo } from "react";
+import { Alert, View } from "react-native";
+import { WebView, WebViewMessageEvent } from "react-native-webview";
 
 type ScrapedProduct = {
   name: string;
@@ -39,11 +39,12 @@ type Props = {
 };
 
 const normalizeNumber = (raw: string): number => {
-  const cleaned = String(raw || '').replace(/[^\d.,-]/g, '');
+  const cleaned = String(raw || "").replace(/[^\d.,-]/g, "");
   if (!cleaned) return 0;
-  const normalized = cleaned.includes(',') && cleaned.includes('.')
-    ? cleaned.replace(/,/g, '')
-    : cleaned.replace(/,/g, '.');
+  const normalized =
+    cleaned.includes(",") && cleaned.includes(".")
+      ? cleaned.replace(/,/g, "")
+      : cleaned.replace(/,/g, ".");
   const value = Number.parseFloat(normalized);
   return Number.isFinite(value) ? value : 0;
 };
@@ -100,7 +101,7 @@ export default function ReceiptWebViewExtractor({
       })();
       true;
     `,
-    []
+    [],
   );
 
   const submitToApi = async (items: ScrapedProduct[]) => {
@@ -120,53 +121,59 @@ export default function ReceiptWebViewExtractor({
       .filter((item) => item.name && item.total_price > 0);
 
     if (extractedItems.length === 0) {
-      Alert.alert('No products', 'Could not parse product rows from receipt table.');
+      Alert.alert(
+        "No products",
+        "Could not parse product rows from receipt table.",
+      );
       return;
     }
 
     const response = await fetch(`${apiBaseUrl}/api/scan`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         url: receiptUrl,
         telegram_id: telegramId,
         city,
-        store_name: 'Soliq receipt (react-native-webview)',
-        store_address: '-',
+        store_name: "Soliq receipt (react-native-webview)",
+        store_address: "-",
         extracted_items: extractedItems,
       }),
     });
 
     const json = await response.json();
     if (!response.ok || !json?.ok) {
-      throw new Error(json?.error || 'scan_submit_failed');
+      throw new Error(json?.error || "scan_submit_failed");
     }
 
-    Alert.alert('Success', `Submitted ${json.item_count || extractedItems.length} products.`);
+    Alert.alert(
+      "Success",
+      `Submitted ${json.item_count || extractedItems.length} products.`,
+    );
   };
 
   const onMessage = async (event: WebViewMessageEvent) => {
     try {
-      const payload = JSON.parse(event.nativeEvent.data || '{}') as {
+      const payload = JSON.parse(event.nativeEvent.data || "{}") as {
         type?: string;
         products?: ScrapedProduct[];
       };
 
-      if (payload.type !== 'products' || !Array.isArray(payload.products)) {
+      if (payload.type !== "products" || !Array.isArray(payload.products)) {
         return;
       }
 
       await submitToApi(payload.products);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'unknown_error';
-      Alert.alert('Extraction error', message);
+      const message = error instanceof Error ? error.message : "unknown_error";
+      Alert.alert("Extraction error", message);
     }
   };
 
   return (
     <View style={{ flex: 1 }}>
       <WebView
-        originWhitelist={['*']}
+        originWhitelist={["*"]}
         source={{ uri: receiptUrl }}
         javaScriptEnabled
         domStorageEnabled
