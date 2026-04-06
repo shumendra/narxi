@@ -1584,24 +1584,21 @@ export default function App() {
       onSuccess?.(coords);
     };
 
-    const onGeoError = (error?: GeolocationPositionError) => {
-      if (error?.code === 3) {
-        navigator.geolocation.getCurrentPosition(
-          onGeoSuccess,
-          () => setGeoError(t.nearbyError),
-          { enableHighAccuracy: false, timeout: 20000, maximumAge: 0 }
-        );
-        return;
-      }
-
-      setGeoError(t.nearbyError);
+    const requestWithFallback = () => {
+      navigator.geolocation.getCurrentPosition(
+        onGeoSuccess,
+        () => {
+          navigator.geolocation.getCurrentPosition(
+            onGeoSuccess,
+            () => setGeoError(t.nearbyError),
+            { enableHighAccuracy: false, timeout: 20000, maximumAge: 0 }
+          );
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      );
     };
 
-    navigator.geolocation.getCurrentPosition(onGeoSuccess, onGeoError, {
-      enableHighAccuracy: true,
-      timeout: 12000,
-      maximumAge: 300000,
-    });
+    requestWithFallback();
   };
 
   const toggleNearby = () => {
@@ -2454,17 +2451,7 @@ export default function App() {
                 </button>
               </div>
               <div className="mt-2 text-xs text-stone-500">{t.nearbyHint}</div>
-              {geoError && (
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <div className="text-xs font-medium text-rose-600">{geoError}</div>
-                  <button
-                    onClick={() => requestUserLocation(() => setNearbyEnabled(true))}
-                    className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700"
-                  >
-                    {t.nearbyRetry}
-                  </button>
-                </div>
-              )}
+              {geoError && <div className="mt-2 text-xs font-medium text-rose-600">{geoError}</div>}
             </section>
 
             {!selectedProduct ? (
