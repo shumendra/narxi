@@ -67,6 +67,22 @@ create table if not exists receipts (
   created_at timestamptz default now()
 );
 
+-- 4b) Contact form submissions for moderator inbox.
+create table if not exists contact_messages (
+  id uuid primary key default gen_random_uuid(),
+  name text,
+  contact text not null,
+  message text not null,
+  city text,
+  language text,
+  telegram_id text,
+  telegram_username text,
+  created_at timestamptz default now()
+);
+
+create index if not exists contact_messages_created_at_idx
+  on contact_messages (created_at desc);
+
 -- 5) Enrich prices table for analytics.
 alter table if exists prices add column if not exists quantity numeric default 1;
 alter table if exists prices add column if not exists unit_price integer;

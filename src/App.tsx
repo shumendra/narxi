@@ -116,6 +116,18 @@ interface ProductAdminItem {
   }>;
 }
 
+interface ContactMessageItem {
+  id: string;
+  name?: string | null;
+  contact: string;
+  message: string;
+  city?: string | null;
+  language?: string | null;
+  telegram_id?: string | null;
+  telegram_username?: string | null;
+  created_at: string;
+}
+
 // Map Updater Component
 function ChangeView({ center, zoom }: { center: [number, number]; zoom: number }) {
   const map = useMap();
@@ -150,7 +162,7 @@ export default function App() {
   const [moderationItems, setModerationItems] = useState<PendingModerationItem[]>([]);
   const [approvedItems, setApprovedItems] = useState<ApprovedModerationItem[]>([]);
   const [productAdminItems, setProductAdminItems] = useState<ProductAdminItem[]>([]);
-  const [moderationSection, setModerationSection] = useState<'prices' | 'products'>('prices');
+  const [moderationSection, setModerationSection] = useState<'prices' | 'products' | 'messages'>('prices');
   const [activeProductId, setActiveProductId] = useState<string | null>(null);
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
   const [productFilterQuery, setProductFilterQuery] = useState('');
@@ -163,6 +175,8 @@ export default function App() {
   const [moderationLoading, setModerationLoading] = useState(false);
   const [moderationSavingId, setModerationSavingId] = useState<string | null>(null);
   const [productAdminLoading, setProductAdminLoading] = useState(false);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [contactMessages, setContactMessages] = useState<ContactMessageItem[]>([]);
   const [selectedModerationIds, setSelectedModerationIds] = useState<string[]>([]);
   const [selectedApprovedIds, setSelectedApprovedIds] = useState<string[]>([]);
   const [newApprovedItem, setNewApprovedItem] = useState({
@@ -207,10 +221,11 @@ export default function App() {
         nearbyHint: 'Avval yaqin do‘konlar ko‘rsatiladi',
         nearbyDistance: 'masofa',
         nearbyError: 'Joylashuvni olishga ruxsat berilmadi',
+        nearbyRetry: 'Joylashuvni qayta so‘rash',
         searchPlaceholder: 'Mahsulot nomi (masalan: Shakar)',
         emptyTitle: 'Narxlarni qidirish',
-        emptyHint: 'Tanlangan shaharda eng arzon narxlarni topish uchun mahsulot nomini kiriting',
-        cheapestTitle: 'Eng arzon 5 ta joy',
+        emptyHint: 'Tanlangan shaharda eng yaxshi narxlarni topish uchun mahsulot nomini kiriting',
+        cheapestTitle: 'Eng yaxshi 5 ta narx',
         mapTitle: 'Xarita',
         noData: "Hali narx kiritilmagan",
         noMapData: "Xaritada joylashuvlar yo'q",
@@ -322,6 +337,16 @@ export default function App() {
         moderationClearSelection: 'Tanlovni tozalash',
         productsTab: 'Mahsulotlar',
         pricesTab: 'Narxlar',
+        messagesTab: 'Xabarlar',
+        messagesTitle: 'Foydalanuvchi xabarlari',
+        messagesEmpty: 'Xabarlar yo‘q',
+        contactReceivedAt: 'Qabul qilingan',
+        contactNameLabel: 'Ism',
+        contactChannelLabel: 'Aloqa',
+        contactMessageLabel: 'Xabar',
+        contactUserLabel: 'Foydalanuvchi',
+        contactLanguageLabel: 'Til',
+        contactCityLabel: 'Shahar',
         productsTitle: 'Mahsulotlar va bog\'liq ma\'lumotlar',
         productsEmpty: 'Mahsulotlar topilmadi',
         productCreate: 'Yangi mahsulot qo\'shish',
@@ -364,6 +389,15 @@ export default function App() {
         sortPriceCount: 'Narxlar soni',
         sortPendingCount: 'Kutilayotganlar soni',
         sortLatestReceipt: 'Oxirgi sana',
+        contactFormTitle: 'Biz bilan bog‘lanish',
+        contactFormHint: 'Qisqa xabar qoldiring, biz siz bilan qayta bog‘lanamiz.',
+        contactNamePlaceholder: 'Ismingiz (ixtiyoriy)',
+        contactValuePlaceholder: 'Aloqa: Telegram @username yoki telefon',
+        contactMessagePlaceholder: 'Xabaringiz',
+        contactSend: 'Yuborish',
+        contactSending: 'Yuborilmoqda...',
+        contactSuccess: 'Xabaringiz yuborildi ✅',
+        contactError: 'Xabar yuborilmadi. Qayta urinib ko‘ring.',
       },
       ru: {
         appName: 'Narxi',
@@ -375,10 +409,11 @@ export default function App() {
         nearbyHint: 'Сначала показывать ближайшие магазины',
         nearbyDistance: 'расстояние',
         nearbyError: 'Не удалось получить геолокацию',
+        nearbyRetry: 'Запросить геолокацию снова',
         searchPlaceholder: 'Название товара (например: Сахар)',
         emptyTitle: 'Поиск цен',
-        emptyHint: 'Введите название товара, чтобы найти самые дешевые цены в выбранном городе',
-        cheapestTitle: 'Топ 5 самых дешевых мест',
+        emptyHint: 'Введите название товара, чтобы найти лучшие цены в выбранном городе',
+        cheapestTitle: 'Топ 5 лучших цен',
         mapTitle: 'Карта',
         noData: 'Цен пока нет',
         noMapData: 'На карте нет локаций',
@@ -490,6 +525,16 @@ export default function App() {
         moderationClearSelection: 'Очистить выбор',
         productsTab: 'Товары',
         pricesTab: 'Цены',
+        messagesTab: 'Сообщения',
+        messagesTitle: 'Сообщения от пользователей',
+        messagesEmpty: 'Сообщений пока нет',
+        contactReceivedAt: 'Получено',
+        contactNameLabel: 'Имя',
+        contactChannelLabel: 'Контакт',
+        contactMessageLabel: 'Сообщение',
+        contactUserLabel: 'Пользователь',
+        contactLanguageLabel: 'Язык',
+        contactCityLabel: 'Город',
         productsTitle: 'Товары и связанные данные',
         productsEmpty: 'Товары не найдены',
         productCreate: 'Добавить товар',
@@ -532,6 +577,15 @@ export default function App() {
         sortPriceCount: 'Кол-во цен',
         sortPendingCount: 'Кол-во ожиданий',
         sortLatestReceipt: 'Последняя дата',
+        contactFormTitle: 'Связаться с нами',
+        contactFormHint: 'Оставьте короткое сообщение, и мы свяжемся с вами.',
+        contactNamePlaceholder: 'Ваше имя (необязательно)',
+        contactValuePlaceholder: 'Контакт: Telegram @username или телефон',
+        contactMessagePlaceholder: 'Ваше сообщение',
+        contactSend: 'Отправить',
+        contactSending: 'Отправка...',
+        contactSuccess: 'Сообщение отправлено ✅',
+        contactError: 'Не удалось отправить сообщение. Попробуйте снова.',
       },
       en: {
         appName: 'Narxi',
@@ -543,10 +597,11 @@ export default function App() {
         nearbyHint: 'Show the closest stores first',
         nearbyDistance: 'distance',
         nearbyError: 'Location access was not granted',
+        nearbyRetry: 'Request location again',
         searchPlaceholder: 'Product name (e.g., Sugar)',
         emptyTitle: 'Find prices',
-        emptyHint: 'Type a product name to find the cheapest prices in the selected city',
-        cheapestTitle: 'Top 5 cheapest places',
+        emptyHint: 'Type a product name to find the best prices in the selected city',
+        cheapestTitle: 'Top 5 best prices',
         mapTitle: 'Map',
         noData: 'No prices yet',
         noMapData: 'No locations on the map',
@@ -658,6 +713,16 @@ export default function App() {
         moderationClearSelection: 'Clear selection',
         productsTab: 'Products',
         pricesTab: 'Prices',
+        messagesTab: 'Messages',
+        messagesTitle: 'User messages',
+        messagesEmpty: 'No messages yet',
+        contactReceivedAt: 'Received',
+        contactNameLabel: 'Name',
+        contactChannelLabel: 'Contact',
+        contactMessageLabel: 'Message',
+        contactUserLabel: 'User',
+        contactLanguageLabel: 'Language',
+        contactCityLabel: 'City',
         productsTitle: 'Products and linked data',
         productsEmpty: 'No products found',
         productCreate: 'Create product',
@@ -700,6 +765,15 @@ export default function App() {
         sortPriceCount: 'Price count',
         sortPendingCount: 'Pending count',
         sortLatestReceipt: 'Latest receipt',
+        contactFormTitle: 'Contact us',
+        contactFormHint: 'Leave a short message and we will contact you back.',
+        contactNamePlaceholder: 'Your name (optional)',
+        contactValuePlaceholder: 'Contact: Telegram @username or phone',
+        contactMessagePlaceholder: 'Your message',
+        contactSend: 'Send',
+        contactSending: 'Sending...',
+        contactSuccess: 'Message sent ✅',
+        contactError: 'Failed to send message. Please try again.',
       },
     }),
     []
@@ -738,6 +812,10 @@ export default function App() {
   const [loadingMiniWindowSource, setLoadingMiniWindowSource] = useState(false);
   const [browserExtractedJson, setBrowserExtractedJson] = useState('');
   const [submittingExtractedJson, setSubmittingExtractedJson] = useState(false);
+  const [contactName, setContactName] = useState('');
+  const [contactValue, setContactValue] = useState('');
+  const [contactMessage, setContactMessage] = useState('');
+  const [sendingContact, setSendingContact] = useState(false);
   const miniWindowIframeRef = useRef<HTMLIFrameElement | null>(null);
 
 
@@ -854,6 +932,19 @@ export default function App() {
       window.Telegram?.WebApp?.showAlert(t.moderationError);
     } finally {
       setProductAdminLoading(false);
+    }
+  };
+
+  const fetchModerationMessages = async () => {
+    if (!isAdminUser || !telegramInitData) return;
+    setMessagesLoading(true);
+    try {
+      const result = await callModerationApi('listContactMessages');
+      setContactMessages((result.items || []) as ContactMessageItem[]);
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } finally {
+      setMessagesLoading(false);
     }
   };
 
@@ -1297,6 +1388,12 @@ export default function App() {
   }, [mode, isAdminUser, moderationSection]);
 
   useEffect(() => {
+    if (mode === 'moderate' && isAdminUser && moderationSection === 'messages') {
+      fetchModerationMessages();
+    }
+  }, [mode, isAdminUser, moderationSection]);
+
+  useEffect(() => {
     setNewApprovedItem(prev => ({ ...prev, city: selectedCity }));
   }, [selectedCity]);
 
@@ -1440,19 +1537,31 @@ export default function App() {
       return;
     }
 
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        setUserLocation(coords);
-        setGeoError('');
-        onSuccess?.(coords);
-      },
-      () => {
-        setGeoError(t.nearbyError);
-        setNearbyEnabled(false);
-      },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 300000 }
-    );
+    const onGeoSuccess = (pos: GeolocationPosition) => {
+      const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      setUserLocation(coords);
+      setGeoError('');
+      onSuccess?.(coords);
+    };
+
+    const onGeoError = (error?: GeolocationPositionError) => {
+      if (error?.code === 3) {
+        navigator.geolocation.getCurrentPosition(
+          onGeoSuccess,
+          () => setGeoError(t.nearbyError),
+          { enableHighAccuracy: false, timeout: 20000, maximumAge: 0 }
+        );
+        return;
+      }
+
+      setGeoError(t.nearbyError);
+    };
+
+    navigator.geolocation.getCurrentPosition(onGeoSuccess, onGeoError, {
+      enableHighAccuracy: true,
+      timeout: 12000,
+      maximumAge: 300000,
+    });
   };
 
   const toggleNearby = () => {
@@ -1515,6 +1624,44 @@ export default function App() {
     requestUserLocation((coords) => {
       setReportLocation(coords);
     });
+  };
+
+  const submitContactForm = async () => {
+    if (!contactValue.trim() || !contactMessage.trim()) {
+      window.Telegram?.WebApp?.showAlert(t.alertFill);
+      return;
+    }
+
+    setSendingContact(true);
+    try {
+      const response = await fetch('/api/contact', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: contactName.trim() || null,
+          contact: contactValue.trim(),
+          message: contactMessage.trim(),
+          city: selectedCity,
+          language: lang,
+          telegram_id: telegramUserId || null,
+          telegram_username: telegramUser?.username || null,
+        }),
+      });
+
+      const result = await response.json();
+      if (!response.ok || !result.ok) {
+        throw new Error(result.error || 'CONTACT_SUBMIT_FAILED');
+      }
+
+      setContactName('');
+      setContactValue('');
+      setContactMessage('');
+      window.Telegram?.WebApp?.showAlert(t.contactSuccess);
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.contactError);
+    } finally {
+      setSendingContact(false);
+    }
   };
 
   const goToManualEntry = () => {
@@ -2267,7 +2414,17 @@ export default function App() {
                 </button>
               </div>
               <div className="mt-2 text-xs text-stone-500">{t.nearbyHint}</div>
-              {geoError && <div className="mt-2 text-xs font-medium text-rose-600">{geoError}</div>}
+              {geoError && (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <div className="text-xs font-medium text-rose-600">{geoError}</div>
+                  <button
+                    onClick={() => requestUserLocation(() => setNearbyEnabled(true))}
+                    className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700"
+                  >
+                    {t.nearbyRetry}
+                  </button>
+                </div>
+              )}
             </section>
 
             {!selectedProduct ? (
@@ -2387,8 +2544,40 @@ export default function App() {
                     )}
                   </div>
                 </section>
+
               </>
             )}
+
+            <section className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm space-y-3">
+              <h3 className="text-sm font-semibold uppercase tracking-wider text-stone-500">{t.contactFormTitle}</h3>
+              <p className="text-xs text-stone-500">{t.contactFormHint}</p>
+              <input
+                value={contactName}
+                onChange={(e) => setContactName(e.target.value)}
+                placeholder={t.contactNamePlaceholder}
+                className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+              />
+              <input
+                value={contactValue}
+                onChange={(e) => setContactValue(e.target.value)}
+                placeholder={t.contactValuePlaceholder}
+                className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+              />
+              <textarea
+                value={contactMessage}
+                onChange={(e) => setContactMessage(e.target.value)}
+                placeholder={t.contactMessagePlaceholder}
+                rows={3}
+                className="w-full resize-none rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+              />
+              <button
+                onClick={submitContactForm}
+                disabled={sendingContact || !contactValue.trim() || !contactMessage.trim()}
+                className="w-full rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {sendingContact ? t.contactSending : t.contactSend}
+              </button>
+            </section>
           </div>
         ) : mode === 'report' ? (
           <div className="space-y-6">
@@ -2454,18 +2643,6 @@ export default function App() {
                     <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
                   </div>
                   <div className="mt-4 text-sm text-stone-600">{t.scanLoadingHint}</div>
-                </div>
-                <div className="rounded-2xl border border-stone-200 bg-white p-4">
-                  <div className="text-sm font-semibold text-stone-800">{t.scanLogTitle}</div>
-                  <div className="mt-3 max-h-64 overflow-auto rounded-xl bg-stone-50 p-3 text-xs font-mono text-stone-700 space-y-1">
-                    {scanLogs.length === 0 ? (
-                      <div className="text-stone-500">{t.scanLogEmpty}</div>
-                    ) : scanLogs.map((entry, index) => (
-                      <div key={`${entry.ts}-${index}`}>
-                        [{new Date(entry.ts).toLocaleTimeString()}] {entry.source === 'client' ? t.scanLogClient : t.scanLogServer}: {entry.message}
-                      </div>
-                    ))}
-                  </div>
                 </div>
               </section>
             )}
@@ -2554,29 +2731,6 @@ export default function App() {
                 </div>
               </section>
             )}
-
-            {reportEntryStep === 'result' && scanResult?.status !== 'manual' && (
-              <section className="rounded-2xl border border-stone-200 bg-white p-4 space-y-3">
-                <div className="text-sm font-semibold text-stone-800">{t.scanLogTitle}</div>
-                <div className="max-h-72 overflow-auto rounded-xl bg-stone-50 p-3 text-xs font-mono text-stone-700 space-y-1">
-                  {scanLogs.length === 0 ? (
-                    <div className="text-stone-500">{t.scanLogEmpty}</div>
-                  ) : scanLogs.map((entry, index) => (
-                    <div key={`${entry.ts}-${index}`}>
-                      [{new Date(entry.ts).toLocaleTimeString()}] {entry.source === 'client' ? t.scanLogClient : t.scanLogServer}: {entry.message}
-                    </div>
-                  ))}
-                </div>
-                {scanApiResponse && (
-                  <div>
-                    <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-stone-500">API Response</div>
-                    <pre className="max-h-72 overflow-auto rounded-xl bg-stone-900 p-3 text-xs text-stone-100 whitespace-pre-wrap break-all">{JSON.stringify(scanApiResponse, null, 2)}</pre>
-                  </div>
-                )}
-              </section>
-            )}
-
-
 
             {reportEntryStep === 'manual' && (
               <>
@@ -2699,7 +2853,7 @@ export default function App() {
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold">
-                {moderationSection === 'prices' ? t.moderationTitle : t.productsTitle}
+                {moderationSection === 'prices' ? t.moderationTitle : moderationSection === 'products' ? t.productsTitle : t.messagesTitle}
               </h2>
               <div className="flex items-center gap-2">
                 <button
@@ -2721,7 +2875,22 @@ export default function App() {
                   {t.productsTab}
                 </button>
                 <button
-                  onClick={moderationSection === 'prices' ? fetchModerationItems : fetchModerationProducts}
+                  onClick={() => setModerationSection('messages')}
+                  className={cn(
+                    'rounded-xl px-3 py-2 text-sm font-semibold',
+                    moderationSection === 'messages' ? 'bg-emerald-600 text-white' : 'border border-stone-200 bg-white text-stone-700'
+                  )}
+                >
+                  {t.messagesTab}
+                </button>
+                <button
+                  onClick={
+                    moderationSection === 'prices'
+                      ? fetchModerationItems
+                      : moderationSection === 'products'
+                        ? fetchModerationProducts
+                        : fetchModerationMessages
+                  }
                   className="rounded-xl border border-stone-200 bg-white px-4 py-2 text-sm font-medium text-stone-700"
                 >
                   {t.moderationRefresh}
@@ -3007,7 +3176,7 @@ export default function App() {
                   </div>
                 )}
               </>
-            ) : (
+            ) : moderationSection === 'products' ? (
               <div className="space-y-4">
                 <section className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm space-y-3">
                   <div className="grid gap-3 md:grid-cols-2">
@@ -3289,6 +3458,32 @@ export default function App() {
                       </div>
                     </div>
                   </section>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {messagesLoading ? (
+                  <div className="animate-pulse space-y-3">
+                    {[1, 2, 3].map(i => <div key={i} className="h-24 bg-stone-200 rounded-xl" />)}
+                  </div>
+                ) : contactMessages.length === 0 ? (
+                  <div className="rounded-2xl border border-stone-200 bg-white p-8 text-center text-stone-500">
+                    {t.messagesEmpty}
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {contactMessages.map((item) => (
+                      <div key={item.id} className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm space-y-2">
+                        <div className="text-xs text-stone-500">{t.contactReceivedAt}: {formatDistanceToNow(new Date(item.created_at), { addSuffix: true, locale: reportLocale })}</div>
+                        <div className="text-sm"><span className="font-semibold">{t.contactNameLabel}:</span> {item.name || '-'}</div>
+                        <div className="text-sm"><span className="font-semibold">{t.contactChannelLabel}:</span> {item.contact || '-'}</div>
+                        <div className="text-sm"><span className="font-semibold">{t.contactMessageLabel}:</span> {item.message || '-'}</div>
+                        <div className="text-xs text-stone-500">{t.contactUserLabel}: {item.telegram_username ? `@${item.telegram_username}` : (item.telegram_id || '-')}</div>
+                        <div className="text-xs text-stone-500">{t.contactLanguageLabel}: {item.language || '-'}</div>
+                        <div className="text-xs text-stone-500">{t.contactCityLabel}: {item.city || '-'}</div>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
             )}

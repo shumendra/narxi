@@ -428,8 +428,27 @@ async function createProduct(payload) {
     .single();
 
   if (error) throw error;
-  await syncProductSearchText(id);
+  await syncProductSearchText(data?.id);
   return data;
+}
+
+async function listContactMessages() {
+  try {
+    const { data, error } = await supabase
+      .from('contact_messages')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(500);
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    // Backward compatibility if migration has not been applied yet.
+    if (String(error?.message || '').toLowerCase().includes('contact_messages')) {
+      return [];
+    }
+    throw error;
+  }
 }
 
 async function updateProduct(id, changes) {
@@ -743,6 +762,10 @@ export default async function moderation(req, res) {
       case 'purgeAllProductsData': {
         const result = await purgeAllProductsData();
         return send(res, 200, { ok: true, ...result });
+      }
+      case 'listContactMessages': {
+        const items = await listContactMessages();
+        return send(res, 200, { ok: true, items });
       }
       default:
         return send(res, 400, { ok: false, error: 'UNKNOWN_ACTION' });
