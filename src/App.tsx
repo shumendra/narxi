@@ -390,7 +390,10 @@ export default function App() {
         sortPendingCount: 'Kutilayotganlar soni',
         sortLatestReceipt: 'Oxirgi sana',
         contactFormTitle: 'Biz bilan bog‘lanish',
+        contactJump: 'Biz bilan bog‘lanish',
         contactFormHint: 'Qisqa xabar qoldiring, biz siz bilan qayta bog‘lanamiz.',
+        reportProductNameLabel: 'Mahsulot nomi',
+        reportProductNamePlaceholder: 'Masalan: Shakar',
         contactNamePlaceholder: 'Ismingiz (ixtiyoriy)',
         contactValuePlaceholder: 'Aloqa: Telegram @username yoki telefon',
         contactMessagePlaceholder: 'Xabaringiz',
@@ -578,7 +581,10 @@ export default function App() {
         sortPendingCount: 'Кол-во ожиданий',
         sortLatestReceipt: 'Последняя дата',
         contactFormTitle: 'Связаться с нами',
+        contactJump: 'Связаться с нами',
         contactFormHint: 'Оставьте короткое сообщение, и мы свяжемся с вами.',
+        reportProductNameLabel: 'Название товара',
+        reportProductNamePlaceholder: 'Например: Сахар',
         contactNamePlaceholder: 'Ваше имя (необязательно)',
         contactValuePlaceholder: 'Контакт: Telegram @username или телефон',
         contactMessagePlaceholder: 'Ваше сообщение',
@@ -766,7 +772,10 @@ export default function App() {
         sortPendingCount: 'Pending count',
         sortLatestReceipt: 'Latest receipt',
         contactFormTitle: 'Contact us',
+        contactJump: 'Contact us',
         contactFormHint: 'Leave a short message and we will contact you back.',
+        reportProductNameLabel: 'Product name',
+        reportProductNamePlaceholder: 'Example: Sugar',
         contactNamePlaceholder: 'Your name (optional)',
         contactValuePlaceholder: 'Contact: Telegram @username or phone',
         contactMessagePlaceholder: 'Your message',
@@ -817,6 +826,7 @@ export default function App() {
   const [contactMessage, setContactMessage] = useState('');
   const [sendingContact, setSendingContact] = useState(false);
   const miniWindowIframeRef = useRef<HTMLIFrameElement | null>(null);
+  const contactFormRef = useRef<HTMLElement | null>(null);
 
 
   useEffect(() => {
@@ -1701,6 +1711,10 @@ export default function App() {
     }
   };
 
+  const scrollToContactForm = () => {
+    contactFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
   const goToManualEntry = () => {
     setReportEntryStep('manual');
     setShowUrlInput(false);
@@ -2391,7 +2405,7 @@ export default function App() {
         </div>
 
         {/* Search Bar */}
-        {(mode === 'find' || (mode === 'report' && reportEntryStep === 'manual')) && <div className="relative">
+        {mode === 'find' && <div className="relative">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 w-4 h-4" />
             <input 
@@ -2450,7 +2464,16 @@ export default function App() {
                   {t.nearbyToggle}
                 </button>
               </div>
-              <div className="mt-2 text-xs text-stone-500">{t.nearbyHint}</div>
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                <div className="text-xs text-stone-500">{t.nearbyHint}</div>
+                <button
+                  onClick={scrollToContactForm}
+                  className="inline-flex items-center gap-1 rounded-full border border-stone-200 bg-stone-50 px-3 py-1.5 text-xs font-semibold text-stone-700"
+                >
+                  {t.contactJump}
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
               {geoError && <div className="mt-2 text-xs font-medium text-rose-600">{geoError}</div>}
             </section>
 
@@ -2575,7 +2598,7 @@ export default function App() {
               </>
             )}
 
-            <section className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm space-y-3">
+            <section ref={contactFormRef} className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm space-y-3">
               <h3 className="text-sm font-semibold uppercase tracking-wider text-stone-500">{t.contactFormTitle}</h3>
               <p className="text-xs text-stone-500">{t.contactFormHint}</p>
               <input
@@ -2766,6 +2789,37 @@ export default function App() {
                     <div className="text-xs font-semibold uppercase tracking-wider text-emerald-700">{t.cityLabel}</div>
                     <div className="mt-1 text-lg font-bold text-emerald-900">{selectedCityLabel}</div>
                     <div className="mt-1 text-xs text-emerald-700">{t.reportCityConfirm}</div>
+
+                    <div className="mt-4 relative">
+                      <label className="block text-xs font-semibold text-emerald-700 uppercase tracking-wider mb-2">{t.reportProductNameLabel}</label>
+                      <input
+                        type="text"
+                        placeholder={t.reportProductNamePlaceholder}
+                        className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-3 text-sm text-stone-900 outline-none focus:ring-2 focus:ring-emerald-500"
+                        value={searchQuery}
+                        onChange={(e) => {
+                          setSearchQuery(e.target.value);
+                          setSelectedProduct(null);
+                          setShowDropdown(true);
+                        }}
+                        onFocus={() => setShowDropdown(true)}
+                      />
+
+                      {showDropdown && filteredProducts.length > 0 && (
+                        <div className="absolute top-full left-0 right-0 mt-2 max-h-56 overflow-y-auto rounded-xl border border-stone-200 bg-white shadow-xl z-50">
+                          {filteredProducts.map((p) => (
+                            <button
+                              key={p.id}
+                              onClick={() => handleProductSelect(p)}
+                              className="w-full border-b border-stone-100 px-4 py-3 text-left last:border-none hover:bg-stone-50"
+                            >
+                              <div className="text-sm font-medium text-stone-900">{getProductName(p, lang)}</div>
+                              <div className="text-xs text-stone-500">{getProductSecondary(p, lang)}</div>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   <div>
