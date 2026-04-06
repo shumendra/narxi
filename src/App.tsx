@@ -1416,6 +1416,33 @@ export default function App() {
     }
   }, [mode]);
 
+  useEffect(() => {
+    if (mode !== 'find') return;
+
+    const refreshFindData = () => {
+      fetchProducts();
+      if (selectedProduct?.id) {
+        loadPricesForProduct(selectedProduct.id);
+      }
+    };
+
+    const onVisibilityChange = () => {
+      if (!document.hidden) {
+        refreshFindData();
+      }
+    };
+
+    const intervalId = window.setInterval(refreshFindData, 10000);
+    window.addEventListener('focus', refreshFindData);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', refreshFindData);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [mode, selectedCity, selectedProduct?.id]);
+
   const cityProducts = useMemo(() => {
     return products.filter(product => {
       const availableCities = Array.isArray(product.available_cities)
@@ -1434,6 +1461,19 @@ export default function App() {
       (p.search_text || '').toLowerCase().includes(searchQuery.toLowerCase())
     );
   }, [searchQuery, cityProducts]);
+
+  useEffect(() => {
+    if (mode !== 'find') return;
+    const q = searchQuery.trim();
+    if (q.length < 2) return;
+    if (filteredProducts.length > 0) return;
+
+    const timeoutId = window.setTimeout(() => {
+      fetchProducts();
+    }, 500);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [mode, searchQuery, selectedCity, filteredProducts.length]);
 
   const getProductName = (product: Product, selectedLang: 'uz' | 'ru' | 'en') => {
     if (selectedLang === 'ru') return product.name_ru;
