@@ -394,6 +394,10 @@ export default function App() {
         contactFormHint: 'Qisqa xabar qoldiring, biz siz bilan qayta bog‘lanamiz.',
         reportProductNameLabel: 'Mahsulot nomi',
         reportProductNamePlaceholder: 'Masalan: Shakar',
+        proofLabel: 'Isbot (chek yoki foto havolasi)',
+        proofPlaceholder: 'Chek URL yoki foto URL kiriting',
+        proofRequired: 'Iltimos, isbot uchun chek yoki foto havolasini kiriting',
+        uploadedAt: 'Yuklangan sana',
         contactNamePlaceholder: 'Ismingiz (ixtiyoriy)',
         contactValuePlaceholder: 'Aloqa: Telegram @username yoki telefon',
         contactMessagePlaceholder: 'Xabaringiz',
@@ -585,6 +589,10 @@ export default function App() {
         contactFormHint: 'Оставьте короткое сообщение, и мы свяжемся с вами.',
         reportProductNameLabel: 'Название товара',
         reportProductNamePlaceholder: 'Например: Сахар',
+        proofLabel: 'Подтверждение (ссылка на чек или фото)',
+        proofPlaceholder: 'Введите URL чека или фото',
+        proofRequired: 'Пожалуйста, добавьте ссылку на чек или фото как подтверждение',
+        uploadedAt: 'Дата загрузки',
         contactNamePlaceholder: 'Ваше имя (необязательно)',
         contactValuePlaceholder: 'Контакт: Telegram @username или телефон',
         contactMessagePlaceholder: 'Ваше сообщение',
@@ -776,6 +784,10 @@ export default function App() {
         contactFormHint: 'Leave a short message and we will contact you back.',
         reportProductNameLabel: 'Product name',
         reportProductNamePlaceholder: 'Example: Sugar',
+        proofLabel: 'Proof (receipt or photo URL)',
+        proofPlaceholder: 'Enter receipt URL or photo URL',
+        proofRequired: 'Please add a receipt or photo URL as proof',
+        uploadedAt: 'Uploaded at',
         contactNamePlaceholder: 'Your name (optional)',
         contactValuePlaceholder: 'Contact: Telegram @username or phone',
         contactMessagePlaceholder: 'Your message',
@@ -795,7 +807,7 @@ export default function App() {
   const [reportPrice, setReportPrice] = useState('');
   const [reportLocation, setReportLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [reportPhoto, setReportPhoto] = useState<File | null>(null);
+  const [reportProofUrl, setReportProofUrl] = useState('');
   const [reportEntryStep, setReportEntryStep] = useState<'entry' | 'manual' | 'loading' | 'result'>('entry');
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [scanUrlInput, setScanUrlInput] = useState('');
@@ -1504,7 +1516,31 @@ export default function App() {
   };
 
   const sortedPrices = useMemo(() => {
-    const withDistance = prices.map(price => ({
+    const priceByStore = new Map<string, PriceRecord>();
+    for (const price of prices) {
+      const storeKey = [
+        (price.place_name || '').trim().toLowerCase(),
+        (price.place_address || '').trim().toLowerCase(),
+        (price.city || '').trim().toLowerCase(),
+        price.product_id,
+      ].join('|');
+
+      const existing = priceByStore.get(storeKey);
+      if (!existing) {
+        priceByStore.set(storeKey, price);
+        continue;
+      }
+
+      const existingTs = new Date(existing.receipt_date || 0).getTime();
+      const nextTs = new Date(price.receipt_date || 0).getTime();
+      if (nextTs >= existingTs) {
+        priceByStore.set(storeKey, price);
+      }
+    }
+
+    const dedupedByStore = Array.from(priceByStore.values());
+
+    const withDistance = dedupedByStore.map(price => ({
       ...price,
       distanceKm:
         nearbyEnabled && userLocation && price.latitude !== null && price.longitude !== null
@@ -1637,6 +1673,11 @@ export default function App() {
       return;
     }
 
+    if (!reportProofUrl.trim()) {
+      window.Telegram?.WebApp?.showAlert(t.proofRequired);
+      return;
+    }
+
     setSubmitting(true);
     const manualName = selectedProduct ? getProductName(selectedProduct, lang) : searchQuery.trim();
     const { error } = await supabase.from('pending_prices').insert({
@@ -1650,9 +1691,11 @@ export default function App() {
       latitude: reportLocation?.lat ?? null,
       longitude: reportLocation?.lng ?? null,
       city: selectedCity,
+      receipt_date: new Date().toISOString(),
+      receipt_url: reportProofUrl.trim(),
       source: 'manual',
       submitted_by: window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || 'unknown',
-      photo_url: null,
+      photo_url: reportProofUrl.trim(),
     });
 
     setSubmitting(false);
@@ -1660,6 +1703,7 @@ export default function App() {
       window.Telegram?.WebApp?.showAlert(t.alertSuccess);
       setMode('find');
       setReportPrice('');
+      setReportProofUrl('');
       setSelectedProduct(null);
       setSearchQuery('');
     } else {
@@ -2516,6 +2560,9 @@ export default function App() {
                             <p className="text-xs text-stone-400">
                               {formatDistanceToNow(new Date(p.receipt_date), { addSuffix: true, locale: reportLocale })}
                             </p>
+                            <p className="text-xs text-stone-400">
+                              {t.uploadedAt}: {new Date(p.receipt_date).toLocaleString()}
+                            </p>
                             {nearbyEnabled && userLocation && p.distanceKm !== null && p.distanceKm !== undefined && Number.isFinite(p.distanceKm) && (
                               <p className="text-xs font-medium text-emerald-700">
                                 {t.nearbyDistance}: {p.distanceKm.toFixed(1)} km
@@ -2893,17 +2940,14 @@ export default function App() {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-stone-500 uppercase tracking-wider mb-2">{t.photoLabel}</label>
+                    <label className="block text-xs font-semibold text-stone-500 uppercase tracking-wider mb-2">{t.proofLabel}</label>
                     <input
-                      type="file"
-                      accept="image/*"
-                      title={t.photoLabel}
-                      onChange={(e) => setReportPhoto(e.target.files?.[0] || null)}
-                      className="w-full text-sm text-stone-600 file:mr-3 file:rounded-lg file:border-0 file:bg-stone-100 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-stone-700 hover:file:bg-stone-200"
+                      type="url"
+                      placeholder={t.proofPlaceholder}
+                      value={reportProofUrl}
+                      onChange={(e) => setReportProofUrl(e.target.value)}
+                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
                     />
-                    {reportPhoto && (
-                      <div className="mt-2 text-xs text-stone-500">{reportPhoto.name}</div>
-                    )}
                   </div>
 
                   <button

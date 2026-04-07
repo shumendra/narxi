@@ -608,26 +608,21 @@ async function approvePending(id) {
     source: pending.source,
   };
 
-  const { data: existingPrice, error: findExistingError } = await supabase
+  const { data: existingExactPrice, error: findExistingError } = await supabase
     .from('prices')
-    .select('id, receipt_date')
+    .select('id')
     .eq('product_id', productId)
     .eq('city', city)
     .eq('place_name', pending.place_name || null)
     .eq('place_address', pending.place_address || null)
-    .order('receipt_date', { ascending: false })
+    .eq('price', unitPrice)
+    .eq('receipt_date', pending.receipt_date || null)
     .limit(1)
     .maybeSingle();
 
   if (findExistingError) throw findExistingError;
 
-  if (existingPrice?.id) {
-    const { error: updatePriceError } = await supabase
-      .from('prices')
-      .update(pricePayload)
-      .eq('id', existingPrice.id);
-    if (updatePriceError) throw updatePriceError;
-  } else {
+  if (!existingExactPrice?.id) {
     const { error: insertError } = await supabase.from('prices').insert(pricePayload);
     if (insertError) throw insertError;
   }
