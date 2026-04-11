@@ -2028,12 +2028,16 @@ export default function App() {
       const inv = storeInventory.get(storeKey)!;
       const existing = inv.get(row.product_id);
       if (!existing || row.price < existing.price) {
+        const rawName = (row.place_name || '').trim();
+        const looksLikeCode = rawName.length > 0 && !/\s/.test(rawName) && /^[A-Z0-9]+$/i.test(rawName);
+        const displayName = looksLikeCode ? (row.place_address || rawName) : (rawName || '?');
+        const displayAddress = looksLikeCode ? '' : (row.place_address || '');
         inv.set(row.product_id, {
           productId: row.product_id,
           productName: row.product_name_raw || '',
           price: Number(row.price) || 0,
-          storeName: row.place_name || '?',
-          storeAddress: row.place_address || '',
+          storeName: displayName,
+          storeAddress: displayAddress,
           lat: row.latitude,
           lng: row.longitude,
         });
@@ -3303,7 +3307,9 @@ export default function App() {
                 {(() => {
                   const storesWithCoords = planResult.stores.filter(g => g.lat && g.lng);
                   if (storesWithCoords.length === 0) return null;
-                  const waypoints = storesWithCoords.map(g => `${g.lat},${g.lng}`).join('~');
+                  const originPoint = userLocation ? `${userLocation.lat},${userLocation.lng}` : '';
+                  const storePoints = storesWithCoords.map(g => `${g.lat},${g.lng}`).join('~');
+                  const waypoints = originPoint ? `${originPoint}~${storePoints}` : storePoints;
                   const mapsUrl = `https://yandex.uz/maps/?rtext=${waypoints}&rtt=auto`;
                   return (
                     <a
