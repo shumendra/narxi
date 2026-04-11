@@ -28,6 +28,9 @@ create table if not exists product_aliases (
 create index if not exists product_aliases_alias_text_idx
   on product_aliases (lower(alias_text));
 
+create index if not exists product_aliases_alias_trgm_idx
+  on product_aliases using gin (alias_text gin_trgm_ops);
+
 create index if not exists product_aliases_product_id_idx
   on product_aliases (product_id);
 

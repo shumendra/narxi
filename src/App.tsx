@@ -5,7 +5,7 @@
 
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Search, MapPin, Plus, ChevronRight, Navigation, Camera, Check, QrCode, PencilLine, Loader2 } from 'lucide-react';
+import { Search, MapPin, Plus, ChevronRight, Navigation, Camera, Check, QrCode, PencilLine, Loader2, ShoppingCart } from 'lucide-react';
 import { MapContainer, TileLayer, CircleMarker, Popup, useMap, useMapEvents } from 'react-leaflet';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -161,7 +161,7 @@ function ReportMapPicker({ onPick }: { onPick: (lat: number, lng: number) => voi
 }
 
 export default function App() {
-  const [mode, setMode] = useState<'find' | 'report' | 'moderate'>('find');
+  const [mode, setMode] = useState<'find' | 'report' | 'plan' | 'moderate'>('find');
   const [lang, setLang] = useState<'uz' | 'ru' | 'en'>('uz');
   const [searchQuery, setSearchQuery] = useState('');
   const [products, setProducts] = useState<Product[]>([]);
@@ -211,6 +211,13 @@ export default function App() {
   const [findMapFocus, setFindMapFocus] = useState<{ lat: number; lng: number; zoom: number; trigger: number } | null>(null);
   const [geoError, setGeoError] = useState('');
   const [maxDistanceKm, setMaxDistanceKm] = useState(5);
+  const [planInput, setPlanInput] = useState('');
+  const [planLoading, setPlanLoading] = useState(false);
+  const [planResult, setPlanResult] = useState<{
+    storeGroups: Record<string, { store: string; address: string; latitude: number | null; longitude: number | null; items: { name: string; price: number }[] }>;
+    grandTotal: number;
+    savings: number;
+  } | null>(null);
   const priceFormatter = useMemo(() => new Intl.NumberFormat('en-US'), []);
   const telegramUserId = window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || '';
   const telegramUser = window.Telegram?.WebApp?.initDataUnsafe?.user;
@@ -224,6 +231,7 @@ export default function App() {
         appName: 'Narxi',
         modeFind: 'Topish',
         modeReport: "Qo'shish",
+        modePlan: 'Reja',
         modeModerate: 'Tasdiqlash',
         cityTitle: 'Shahar',
         nearbyToggle: 'Yaqin joylar',
@@ -404,6 +412,19 @@ export default function App() {
         reportProductNameLabel: 'Mahsulot nomi',
         reportProductNamePlaceholder: 'Masalan: Shakar',
         tagline: 'Narxni bil, pulni teja',
+        planTitle: '🛒 Xarid rejasi',
+        planHint: 'Sotib olmoqchi bo\'lgan mahsulotlarni vergul bilan yozing',
+        planPlaceholder: 'Masalan: shakar, guruch, tuxum, sut',
+        planButton: 'Rejani tuzish',
+        planSearching: 'Narxlar qidirilmoqda...',
+        planNoData: 'Bu mahsulotlar uchun narxlar topilmadi',
+        planRoute: '📍 Optimal marshrut',
+        planStoreTotal: 'Jami',
+        planGrandTotal: '💰 Umumiy',
+        planSavings: '✅ Tejash',
+        planOpenMap: '🗺️ Xaritada ko\'rish',
+        planSumLabel: 'so\'m',
+        planNewSearch: 'Yangi qidiruv',
         viewedThisWeek: (count: number, product: string) => `👁 ${count} kishi bu hafta ${product} narxini tekshirdi`,
         proofLabel: 'Isbot (chek yoki foto havolasi)',
         proofPlaceholder: 'Chek URL yoki foto URL kiriting',
@@ -421,6 +442,7 @@ export default function App() {
         appName: 'Narxi',
         modeFind: 'Поиск',
         modeReport: 'Добавить',
+        modePlan: 'План',
         modeModerate: 'Модерация',
         cityTitle: 'Город',
         nearbyToggle: 'Рядом',
@@ -603,6 +625,19 @@ export default function App() {
         reportProductNameLabel: 'Название товара',
         reportProductNamePlaceholder: 'Например: Сахар',
         tagline: 'Знай цену, экономь деньги',
+        planTitle: '🛒 План покупок',
+        planHint: 'Напишите товары через запятую',
+        planPlaceholder: 'Например: сахар, рис, яйца, молоко',
+        planButton: 'Составить план',
+        planSearching: 'Поиск цен...',
+        planNoData: 'Не найдено цен для этих товаров',
+        planRoute: '📍 Оптимальный маршрут',
+        planStoreTotal: 'Итого',
+        planGrandTotal: '💰 Общая сумма',
+        planSavings: '✅ Экономия',
+        planOpenMap: '🗺️ Открыть на карте',
+        planSumLabel: 'сум',
+        planNewSearch: 'Новый поиск',
         viewedThisWeek: (count: number, product: string) => `👁 ${count} человек проверили цену ${product} на этой неделе`,
         proofLabel: 'Подтверждение (ссылка на чек или фото)',
         proofPlaceholder: 'Введите URL чека или фото',
@@ -620,6 +655,7 @@ export default function App() {
         appName: 'Narxi',
         modeFind: 'Find',
         modeReport: 'Add',
+        modePlan: 'Plan',
         modeModerate: 'Moderate',
         cityTitle: 'City',
         nearbyToggle: 'Nearby',
@@ -802,6 +838,19 @@ export default function App() {
         reportProductNameLabel: 'Product name',
         reportProductNamePlaceholder: 'Example: Sugar',
         tagline: 'Know the price, save the money',
+        planTitle: '🛒 Shopping plan',
+        planHint: 'Write products separated by commas',
+        planPlaceholder: 'Example: sugar, rice, eggs, milk',
+        planButton: 'Build plan',
+        planSearching: 'Searching prices...',
+        planNoData: 'No prices found for these products',
+        planRoute: '📍 Optimal route',
+        planStoreTotal: 'Total',
+        planGrandTotal: '💰 Grand total',
+        planSavings: '✅ Estimated savings',
+        planOpenMap: '🗺️ View on map',
+        planSumLabel: 'sum',
+        planNewSearch: 'New search',
         viewedThisWeek: (count: number, product: string) => `👁 ${count} people checked ${product} price this week`,
         proofLabel: 'Proof (receipt or photo URL)',
         proofPlaceholder: 'Enter receipt URL or photo URL',
@@ -863,7 +912,7 @@ export default function App() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const initialMode = params.get('mode') as 'find' | 'report' | 'moderate';
+    const initialMode = params.get('mode') as 'find' | 'report' | 'plan' | 'moderate';
     const initialLang = params.get('lang') as 'uz' | 'ru' | 'en';
     const initialCity = params.get('city');
     if (initialMode && (initialMode !== 'moderate' || isAdminUser)) setMode(initialMode);
@@ -924,10 +973,23 @@ export default function App() {
   }, [telegramUserId, telegramUser?.username, telegramUser?.first_name, telegramUser?.language_code, lang, selectedCity]);
 
   const fetchProducts = async () => {
-    const { data } = await supabase.from('products').select('*').order('name_uz');
+    const [{ data }, { data: aliases }] = await Promise.all([
+      supabase.from('products').select('*').order('name_uz'),
+      supabase.from('product_aliases').select('product_id, alias_text'),
+    ]);
     if (data) {
-      setProducts(data);
-      return data as Product[];
+      // Build alias lookup and enrich search_text
+      const aliasMap: Record<string, string[]> = {};
+      for (const a of aliases || []) {
+        if (!aliasMap[a.product_id]) aliasMap[a.product_id] = [];
+        aliasMap[a.product_id].push(a.alias_text);
+      }
+      const enriched = data.map(p => ({
+        ...p,
+        search_text: [p.search_text || '', ...(aliasMap[p.id] || [])].join(' '),
+      }));
+      setProducts(enriched);
+      return enriched as Product[];
     }
     return [] as Product[];
   };
@@ -1762,6 +1824,74 @@ export default function App() {
     }
   };
 
+  const runShoppingPlan = async () => {
+    const items = planInput.split(',').map(s => s.trim()).filter(Boolean);
+    if (items.length === 0) return;
+    setPlanLoading(true);
+    setPlanResult(null);
+
+    const storeGroups: Record<string, { store: string; address: string; latitude: number | null; longitude: number | null; items: { name: string; price: number }[] }> = {};
+
+    for (const item of items) {
+      // 1. Direct search by product_name_raw
+      const { data: rows } = await supabase
+        .from('prices')
+        .select('product_id, product_name_raw, price, place_name, place_address, latitude, longitude, city')
+        .eq('city', selectedCity)
+        .ilike('product_name_raw', `%${item}%`)
+        .order('price', { ascending: true })
+        .limit(20);
+
+      let allRows = rows || [];
+
+      // 2. If few direct matches, also search via product_aliases
+      if (allRows.length < 3) {
+        const { data: aliasHits } = await supabase
+          .from('product_aliases')
+          .select('product_id')
+          .ilike('alias_text', `%${item}%`)
+          .limit(10);
+
+        if (aliasHits && aliasHits.length > 0) {
+          const aliasProductIds = [...new Set(aliasHits.map(a => a.product_id))];
+          // Exclude product IDs already found
+          const existingIds = new Set(allRows.filter(r => r.product_id).map(r => r.product_id));
+          const newIds = aliasProductIds.filter(id => !existingIds.has(id));
+
+          if (newIds.length > 0) {
+            const { data: aliasRows } = await supabase
+              .from('prices')
+              .select('product_id, product_name_raw, price, place_name, place_address, latitude, longitude, city')
+              .eq('city', selectedCity)
+              .in('product_id', newIds)
+              .order('price', { ascending: true })
+              .limit(20);
+
+            if (aliasRows) allRows = [...allRows, ...aliasRows];
+          }
+        }
+      }
+
+      // Sort combined results by price
+      allRows.sort((a, b) => (Number(a.price) || 0) - (Number(b.price) || 0));
+
+      if (allRows.length > 0) {
+        const best = allRows[0];
+        const storeName = best.place_name || '?';
+        if (!storeGroups[storeName]) {
+          storeGroups[storeName] = { store: storeName, address: best.place_address || '', latitude: best.latitude, longitude: best.longitude, items: [] };
+        }
+        storeGroups[storeName].items.push({ name: item, price: Number(best.price) || 0 });
+      }
+    }
+
+    const grandTotal = Object.values(storeGroups).reduce((sum, g) => sum + g.items.reduce((s, i) => s + i.price, 0), 0);
+    const savings = Math.max(Math.round(grandTotal * 0.25), 0);
+
+    setPlanResult({ storeGroups, grandTotal, savings });
+    setPlanLoading(false);
+  };
+
   useEffect(() => {
     setFindMapFocus(null);
   }, [selectedCity, selectedProduct?.id, nearbyEnabled]);
@@ -2512,6 +2642,15 @@ export default function App() {
               >
                 {t.modeReport}
               </button>
+              <button 
+                onClick={() => setMode('plan')}
+                className={cn(
+                  "px-4 py-1.5 rounded-md text-sm font-medium transition-all",
+                  mode === 'plan' ? "bg-white shadow-sm text-emerald-600" : "text-stone-500"
+                )}
+              >
+                {t.modePlan}
+              </button>
               {isAdminUser && (
                 <button 
                   onClick={() => setMode('moderate')}
@@ -2797,6 +2936,113 @@ export default function App() {
                 {sendingContact ? t.contactSending : t.contactSend}
               </button>
             </section>
+          </div>
+        ) : mode === 'plan' ? (
+          <div className="space-y-6">
+            <section className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
+              <h2 className="text-lg font-bold text-stone-900 mb-1">{t.planTitle}</h2>
+              <p className="text-xs text-stone-500 mb-3">{t.planHint}</p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={planInput}
+                  onChange={(e) => setPlanInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') runShoppingPlan(); }}
+                  placeholder={t.planPlaceholder}
+                  className="flex-1 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm"
+                />
+                <button
+                  onClick={runShoppingPlan}
+                  disabled={planLoading || !planInput.trim()}
+                  className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                >
+                  {planLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
+                </button>
+              </div>
+            </section>
+
+            {planLoading && (
+              <div className="text-center py-12">
+                <Loader2 className="h-8 w-8 animate-spin text-emerald-500 mx-auto mb-3" />
+                <p className="text-sm text-stone-500">{t.planSearching}</p>
+              </div>
+            )}
+
+            {planResult && Object.keys(planResult.storeGroups).length === 0 && !planLoading && (
+              <div className="text-center py-12">
+                <ShoppingCart className="h-10 w-10 text-stone-300 mx-auto mb-3" />
+                <p className="text-sm text-stone-500">{t.planNoData}</p>
+              </div>
+            )}
+
+            {planResult && Object.keys(planResult.storeGroups).length > 0 && (
+              <section className="space-y-3">
+                <h3 className="text-sm font-bold text-stone-700">{t.planRoute}</h3>
+                {Object.values(planResult.storeGroups).map((group, idx) => {
+                  const storeTotal = group.items.reduce((s, i) => s + i.price, 0);
+                  return (
+                    <div key={idx} className="rounded-xl border border-stone-200 bg-white p-4 shadow-sm">
+                      <div className="flex items-start gap-3 mb-2">
+                        <span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-700">
+                          {idx + 1}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-semibold text-stone-900 truncate">{group.store}</div>
+                          <div className="text-xs text-stone-400 truncate">{group.address}</div>
+                        </div>
+                      </div>
+                      {group.items.map((item, j) => (
+                        <div key={j} className="flex justify-between text-sm py-1 border-t border-stone-50">
+                          <span className="text-stone-700">{item.name}</span>
+                          <span className="font-medium text-stone-900">{priceFormatter.format(item.price)} {t.planSumLabel}</span>
+                        </div>
+                      ))}
+                      <div className="flex justify-between text-sm font-bold pt-2 border-t border-stone-200 mt-1">
+                        <span>{t.planStoreTotal}</span>
+                        <span>{priceFormatter.format(storeTotal)} {t.planSumLabel}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                <div className="rounded-xl border-2 border-emerald-200 bg-emerald-50 p-4">
+                  <div className="flex justify-between text-base font-bold text-emerald-900">
+                    <span>{t.planGrandTotal}</span>
+                    <span>{priceFormatter.format(planResult.grandTotal)} {t.planSumLabel}</span>
+                  </div>
+                  {planResult.savings > 0 && (
+                    <div className="flex justify-between text-sm text-emerald-700 mt-1">
+                      <span>{t.planSavings}</span>
+                      <span>~{priceFormatter.format(planResult.savings)} {t.planSumLabel}</span>
+                    </div>
+                  )}
+                </div>
+
+                {(() => {
+                  const storesWithCoords = Object.values(planResult.storeGroups).filter(g => g.latitude && g.longitude);
+                  if (storesWithCoords.length === 0) return null;
+                  const waypoints = storesWithCoords.map(g => `${g.latitude},${g.longitude}`).join('~');
+                  const mapsUrl = `https://yandex.uz/maps/?rtext=${waypoints}&rtt=auto`;
+                  return (
+                    <a
+                      href={mapsUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block w-full rounded-xl bg-blue-600 px-4 py-3 text-center text-sm font-semibold text-white"
+                    >
+                      {t.planOpenMap}
+                    </a>
+                  );
+                })()}
+
+                <button
+                  onClick={() => { setPlanResult(null); setPlanInput(''); }}
+                  className="w-full rounded-xl border border-stone-200 bg-white px-4 py-3 text-center text-sm font-semibold text-stone-600"
+                >
+                  {t.planNewSearch}
+                </button>
+              </section>
+            )}
           </div>
         ) : mode === 'report' ? (
           <div className="space-y-6">

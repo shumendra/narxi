@@ -509,7 +509,7 @@ async function sendMenu(chatId, lang, telegramId = null) {
     ],
     [
       { text: BOT_COPY[lang].btnMyStats, callback_data: 'menu_mystats' },
-      { text: BOT_COPY[lang].btnShopping, callback_data: 'menu_savdo' },
+      { text: BOT_COPY[lang].btnShopping, web_app: { url: `${miniAppUrl}?mode=plan&lang=${lang}` } },
     ],
   ];
 
@@ -1520,12 +1520,6 @@ async function handleCallback(callbackQuery) {
       `${tr.mystatsStreak(stats?.current_streak_weeks || 0)}\n` +
       `${tr.mystatsHelped(stats?.total_people_helped || 0)}`;
     await sendTelegramMessage(chatId, { text: applyTagline(messageText, lang) });
-    return;
-  }
-
-  if (data === 'menu_savdo') {
-    await setPendingAction(telegramId, { action: 'shopping' });
-    await sendTelegramMessage(chatId, { text: `${tr.shoppingAsk}\n\n${tr.shoppingAskHint}` });
     return;
   }
 
