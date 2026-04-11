@@ -5,7 +5,7 @@
 
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Search, MapPin, Plus, ChevronRight, Navigation, Camera, Check, QrCode, PencilLine, Loader2, ShoppingCart } from 'lucide-react';
+import { Search, MapPin, Plus, ChevronRight, Navigation, Camera, Check, QrCode, PencilLine, Loader2, ShoppingCart, Download, Upload } from 'lucide-react';
 import { MapContainer, TileLayer, CircleMarker, Popup, useMap, useMapEvents } from 'react-leaflet';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -173,6 +173,8 @@ export default function App() {
   const [moderationSection, setModerationSection] = useState<'prices' | 'products' | 'messages'>('prices');
   const [activeProductId, setActiveProductId] = useState<string | null>(null);
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
+  const [productTablePage, setProductTablePage] = useState(0);
+  const [aliasImporting, setAliasImporting] = useState(false);
   const [productFilterQuery, setProductFilterQuery] = useState('');
   const [productFilterCategory, setProductFilterCategory] = useState('all');
   const [productFilterCity, setProductFilterCity] = useState('all');
@@ -394,6 +396,22 @@ export default function App() {
         productSortDesc: 'Kamayish bo\'yicha',
         productPurgeAll: 'Barcha mahsulot ma\'lumotlarini o\'chirish',
         productPurgeDone: 'Barcha mahsulot ma\'lumotlari o\'chirildi ✅',
+        productDownload: 'Yuklab olish (JSON)',
+        productUpload: 'Yuklash (JSON)',
+        productUploading: 'Yuklanmoqda...',
+        productTableId: 'ID',
+        productTableNameUz: 'Nomi (UZ)',
+        productTableNameRu: 'Nomi (RU)',
+        productTableNameEn: 'Nomi (EN)',
+        productTableCategory: 'Kategoriya',
+        productTableAliases: 'Taxalluslar',
+        productTablePrices: 'Narxlar',
+        productTablePage: 'Sahifa',
+        productTableOf: '/',
+        productTablePrev: '←',
+        productTableNext: '→',
+        productTableTotal: 'Jami',
+        productTableShowing: 'ko\'rsatilmoqda',
         confirmDeleteSelectedProducts: 'Tanlangan mahsulotlarni va bog\'liq barcha narx ma\'lumotlarini o\'chirasizmi?',
         confirmPurgeAllProducts: 'Barcha mahsulotlar, narxlar va kutilayotgan yozuvlar to\'liq o\'chiriladi. Davom etasizmi?',
         yesLabel: 'Ha',
@@ -606,6 +624,22 @@ export default function App() {
         productSortAsc: 'По возрастанию',
         productSortDesc: 'По убыванию',
         productPurgeAll: 'Удалить все данные товаров',
+        productDownload: 'Скачать (JSON)',
+        productUpload: 'Загрузить (JSON)',
+        productUploading: 'Загрузка...',
+        productTableId: 'ID',
+        productTableNameUz: 'Название (UZ)',
+        productTableNameRu: 'Название (RU)',
+        productTableNameEn: 'Название (EN)',
+        productTableCategory: 'Категория',
+        productTableAliases: 'Алиасы',
+        productTablePrices: 'Цены',
+        productTablePage: 'Стр.',
+        productTableOf: '/',
+        productTablePrev: '←',
+        productTableNext: '→',
+        productTableTotal: 'Всего',
+        productTableShowing: 'показано',
         productPurgeDone: 'Все данные товаров удалены ✅',
         confirmDeleteSelectedProducts: 'Удалить выбранные товары и все связанные цены?',
         confirmPurgeAllProducts: 'Будут удалены все товары, цены и ожидающие записи. Продолжить?',
@@ -819,6 +853,22 @@ export default function App() {
         productSortAsc: 'Ascending',
         productSortDesc: 'Descending',
         productPurgeAll: 'Delete all product data',
+        productDownload: 'Download (JSON)',
+        productUpload: 'Upload (JSON)',
+        productUploading: 'Uploading...',
+        productTableId: 'ID',
+        productTableNameUz: 'Name (UZ)',
+        productTableNameRu: 'Name (RU)',
+        productTableNameEn: 'Name (EN)',
+        productTableCategory: 'Category',
+        productTableAliases: 'Aliases',
+        productTablePrices: 'Prices',
+        productTablePage: 'Page',
+        productTableOf: '/',
+        productTablePrev: '←',
+        productTableNext: '→',
+        productTableTotal: 'Total',
+        productTableShowing: 'showing',
         productPurgeDone: 'All product data deleted ✅',
         confirmDeleteSelectedProducts: 'Delete selected products and all related pricing data?',
         confirmPurgeAllProducts: 'This will permanently remove all products, prices, and pending rows. Continue?',
@@ -1083,6 +1133,103 @@ export default function App() {
       window.Telegram?.WebApp?.showAlert(t.moderationError);
     } finally {
       setProductAdminLoading(false);
+    }
+  };
+
+  const downloadProductsJson = async () => {
+    try {
+      const [{ data: prods }, { data: aliases }] = await Promise.all([
+        supabase.from('products').select('id, name_uz, name_ru, name_en, search_text, category, unit, available_cities').order('name_uz'),
+        supabase.from('product_aliases').select('product_id, alias_text, language, store_name'),
+      ]);
+      const aliasMap: Record<string, Array<{ alias_text: string; language: string; store_name: string | null }>> = {};
+      for (const a of aliases || []) {
+        if (!aliasMap[a.product_id]) aliasMap[a.product_id] = [];
+        aliasMap[a.product_id].push({ alias_text: a.alias_text, language: a.language, store_name: a.store_name });
+      }
+      const payload = (prods || []).map(p => ({
+        product_id: p.id,
+        canonical: { name_uz: p.name_uz, name_ru: p.name_ru, name_en: p.name_en },
+        category: p.category,
+        unit: p.unit,
+        names: aliasMap[p.id] || [],
+      }));
+      const blob = new Blob([JSON.stringify({ products: payload }, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `narxi-products-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    }
+  };
+
+  const uploadAliasesJson = async (file: File) => {
+    setAliasImporting(true);
+    try {
+      const text = await file.text();
+      const payload = JSON.parse(text);
+      const aliasEntries = payload.aliases || payload.products || payload;
+      if (!Array.isArray(aliasEntries)) {
+        window.Telegram?.WebApp?.showAlert('Invalid format: expected an array');
+        return;
+      }
+
+      let insertedCount = 0;
+      let updatedCanonical = 0;
+
+      for (const entry of aliasEntries) {
+        const productId = String(entry.product_id || '').trim();
+        if (!productId) continue;
+
+        // Update canonical names if provided
+        if (entry.canonical && typeof entry.canonical === 'object') {
+          const updates: Record<string, string> = {};
+          if (entry.canonical.name_uz) updates.name_uz = String(entry.canonical.name_uz).trim();
+          if (entry.canonical.name_ru) updates.name_ru = String(entry.canonical.name_ru).trim();
+          if (entry.canonical.name_en) updates.name_en = String(entry.canonical.name_en).trim();
+          if (Object.keys(updates).length > 0) {
+            const { data: existing } = await supabase.from('products').select('name_uz,name_ru,name_en').eq('id', productId).maybeSingle();
+            if (existing) {
+              const merged = { name_uz: updates.name_uz || existing.name_uz || '', name_ru: updates.name_ru || existing.name_ru || '', name_en: updates.name_en || existing.name_en || '' };
+              (updates as Record<string, string>).search_text = [merged.name_uz, merged.name_ru, merged.name_en].filter(Boolean).join(' ');
+            }
+            await supabase.from('products').update(updates).eq('id', productId);
+            updatedCanonical++;
+          }
+        }
+
+        // Upsert aliases
+        const names = Array.isArray(entry.names) ? entry.names : [];
+        for (const alias of names) {
+          const aliasText = String(alias.alias_text || '').trim();
+          if (!aliasText) continue;
+          const language = String(alias.language || 'unknown');
+          const storeName = alias.store_name ? String(alias.store_name).trim() : null;
+
+          let q = supabase.from('product_aliases').select('id,times_seen').eq('product_id', productId).ilike('alias_text', aliasText);
+          if (storeName) q = q.eq('store_name', storeName);
+          else q = q.is('store_name', null);
+          const { data: existing } = await q.maybeSingle();
+
+          if (existing) {
+            await supabase.from('product_aliases').update({ times_seen: (existing.times_seen || 1) + 1, language }).eq('id', existing.id);
+          } else {
+            await supabase.from('product_aliases').insert({ product_id: productId, alias_text: aliasText, language, store_name: storeName, times_seen: 1 });
+          }
+          insertedCount++;
+        }
+      }
+
+      window.Telegram?.WebApp?.showAlert(`Done: ${updatedCanonical} canonical updated, ${insertedCount} aliases processed`);
+      await fetchProducts();
+      if (moderationSection === 'products') await fetchModerationProducts();
+    } catch (e) {
+      window.Telegram?.WebApp?.showAlert(`Import error: ${e instanceof Error ? e.message : 'unknown'}`);
+    } finally {
+      setAliasImporting(false);
     }
   };
 
@@ -3670,253 +3817,154 @@ export default function App() {
                 )}
               </>
             ) : moderationSection === 'products' ? (
-              <div className="space-y-4">
-                <section className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm space-y-3">
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <input
-                      value={newProductItem.name_uz}
-                      onChange={(e) => setNewProductItem(prev => ({ ...prev, name_uz: e.target.value }))}
-                      placeholder={t.productNameUz}
-                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
-                    />
-                    <input
-                      value={newProductItem.name_ru}
-                      onChange={(e) => setNewProductItem(prev => ({ ...prev, name_ru: e.target.value }))}
-                      placeholder={t.productNameRu}
-                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
-                    />
-                    <input
-                      value={newProductItem.name_en}
-                      onChange={(e) => setNewProductItem(prev => ({ ...prev, name_en: e.target.value }))}
-                      placeholder={t.productNameEn}
-                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
-                    />
-                    <input
-                      value={newProductItem.category}
-                      onChange={(e) => setNewProductItem(prev => ({ ...prev, category: e.target.value }))}
-                      placeholder={t.productCategory}
-                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
-                    />
-                    <input
-                      value={newProductItem.unit}
-                      onChange={(e) => setNewProductItem(prev => ({ ...prev, unit: e.target.value }))}
-                      placeholder={t.productUnit}
-                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
-                    />
-                    <input
-                      value={newProductItem.available_cities}
-                      onChange={(e) => setNewProductItem(prev => ({ ...prev, available_cities: e.target.value }))}
-                      placeholder={t.productCities}
-                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
-                    />
-                  </div>
-                  <button
-                    onClick={createProductItem}
-                    disabled={moderationSavingId === 'create-product'}
-                    className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                  >
-                    {t.productCreate}
-                  </button>
-                </section>
-
+              <div className="space-y-3">
+                {/* Create product form */}
                 <section className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm space-y-3">
                   <div className="grid gap-3 md:grid-cols-3">
-                    <input
-                      value={productFilterQuery}
-                      onChange={(e) => setProductFilterQuery(e.target.value)}
-                      placeholder={t.productFilterSearch}
-                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
-                    />
-                    <select
-                      value={productFilterCategory}
-                      onChange={(e) => setProductFilterCategory(e.target.value)}
-                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
-                    >
+                    <input value={newProductItem.name_uz} onChange={(e) => setNewProductItem(prev => ({ ...prev, name_uz: e.target.value }))} placeholder={t.productNameUz} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm" />
+                    <input value={newProductItem.name_ru} onChange={(e) => setNewProductItem(prev => ({ ...prev, name_ru: e.target.value }))} placeholder={t.productNameRu} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm" />
+                    <input value={newProductItem.name_en} onChange={(e) => setNewProductItem(prev => ({ ...prev, name_en: e.target.value }))} placeholder={t.productNameEn} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm" />
+                    <input value={newProductItem.category} onChange={(e) => setNewProductItem(prev => ({ ...prev, category: e.target.value }))} placeholder={t.productCategory} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm" />
+                    <input value={newProductItem.unit} onChange={(e) => setNewProductItem(prev => ({ ...prev, unit: e.target.value }))} placeholder={t.productUnit} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm" />
+                    <input value={newProductItem.available_cities} onChange={(e) => setNewProductItem(prev => ({ ...prev, available_cities: e.target.value }))} placeholder={t.productCities} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm" />
+                  </div>
+                  <button onClick={createProductItem} disabled={moderationSavingId === 'create-product'} className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{t.productCreate}</button>
+                </section>
+
+                {/* Filters */}
+                <section className="rounded-2xl border border-stone-200 bg-white p-3 shadow-sm space-y-2">
+                  <div className="grid gap-2 md:grid-cols-3">
+                    <input value={productFilterQuery} onChange={(e) => setProductFilterQuery(e.target.value)} placeholder={t.productFilterSearch} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm" />
+                    <select value={productFilterCategory} onChange={(e) => setProductFilterCategory(e.target.value)} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm">
                       <option value="all">{t.productFilterCategory}: {t.allLabel}</option>
-                      {productCategoryOptions.map(category => <option key={category} value={category}>{category}</option>)}
+                      {productCategoryOptions.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
-                    <select
-                      value={productFilterCity}
-                      onChange={(e) => setProductFilterCity(e.target.value)}
-                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
-                    >
+                    <select value={productFilterCity} onChange={(e) => setProductFilterCity(e.target.value)} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm">
                       <option value="all">{t.productFilterCity}: {t.allLabel}</option>
-                      {productCityOptions.map(city => <option key={city} value={city}>{city}</option>)}
+                      {productCityOptions.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
-                    <select
-                      value={productFilterHasPrices}
-                      onChange={(e) => setProductFilterHasPrices(e.target.value as 'all' | 'yes' | 'no')}
-                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
-                    >
+                    <select value={productFilterHasPrices} onChange={(e) => setProductFilterHasPrices(e.target.value as 'all' | 'yes' | 'no')} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm">
                       <option value="all">{t.productFilterHasPrices}: {t.allLabel}</option>
                       <option value="yes">{t.productFilterHasPrices}: {t.yesState}</option>
                       <option value="no">{t.productFilterHasPrices}: {t.noState}</option>
                     </select>
-                    <select
-                      value={productFilterHasPending}
-                      onChange={(e) => setProductFilterHasPending(e.target.value as 'all' | 'yes' | 'no')}
-                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
-                    >
+                    <select value={productFilterHasPending} onChange={(e) => setProductFilterHasPending(e.target.value as 'all' | 'yes' | 'no')} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm">
                       <option value="all">{t.productFilterHasPending}: {t.allLabel}</option>
                       <option value="yes">{t.productFilterHasPending}: {t.yesState}</option>
                       <option value="no">{t.productFilterHasPending}: {t.noState}</option>
                     </select>
                     <div className="grid grid-cols-2 gap-2">
-                      <select
-                        value={productSortBy}
-                        onChange={(e) => setProductSortBy(e.target.value as 'name' | 'category' | 'price_count' | 'pending_count' | 'latest_receipt')}
-                        className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
-                      >
+                      <select value={productSortBy} onChange={(e) => setProductSortBy(e.target.value as 'name' | 'category' | 'price_count' | 'pending_count' | 'latest_receipt')} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm">
                         <option value="name">{t.sortName}</option>
                         <option value="category">{t.sortCategory}</option>
                         <option value="price_count">{t.sortPriceCount}</option>
                         <option value="pending_count">{t.sortPendingCount}</option>
                         <option value="latest_receipt">{t.sortLatestReceipt}</option>
                       </select>
-                      <select
-                        value={productSortDir}
-                        onChange={(e) => setProductSortDir(e.target.value as 'asc' | 'desc')}
-                        className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
-                      >
+                      <select value={productSortDir} onChange={(e) => setProductSortDir(e.target.value as 'asc' | 'desc')} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm">
                         <option value="asc">{t.productSortAsc}</option>
                         <option value="desc">{t.productSortDesc}</option>
                       </select>
                     </div>
                   </div>
 
+                  {/* Action buttons */}
                   <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      onClick={selectAllFilteredProducts}
-                      className="rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-medium text-stone-700"
-                    >
-                      {t.productSelectAll}
-                    </button>
-                    <button
-                      onClick={clearProductSelection}
-                      className="rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-medium text-stone-700"
-                    >
-                      {t.productClearSelection}
-                    </button>
-                    <button
-                      onClick={deleteSelectedProducts}
-                      disabled={selectedProductIds.length === 0 || moderationSavingId === 'bulk-delete-products'}
-                      className="rounded-xl bg-rose-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
-                    >
-                      {t.productDeleteSelected} ({selectedProductIds.length})
-                    </button>
-                    <button
-                      onClick={purgeAllProductsData}
-                      disabled={moderationSavingId === 'purge-all-products'}
-                      className="rounded-xl bg-rose-700 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
-                    >
-                      {t.productPurgeAll}
-                    </button>
+                    <button onClick={selectAllFilteredProducts} className="rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-xs font-medium text-stone-700">{t.productSelectAll}</button>
+                    <button onClick={clearProductSelection} className="rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-xs font-medium text-stone-700">{t.productClearSelection}</button>
+                    <button onClick={deleteSelectedProducts} disabled={selectedProductIds.length === 0 || moderationSavingId === 'bulk-delete-products'} className="rounded-lg bg-rose-600 px-2 py-1.5 text-xs font-semibold text-white disabled:opacity-50">{t.productDeleteSelected} ({selectedProductIds.length})</button>
+                    <button onClick={purgeAllProductsData} disabled={moderationSavingId === 'purge-all-products'} className="rounded-lg bg-rose-700 px-2 py-1.5 text-xs font-semibold text-white disabled:opacity-50">{t.productPurgeAll}</button>
+                    <button onClick={downloadProductsJson} className="rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-xs font-semibold text-emerald-700 flex items-center gap-1"><Download className="w-3.5 h-3.5" /> {t.productDownload}</button>
+                    <label className={cn("rounded-lg border border-blue-200 bg-blue-50 px-2 py-1.5 text-xs font-semibold text-blue-700 flex items-center gap-1 cursor-pointer", aliasImporting && "opacity-50 pointer-events-none")}>
+                      <Upload className="w-3.5 h-3.5" /> {aliasImporting ? t.productUploading : t.productUpload}
+                      <input type="file" accept=".json" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadAliasesJson(f); e.target.value = ''; }} />
+                    </label>
                   </div>
                 </section>
 
+                {/* Products table */}
                 {productAdminLoading ? (
-                  <div className="animate-pulse space-y-3">
-                    {[1, 2, 3].map(i => <div key={i} className="h-20 bg-stone-200 rounded-xl" />)}
+                  <div className="animate-pulse space-y-2">
+                    {[1, 2, 3, 4].map(i => <div key={i} className="h-8 bg-stone-200 rounded" />)}
                   </div>
                 ) : filteredSortedProductAdminItems.length === 0 ? (
-                  <div className="rounded-2xl border border-stone-200 bg-white p-8 text-center text-stone-500">
-                    {t.productsEmpty}
-                  </div>
-                ) : (
-                  <div className="rounded-2xl border border-stone-200 bg-white shadow-sm overflow-hidden">
-                    {filteredSortedProductAdminItems.map(item => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onClick={() => setActiveProductId(item.id)}
-                        className={cn(
-                          'w-full border-b border-stone-100 px-4 py-3 text-left transition-colors last:border-b-0',
-                          activeProductId === item.id ? 'bg-emerald-50' : 'bg-white hover:bg-stone-50'
-                        )}
-                      >
-                        <div className="grid items-center gap-2 md:grid-cols-[24px,1.5fr,1fr,0.8fr,0.8fr,1.2fr]">
-                          <input
-                            type="checkbox"
-                            checked={selectedProductIds.includes(item.id)}
-                            onChange={(e) => {
-                              e.stopPropagation();
-                              toggleProductSelection(item.id);
-                            }}
-                            onClick={(e) => e.stopPropagation()}
-                          />
-                          <div>
-                            <div className="text-sm font-semibold text-stone-900">{item.name_uz}</div>
-                            <div className="text-xs text-stone-500">{item.id}</div>
-                          </div>
-                          <div className="text-xs text-stone-600">{item.category || '-'}</div>
-                          <div className="text-xs text-stone-600">{t.productPriceCount}: {item.price_count || 0}</div>
-                          <div className="text-xs text-stone-600">{t.productPendingCount}: {item.pending_count || 0}</div>
-                          <div className="text-xs text-stone-600 truncate">{(item.available_cities || []).join(', ') || '-'}</div>
+                  <div className="rounded-2xl border border-stone-200 bg-white p-8 text-center text-stone-500">{t.productsEmpty}</div>
+                ) : (() => {
+                  const PAGE_SIZE = 50;
+                  const totalPages = Math.ceil(filteredSortedProductAdminItems.length / PAGE_SIZE);
+                  const safePage = Math.min(productTablePage, totalPages - 1);
+                  const pageItems = filteredSortedProductAdminItems.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
+                  return (
+                    <div className="space-y-2">
+                      {/* Pagination top */}
+                      <div className="flex items-center justify-between text-xs text-stone-500">
+                        <span>{t.productTableTotal}: {filteredSortedProductAdminItems.length} &middot; {t.productTableShowing} {safePage * PAGE_SIZE + 1}–{Math.min((safePage + 1) * PAGE_SIZE, filteredSortedProductAdminItems.length)}</span>
+                        <div className="flex items-center gap-1">
+                          <button disabled={safePage === 0} onClick={() => setProductTablePage(safePage - 1)} className="rounded border border-stone-200 px-2 py-1 disabled:opacity-30">{t.productTablePrev}</button>
+                          <span>{t.productTablePage} {safePage + 1}{t.productTableOf}{totalPages}</span>
+                          <button disabled={safePage >= totalPages - 1} onClick={() => setProductTablePage(safePage + 1)} className="rounded border border-stone-200 px-2 py-1 disabled:opacity-30">{t.productTableNext}</button>
                         </div>
-                      </button>
-                    ))}
-                  </div>
-                )}
+                      </div>
 
+                      <div className="rounded-xl border border-stone-200 bg-white shadow-sm overflow-x-auto">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b border-stone-200 bg-stone-50 text-left text-stone-600">
+                              <th className="px-2 py-2 w-8"><input type="checkbox" checked={pageItems.every(i => selectedProductIds.includes(i.id))} onChange={() => { const allSelected = pageItems.every(i => selectedProductIds.includes(i.id)); setSelectedProductIds(prev => allSelected ? prev.filter(id => !pageItems.some(i => i.id === id)) : [...new Set([...prev, ...pageItems.map(i => i.id)])]); }} /></th>
+                              <th className="px-2 py-2 font-semibold">{t.productTableNameUz}</th>
+                              <th className="px-2 py-2 font-semibold">{t.productTableNameRu}</th>
+                              <th className="px-2 py-2 font-semibold">{t.productTableNameEn}</th>
+                              <th className="px-2 py-2 font-semibold">{t.productTableCategory}</th>
+                              <th className="px-2 py-2 font-semibold text-center">{t.productTablePrices}</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {pageItems.map(item => (
+                              <tr
+                                key={item.id}
+                                onClick={() => setActiveProductId(item.id)}
+                                className={cn('border-b border-stone-100 cursor-pointer transition-colors', activeProductId === item.id ? 'bg-emerald-50' : 'hover:bg-stone-50')}
+                              >
+                                <td className="px-2 py-1.5"><input type="checkbox" checked={selectedProductIds.includes(item.id)} onChange={(e) => { e.stopPropagation(); toggleProductSelection(item.id); }} onClick={(e) => e.stopPropagation()} /></td>
+                                <td className="px-2 py-1.5 font-medium text-stone-900 max-w-[140px] truncate">{item.name_uz}</td>
+                                <td className="px-2 py-1.5 text-stone-700 max-w-[140px] truncate">{item.name_ru}</td>
+                                <td className="px-2 py-1.5 text-stone-700 max-w-[120px] truncate">{item.name_en || '-'}</td>
+                                <td className="px-2 py-1.5 text-stone-600">{item.category || '-'}</td>
+                                <td className="px-2 py-1.5 text-center text-stone-600">{item.price_count || 0}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Pagination bottom */}
+                      <div className="flex items-center justify-end text-xs text-stone-500 gap-1">
+                        <button disabled={safePage === 0} onClick={() => setProductTablePage(safePage - 1)} className="rounded border border-stone-200 px-2 py-1 disabled:opacity-30">{t.productTablePrev}</button>
+                        <span>{safePage + 1}{t.productTableOf}{totalPages}</span>
+                        <button disabled={safePage >= totalPages - 1} onClick={() => setProductTablePage(safePage + 1)} className="rounded border border-stone-200 px-2 py-1 disabled:opacity-30">{t.productTableNext}</button>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Active product detail panel */}
                 {activeProductItem && (
                   <section className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm space-y-4">
                     <div className="flex items-center justify-between gap-2">
                       <div className="text-sm font-semibold text-stone-800">{activeProductItem.name_uz}</div>
                       <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => saveProductItem(activeProductItem)}
-                          disabled={moderationSavingId === activeProductItem.id}
-                          className="rounded-xl border border-stone-200 bg-stone-100 px-4 py-2 text-sm font-semibold text-stone-700 disabled:opacity-50"
-                        >
-                          {t.productSave}
-                        </button>
-                        <button
-                          onClick={() => deleteProductItem(activeProductItem)}
-                          disabled={moderationSavingId === activeProductItem.id}
-                          className="rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                        >
-                          {t.productDelete}
-                        </button>
+                        <button onClick={() => saveProductItem(activeProductItem)} disabled={moderationSavingId === activeProductItem.id} className="rounded-xl border border-stone-200 bg-stone-100 px-4 py-2 text-sm font-semibold text-stone-700 disabled:opacity-50">{t.productSave}</button>
+                        <button onClick={() => deleteProductItem(activeProductItem)} disabled={moderationSavingId === activeProductItem.id} className="rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{t.productDelete}</button>
                       </div>
                     </div>
 
                     <div className="grid gap-3 md:grid-cols-2">
-                      <input
-                        value={activeProductItem.name_uz || ''}
-                        onChange={(e) => updateProductField(activeProductItem.id, 'name_uz', e.target.value)}
-                        placeholder={t.productNameUz}
-                        className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
-                      />
-                      <input
-                        value={activeProductItem.name_ru || ''}
-                        onChange={(e) => updateProductField(activeProductItem.id, 'name_ru', e.target.value)}
-                        placeholder={t.productNameRu}
-                        className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
-                      />
-                      <input
-                        value={activeProductItem.name_en || ''}
-                        onChange={(e) => updateProductField(activeProductItem.id, 'name_en', e.target.value)}
-                        placeholder={t.productNameEn}
-                        className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
-                      />
-                      <input
-                        value={activeProductItem.category || ''}
-                        onChange={(e) => updateProductField(activeProductItem.id, 'category', e.target.value)}
-                        placeholder={t.productCategory}
-                        className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
-                      />
-                      <input
-                        value={activeProductItem.unit || ''}
-                        onChange={(e) => updateProductField(activeProductItem.id, 'unit', e.target.value)}
-                        placeholder={t.productUnit}
-                        className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
-                      />
-                      <input
-                        value={(activeProductItem.available_cities || []).join(', ')}
-                        onChange={(e) => updateProductField(activeProductItem.id, 'available_cities', e.target.value)}
-                        placeholder={t.productCities}
-                        className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
-                      />
+                      <input value={activeProductItem.name_uz || ''} onChange={(e) => updateProductField(activeProductItem.id, 'name_uz', e.target.value)} placeholder={t.productNameUz} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm" />
+                      <input value={activeProductItem.name_ru || ''} onChange={(e) => updateProductField(activeProductItem.id, 'name_ru', e.target.value)} placeholder={t.productNameRu} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm" />
+                      <input value={activeProductItem.name_en || ''} onChange={(e) => updateProductField(activeProductItem.id, 'name_en', e.target.value)} placeholder={t.productNameEn} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm" />
+                      <input value={activeProductItem.category || ''} onChange={(e) => updateProductField(activeProductItem.id, 'category', e.target.value)} placeholder={t.productCategory} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm" />
+                      <input value={activeProductItem.unit || ''} onChange={(e) => updateProductField(activeProductItem.id, 'unit', e.target.value)} placeholder={t.productUnit} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm" />
+                      <input value={(activeProductItem.available_cities || []).join(', ')} onChange={(e) => updateProductField(activeProductItem.id, 'available_cities', e.target.value)} placeholder={t.productCities} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm" />
                     </div>
 
                     <div className="grid gap-3 md:grid-cols-2">
@@ -3929,8 +3977,7 @@ export default function App() {
                             <div key={price.id} className="rounded-lg bg-white p-2">
                               <div className="font-medium">{price.product_name_raw}</div>
                               <div>{priceFormatter.format(Number(price.price) || 0)} {t.sumLabel}</div>
-                              <div>{price.city || '-'}</div>
-                              <div>{price.place_name || '-'}</div>
+                              <div>{price.city || '-'} &middot; {price.place_name || '-'}</div>
                             </div>
                           ))}
                         </div>
@@ -3943,8 +3990,7 @@ export default function App() {
                           ) : (activeProductItem.pending || []).slice(0, 20).map(pendingItem => (
                             <div key={pendingItem.id} className="rounded-lg bg-white p-2">
                               <div className="font-medium">{pendingItem.product_name_raw}</div>
-                              <div>{pendingItem.city || '-'}</div>
-                              <div>{pendingItem.status || 'pending'}</div>
+                              <div>{pendingItem.city || '-'} &middot; {pendingItem.status || 'pending'}</div>
                             </div>
                           ))}
                         </div>
