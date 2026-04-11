@@ -1196,7 +1196,7 @@ export default function App() {
       }
 
       window.Telegram?.WebApp?.showAlert(
-        `Done: ${result.canonical_updated || 0} updated, ${(result.aliases_inserted || 0) + (result.aliases_updated || 0)} aliases, ${result.products_deleted || 0} deleted`
+        `Done: ${result.canonical_updated || 0} updated, ${result.aliases_inserted || 0} aliases, ${result.products_deleted || 0} deleted${result.errors?.length ? ` (${result.errors.length} errors)` : ''}`
       );
       await fetchProducts();
       if (moderationSection === 'products') await fetchModerationProducts();
