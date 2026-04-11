@@ -215,9 +215,19 @@ export default function App() {
   const [maxDistanceKm, setMaxDistanceKm] = useState(5);
   const [planInput, setPlanInput] = useState('');
   const [planLoading, setPlanLoading] = useState(false);
+  const [planMaxStores, setPlanMaxStores] = useState(3);
   const [planResult, setPlanResult] = useState<{
-    storeGroups: Record<string, { store: string; address: string; latitude: number | null; longitude: number | null; items: { name: string; price: number }[] }>;
+    stores: Array<{
+      name: string; address: string;
+      lat: number | null; lng: number | null;
+      distanceKm: number | null;
+      items: Array<{ query: string; productName: string; price: number }>;
+      storeTotal: number;
+    }>;
+    notFound: string[];
     grandTotal: number;
+    singleStoreTotal: number | null;
+    singleStoreName: string | null;
     savings: number;
   } | null>(null);
   const priceFormatter = useMemo(() => new Intl.NumberFormat('en-US'), []);
@@ -440,9 +450,13 @@ export default function App() {
         planStoreTotal: 'Jami',
         planGrandTotal: '💰 Umumiy',
         planSavings: '✅ Tejash',
+        planSavingsVs: (store: string) => `${store} bilan solishtirganda`,
         planOpenMap: '🗺️ Xaritada ko\'rish',
         planSumLabel: 'so\'m',
         planNewSearch: 'Yangi qidiruv',
+        planMaxStores: 'Do\'konlar soni',
+        planNotFound: 'Topilmadi',
+        planDistanceAway: (km: string) => `~${km} km uzoqlikda`,
         viewedThisWeek: (count: number, product: string) => `👁 ${count} kishi bu hafta ${product} narxini tekshirdi`,
         proofLabel: 'Isbot (chek yoki foto havolasi)',
         proofPlaceholder: 'Chek URL yoki foto URL kiriting',
@@ -669,9 +683,13 @@ export default function App() {
         planStoreTotal: 'Итого',
         planGrandTotal: '💰 Общая сумма',
         planSavings: '✅ Экономия',
+        planSavingsVs: (store: string) => `по сравнению с ${store}`,
         planOpenMap: '🗺️ Открыть на карте',
         planSumLabel: 'сум',
         planNewSearch: 'Новый поиск',
+        planMaxStores: 'Кол-во магазинов',
+        planNotFound: 'Не найдено',
+        planDistanceAway: (km: string) => `~${km} км`,
         viewedThisWeek: (count: number, product: string) => `👁 ${count} человек проверили цену ${product} на этой неделе`,
         proofLabel: 'Подтверждение (ссылка на чек или фото)',
         proofPlaceholder: 'Введите URL чека или фото',
@@ -897,10 +915,14 @@ export default function App() {
         planRoute: '📍 Optimal route',
         planStoreTotal: 'Total',
         planGrandTotal: '💰 Grand total',
-        planSavings: '✅ Estimated savings',
+        planSavings: '✅ Savings',
+        planSavingsVs: (store: string) => `vs. buying all at ${store}`,
         planOpenMap: '🗺️ View on map',
         planSumLabel: 'sum',
         planNewSearch: 'New search',
+        planMaxStores: 'Max stores',
+        planNotFound: 'Not found',
+        planDistanceAway: (km: string) => `~${km} km away`,
         viewedThisWeek: (count: number, product: string) => `👁 ${count} people checked ${product} price this week`,
         proofLabel: 'Proof (receipt or photo URL)',
         proofPlaceholder: 'Enter receipt URL or photo URL',
@@ -1946,70 +1968,185 @@ export default function App() {
   };
 
   const runShoppingPlan = async () => {
-    const items = planInput.split(',').map(s => s.trim()).filter(Boolean);
-    if (items.length === 0) return;
+    const queryItems = planInput.split(',').map(s => s.trim()).filter(Boolean);
+    if (queryItems.length === 0) return;
     setPlanLoading(true);
     setPlanResult(null);
 
-    const storeGroups: Record<string, { store: string; address: string; latitude: number | null; longitude: number | null; items: { name: string; price: number }[] }> = {};
+    // Request user location if not already available
+    if (!userLocation) {
+      requestUserLocation();
+    }
 
-    for (const item of items) {
-      // 1. Direct search by product_name_raw
-      const { data: rows } = await supabase
+    const origin = userLocation || (() => {
+      const city = getCityOption(selectedCity);
+      return city ? { lat: city.center[0], lng: city.center[1] } : null;
+    })();
+
+    // 1. Match each query to product IDs using locally cached products (enriched with aliases)
+    const itemMatches: Array<{ query: string; productIds: string[] }> = [];
+    for (const query of queryItems) {
+      const q = query.toLowerCase();
+      const matching = products.filter(p =>
+        p.name_uz?.toLowerCase().includes(q) ||
+        p.name_ru?.toLowerCase().includes(q) ||
+        (p.name_en || '').toLowerCase().includes(q) ||
+        (p.search_text || '').toLowerCase().includes(q)
+      );
+      itemMatches.push({ query, productIds: matching.map(p => p.id) });
+    }
+
+    const allProductIds = [...new Set(itemMatches.flatMap(m => m.productIds))];
+    const notFound: string[] = [];
+
+    if (allProductIds.length === 0) {
+      setPlanResult({ stores: [], notFound: queryItems, grandTotal: 0, singleStoreTotal: null, singleStoreName: null, savings: 0 });
+      setPlanLoading(false);
+      return;
+    }
+
+    // 2. Fetch all prices for matched products in the city (batch if needed)
+    let allPrices: Array<{ product_id: string; product_name_raw: string; price: number; place_name: string; place_address: string; latitude: number | null; longitude: number | null }> = [];
+    const batchSize = 50;
+    for (let i = 0; i < allProductIds.length; i += batchSize) {
+      const batch = allProductIds.slice(i, i + batchSize);
+      const { data } = await supabase
         .from('prices')
-        .select('product_id, product_name_raw, price, place_name, place_address, latitude, longitude, city')
+        .select('product_id, product_name_raw, price, place_name, place_address, latitude, longitude')
         .eq('city', selectedCity)
-        .ilike('product_name_raw', `%${item}%`)
-        .order('price', { ascending: true })
-        .limit(20);
+        .in('product_id', batch);
+      if (data) allPrices = [...allPrices, ...data];
+    }
 
-      let allRows = rows || [];
+    // 3. Build store inventory: for each store, the cheapest price for each product
+    type StoreKey = string;
+    const storeInventory = new Map<StoreKey, Map<string, { productId: string; productName: string; price: number; storeName: string; storeAddress: string; lat: number | null; lng: number | null }>>();
 
-      // 2. If few direct matches, also search via product_aliases
-      if (allRows.length < 3) {
-        const { data: aliasHits } = await supabase
-          .from('product_aliases')
-          .select('product_id')
-          .ilike('alias_text', `%${item}%`)
-          .limit(10);
-
-        if (aliasHits && aliasHits.length > 0) {
-          const aliasProductIds = [...new Set(aliasHits.map(a => a.product_id))];
-          // Exclude product IDs already found
-          const existingIds = new Set(allRows.filter(r => r.product_id).map(r => r.product_id));
-          const newIds = aliasProductIds.filter(id => !existingIds.has(id));
-
-          if (newIds.length > 0) {
-            const { data: aliasRows } = await supabase
-              .from('prices')
-              .select('product_id, product_name_raw, price, place_name, place_address, latitude, longitude, city')
-              .eq('city', selectedCity)
-              .in('product_id', newIds)
-              .order('price', { ascending: true })
-              .limit(20);
-
-            if (aliasRows) allRows = [...allRows, ...aliasRows];
-          }
-        }
-      }
-
-      // Sort combined results by price
-      allRows.sort((a, b) => (Number(a.price) || 0) - (Number(b.price) || 0));
-
-      if (allRows.length > 0) {
-        const best = allRows[0];
-        const storeName = best.place_name || '?';
-        if (!storeGroups[storeName]) {
-          storeGroups[storeName] = { store: storeName, address: best.place_address || '', latitude: best.latitude, longitude: best.longitude, items: [] };
-        }
-        storeGroups[storeName].items.push({ name: item, price: Number(best.price) || 0 });
+    for (const row of allPrices) {
+      const storeKey = `${(row.place_name || '').trim().toLowerCase()}|${(row.place_address || '').trim().toLowerCase()}`;
+      if (!storeInventory.has(storeKey)) storeInventory.set(storeKey, new Map());
+      const inv = storeInventory.get(storeKey)!;
+      const existing = inv.get(row.product_id);
+      if (!existing || row.price < existing.price) {
+        inv.set(row.product_id, {
+          productId: row.product_id,
+          productName: row.product_name_raw || '',
+          price: Number(row.price) || 0,
+          storeName: row.place_name || '?',
+          storeAddress: row.place_address || '',
+          lat: row.latitude,
+          lng: row.longitude,
+        });
       }
     }
 
-    const grandTotal = Object.values(storeGroups).reduce((sum, g) => sum + g.items.reduce((s, i) => s + i.price, 0), 0);
-    const savings = Math.max(Math.round(grandTotal * 0.25), 0);
+    // 4. Compute distances and filter stores beyond maxDistanceKm
+    const storeDistances = new Map<StoreKey, number>();
+    for (const [storeKey, inv] of storeInventory) {
+      const first = [...inv.values()][0];
+      if (origin && first.lat != null && first.lng != null) {
+        const dist = haversineDistanceKm(origin, { lat: first.lat, lng: first.lng });
+        storeDistances.set(storeKey, dist);
+        if (userLocation && dist > maxDistanceKm) {
+          storeInventory.delete(storeKey);
+        }
+      }
+    }
 
-    setPlanResult({ storeGroups, grandTotal, savings });
+    // 5. For each query, determine which stores can serve it (with best price per store)
+    const itemStoreOptions: Array<{ query: string; options: Map<StoreKey, { productName: string; price: number }> }> = [];
+    for (const { query, productIds } of itemMatches) {
+      if (productIds.length === 0) { notFound.push(query); continue; }
+      const options = new Map<StoreKey, { productName: string; price: number }>();
+      for (const [storeKey, inv] of storeInventory) {
+        let best: { productName: string; price: number } | null = null;
+        for (const pid of productIds) {
+          const entry = inv.get(pid);
+          if (entry && (!best || entry.price < best.price)) {
+            best = { productName: entry.productName, price: entry.price };
+          }
+        }
+        if (best) options.set(storeKey, best);
+      }
+      if (options.size === 0) notFound.push(query);
+      else itemStoreOptions.push({ query, options });
+    }
+
+    if (itemStoreOptions.length === 0) {
+      setPlanResult({ stores: [], notFound, grandTotal: 0, singleStoreTotal: null, singleStoreName: null, savings: 0 });
+      setPlanLoading(false);
+      return;
+    }
+
+    // 6. Compute single-store baseline (store covering most items cheapest)
+    let bestSingleStore: { storeKey: StoreKey; total: number; count: number } | null = null;
+    for (const [storeKey] of storeInventory) {
+      let total = 0;
+      let count = 0;
+      for (const { options } of itemStoreOptions) {
+        const opt = options.get(storeKey);
+        if (opt) { total += opt.price; count++; }
+      }
+      if (count > 0 && (!bestSingleStore || count > bestSingleStore.count || (count === bestSingleStore.count && total < bestSingleStore.total))) {
+        bestSingleStore = { storeKey, total, count };
+      }
+    }
+
+    // 7. Greedy set-cover: pick stores that maximise coverage and minimise cost + travel
+    const TRANSPORT_COST_PER_KM = 2000; // so'm equivalent per km of travel
+    const selectedStores = new Map<StoreKey, Array<{ query: string; productName: string; price: number }>>();
+    const coveredItems = new Set<number>();
+
+    while (coveredItems.size < itemStoreOptions.length && selectedStores.size < planMaxStores) {
+      let bestStore: StoreKey | null = null;
+      let bestScore = -Infinity;
+      let bestItems: Array<{ idx: number; query: string; productName: string; price: number }> = [];
+
+      for (const [storeKey] of storeInventory) {
+        if (selectedStores.has(storeKey)) continue;
+        const items: Array<{ idx: number; query: string; productName: string; price: number }> = [];
+        let totalPrice = 0;
+        for (let i = 0; i < itemStoreOptions.length; i++) {
+          if (coveredItems.has(i)) continue;
+          const opt = itemStoreOptions[i].options.get(storeKey);
+          if (opt) { items.push({ idx: i, query: itemStoreOptions[i].query, ...opt }); totalPrice += opt.price; }
+        }
+        if (items.length === 0) continue;
+        const distKm = storeDistances.get(storeKey) || 0;
+        const score = items.length * 1_000_000 - totalPrice - distKm * TRANSPORT_COST_PER_KM;
+        if (score > bestScore) { bestScore = score; bestStore = storeKey; bestItems = items; }
+      }
+
+      if (!bestStore) break;
+      selectedStores.set(bestStore, bestItems.map(({ query, productName, price }) => ({ query, productName, price })));
+      for (const item of bestItems) coveredItems.add(item.idx);
+    }
+
+    // Mark uncovered items as not found
+    for (let i = 0; i < itemStoreOptions.length; i++) {
+      if (!coveredItems.has(i)) notFound.push(itemStoreOptions[i].query);
+    }
+
+    // 8. Build result
+    const stores = [...selectedStores.entries()].map(([storeKey, items]) => {
+      const first = [...(storeInventory.get(storeKey)?.values() || [])][0];
+      return {
+        name: first?.storeName || '?',
+        address: first?.storeAddress || '',
+        lat: first?.lat || null,
+        lng: first?.lng || null,
+        distanceKm: storeDistances.get(storeKey) ?? null,
+        items,
+        storeTotal: items.reduce((s, i) => s + i.price, 0),
+      };
+    }).sort((a, b) => (a.distanceKm ?? 999) - (b.distanceKm ?? 999));
+
+    const grandTotal = stores.reduce((s, g) => s + g.storeTotal, 0);
+    const singleStoreTotal = bestSingleStore ? bestSingleStore.total : null;
+    const singleStoreName = bestSingleStore ? ([...(storeInventory.get(bestSingleStore.storeKey)?.values() || [])][0]?.storeName || null) : null;
+    const savings = singleStoreTotal != null ? Math.max(singleStoreTotal - grandTotal, 0) : 0;
+
+    setPlanResult({ stores, notFound, grandTotal, singleStoreTotal, singleStoreName, savings });
     setPlanLoading(false);
   };
 
@@ -3063,7 +3200,7 @@ export default function App() {
             <section className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
               <h2 className="text-lg font-bold text-stone-900 mb-1">{t.planTitle}</h2>
               <p className="text-xs text-stone-500 mb-3">{t.planHint}</p>
-              <div className="flex gap-2">
+              <div className="flex gap-2 mb-3">
                 <input
                   type="text"
                   value={planInput}
@@ -3080,6 +3217,18 @@ export default function App() {
                   {planLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
                 </button>
               </div>
+              <div className="flex items-center gap-3">
+                <label className="text-xs text-stone-500 whitespace-nowrap">{t.planMaxStores}:</label>
+                <input
+                  type="range"
+                  min={1}
+                  max={5}
+                  value={planMaxStores}
+                  onChange={(e) => setPlanMaxStores(Number(e.target.value))}
+                  className="flex-1 accent-emerald-600 h-1.5"
+                />
+                <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 rounded-md px-2 py-0.5 min-w-[24px] text-center">{planMaxStores}</span>
+              </div>
             </section>
 
             {planLoading && (
@@ -3089,60 +3238,72 @@ export default function App() {
               </div>
             )}
 
-            {planResult && Object.keys(planResult.storeGroups).length === 0 && !planLoading && (
+            {planResult && planResult.stores.length === 0 && !planLoading && (
               <div className="text-center py-12">
                 <ShoppingCart className="h-10 w-10 text-stone-300 mx-auto mb-3" />
                 <p className="text-sm text-stone-500">{t.planNoData}</p>
               </div>
             )}
 
-            {planResult && Object.keys(planResult.storeGroups).length > 0 && (
+            {planResult && planResult.stores.length > 0 && (
               <section className="space-y-3">
                 <h3 className="text-sm font-bold text-stone-700">{t.planRoute}</h3>
-                {Object.values(planResult.storeGroups).map((group, idx) => {
-                  const storeTotal = group.items.reduce((s, i) => s + i.price, 0);
-                  return (
-                    <div key={idx} className="rounded-xl border border-stone-200 bg-white p-4 shadow-sm">
-                      <div className="flex items-start gap-3 mb-2">
-                        <span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-700">
-                          {idx + 1}
-                        </span>
-                        <div className="flex-1 min-w-0">
-                          <div className="font-semibold text-stone-900 truncate">{group.store}</div>
-                          <div className="text-xs text-stone-400 truncate">{group.address}</div>
-                        </div>
-                      </div>
-                      {group.items.map((item, j) => (
-                        <div key={j} className="flex justify-between text-sm py-1 border-t border-stone-50">
-                          <span className="text-stone-700">{item.name}</span>
-                          <span className="font-medium text-stone-900">{priceFormatter.format(item.price)} {t.planSumLabel}</span>
-                        </div>
-                      ))}
-                      <div className="flex justify-between text-sm font-bold pt-2 border-t border-stone-200 mt-1">
-                        <span>{t.planStoreTotal}</span>
-                        <span>{priceFormatter.format(storeTotal)} {t.planSumLabel}</span>
+                {planResult.stores.map((store, idx) => (
+                  <div key={idx} className="rounded-xl border border-stone-200 bg-white p-4 shadow-sm">
+                    <div className="flex items-start gap-3 mb-2">
+                      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-700">
+                        {idx + 1}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-semibold text-stone-900 truncate">{store.name}</div>
+                        <div className="text-xs text-stone-400 truncate">{store.address}</div>
+                        {store.distanceKm != null && (
+                          <div className="text-xs text-blue-500 mt-0.5">{t.planDistanceAway(store.distanceKm.toFixed(1))}</div>
+                        )}
                       </div>
                     </div>
-                  );
-                })}
+                    {store.items.map((item, j) => (
+                      <div key={j} className="flex justify-between text-sm py-1 border-t border-stone-50">
+                        <span className="text-stone-700">{item.query}</span>
+                        <span className="font-medium text-stone-900">{priceFormatter.format(item.price)} {t.planSumLabel}</span>
+                      </div>
+                    ))}
+                    <div className="flex justify-between text-sm font-bold pt-2 border-t border-stone-200 mt-1">
+                      <span>{t.planStoreTotal}</span>
+                      <span>{priceFormatter.format(store.storeTotal)} {t.planSumLabel}</span>
+                    </div>
+                  </div>
+                ))}
+
+                {planResult.notFound.length > 0 && (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+                    <div className="text-xs font-semibold text-amber-700 mb-1">{t.planNotFound}:</div>
+                    <div className="text-sm text-amber-600">{planResult.notFound.join(', ')}</div>
+                  </div>
+                )}
 
                 <div className="rounded-xl border-2 border-emerald-200 bg-emerald-50 p-4">
                   <div className="flex justify-between text-base font-bold text-emerald-900">
                     <span>{t.planGrandTotal}</span>
                     <span>{priceFormatter.format(planResult.grandTotal)} {t.planSumLabel}</span>
                   </div>
-                  {planResult.savings > 0 && (
-                    <div className="flex justify-between text-sm text-emerald-700 mt-1">
-                      <span>{t.planSavings}</span>
-                      <span>~{priceFormatter.format(planResult.savings)} {t.planSumLabel}</span>
+                  {planResult.savings > 0 && planResult.singleStoreName && (
+                    <div className="mt-1">
+                      <div className="flex justify-between text-sm text-emerald-700">
+                        <span>{t.planSavings}</span>
+                        <span>~{priceFormatter.format(planResult.savings)} {t.planSumLabel}</span>
+                      </div>
+                      <div className="text-xs text-emerald-600 mt-0.5">
+                        {t.planSavingsVs(planResult.singleStoreName)}
+                      </div>
                     </div>
                   )}
                 </div>
 
                 {(() => {
-                  const storesWithCoords = Object.values(planResult.storeGroups).filter(g => g.latitude && g.longitude);
+                  const storesWithCoords = planResult.stores.filter(g => g.lat && g.lng);
                   if (storesWithCoords.length === 0) return null;
-                  const waypoints = storesWithCoords.map(g => `${g.latitude},${g.longitude}`).join('~');
+                  const waypoints = storesWithCoords.map(g => `${g.lat},${g.lng}`).join('~');
                   const mapsUrl = `https://yandex.uz/maps/?rtext=${waypoints}&rtt=auto`;
                   return (
                     <a
