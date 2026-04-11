@@ -84,6 +84,46 @@ const BOT_COPY = {
     btnEditQty: '📦 Miqdor',
     btnEditUnit: '🧮 Birlik',
     btnOpenReader: 'Readerni ochish 🌐',
+    btnMyStats: '📊 Statistikam',
+    btnShopping: '🛒 Savdo reja',
+    btnDistance: '📏 Masofa',
+    btnNotifyMenu: '📢 Xabar',
+    btnScheduledMenu: '📅 Reja',
+    mapsView: '🗺️ Xaritada ko\'rish',
+    mystatsTitle: '📊 Sizning statistikangiz',
+    mystatsReceipts: (n) => `🧾 Skanerlangan cheklar: ${n} ta`,
+    mystatsItems: (n) => `📦 Qo\'shilgan mahsulotlar: ${n} ta`,
+    mystatsStreak: (n) => `🔥 Ketma-ket hafta: ${n} hafta`,
+    mystatsHelped: (n) => `👥 Yordam berilgan odamlar: ${n} ta`,
+    shoppingAsk: 'Bu hafta nima sotib olmoqchisiz?',
+    shoppingAskHint: 'Mahsulotlarni yozing (vergul bilan ajrating):\nMasalan: shakar, guruch, tuxum, sut, non',
+    distanceAsk: 'Qancha masofaga borishga tayyorsiz? (km da yozing, masalan: 3)',
+    distanceInvalid: 'Iltimos, km ni to\'g\'ri kiriting. Masalan: 3',
+    distanceSaved: (km) => `✅ Saqlandi. Maksimal masofa: ${km} km`,
+    notifyStart: '📢 Xabar yuborish\n\nQuyidagilardan birini tanlang:',
+    notifyWeeklyOption: '📊 Haftalik hisobot',
+    notifyBroadcastOption: '✍️ Oddiy xabar',
+    notifyAskMessage: 'Xabar matnini yozing:',
+    notifyAskWhen: 'Qachon yuborish?',
+    notifyNow: '⚡ Hozir',
+    notifySchedule: '📅 Rejalashtirish',
+    notifyNeedMessage: 'Avval xabar matnini kiriting: /notify',
+    notifyAskDate: 'Sana va vaqtni kiriting (masalan: 2026-04-15 09:00):',
+    notifyInvalidDate: 'Sana va vaqt formati noto\'g\'ri. Masalan: 2026-04-15 09:00',
+    notifyScheduled: (ts) => `✅ Rejalashtirildi: ${ts}`,
+    notifySent: (n) => `✅ Xabar yuborildi: ${n} ta foydalanuvchi`,
+    notifyWeeklySent: (n) => `✅ Hisobotlar yuborildi: ${n} ta foydalanuvchi`,
+    scheduledEmpty: '📅 Rejalashtirilgan xabarlar yo\'q',
+    scheduledTitle: '📅 Rejalashtirilgan xabarlar:',
+    scheduledCancel: '❌ Bekor qilish',
+    scheduledCancelled: '✅ Rejalashtirilgan xabar bekor qilindi',
+    routeNoData: 'Topilmadi: bu mahsulotlar uchun tanlangan shaharda narxlar yetarli emas.',
+    routeTitle: '🛒 Sizning xarid rejangiz',
+    routeOptimal: '📍 Optimal marshrut:',
+    routeStoreTotal: (n) => `   Jami: ${n.toLocaleString('en-US')} so'm`,
+    routeGrandTotal: (n) => `💰 Umumiy: ${n.toLocaleString('en-US')} so'm`,
+    routeSavings: (n) => `✅ Tejash: ~${n.toLocaleString('en-US')} so'm (barchasi bir joydan olsangiz)`,
+    routeMaxDistance: (km) => `📏 Maksimal masofa: ${km} km`,
     pendingCard: (item, matchedName, unitLabel) => {
       const unitPrice = item.unit_price || item.price || 0;
       const total = item.price || 0;
@@ -156,6 +196,46 @@ const BOT_COPY = {
     btnEditQty: '📦 Кол-во',
     btnEditUnit: '🧮 За единицу',
     btnOpenReader: 'Открыть Reader 🌐',
+    btnMyStats: '📊 Моя статистика',
+    btnShopping: '🛒 План покупок',
+    btnDistance: '📏 Дистанция',
+    btnNotifyMenu: '📢 Рассылка',
+    btnScheduledMenu: '📅 Заплан.',
+    mapsView: '🗺️ Открыть на карте',
+    mystatsTitle: '📊 Ваша статистика',
+    mystatsReceipts: (n) => `🧾 Сканировано чеков: ${n}`,
+    mystatsItems: (n) => `📦 Добавлено товаров: ${n}`,
+    mystatsStreak: (n) => `🔥 Серия недель: ${n}`,
+    mystatsHelped: (n) => `👥 Помогли людям: ${n}`,
+    shoppingAsk: 'Что вы хотите купить на этой неделе?',
+    shoppingAskHint: 'Напишите товары через запятую:\nНапример: сахар, рис, яйца, молоко, хлеб',
+    distanceAsk: 'На какую максимальную дистанцию вы готовы ехать? (в км, например: 3)',
+    distanceInvalid: 'Пожалуйста, введите корректное число км. Например: 3',
+    distanceSaved: (km) => `✅ Сохранено. Максимальная дистанция: ${km} км`,
+    notifyStart: '📢 Отправка сообщения\n\nВыберите один из вариантов:',
+    notifyWeeklyOption: '📊 Недельный отчет',
+    notifyBroadcastOption: '✍️ Обычное сообщение',
+    notifyAskMessage: 'Введите текст сообщения:',
+    notifyAskWhen: 'Когда отправить?',
+    notifyNow: '⚡ Сейчас',
+    notifySchedule: '📅 Запланировать',
+    notifyNeedMessage: 'Сначала введите текст сообщения: /notify',
+    notifyAskDate: 'Введите дату и время (например: 2026-04-15 09:00):',
+    notifyInvalidDate: 'Неверный формат даты и времени. Пример: 2026-04-15 09:00',
+    notifyScheduled: (ts) => `✅ Запланировано: ${ts}`,
+    notifySent: (n) => `✅ Сообщение отправлено: ${n} пользователям`,
+    notifyWeeklySent: (n) => `✅ Отчеты отправлены: ${n} пользователям`,
+    scheduledEmpty: '📅 Нет запланированных сообщений',
+    scheduledTitle: '📅 Запланированные сообщения:',
+    scheduledCancel: '❌ Отменить',
+    scheduledCancelled: '✅ Запланированное сообщение отменено',
+    routeNoData: 'Недостаточно цен для этих товаров в выбранном городе.',
+    routeTitle: '🛒 Ваш план покупок',
+    routeOptimal: '📍 Оптимальный маршрут:',
+    routeStoreTotal: (n) => `   Итого: ${n.toLocaleString('en-US')} сум`,
+    routeGrandTotal: (n) => `💰 Общая сумма: ${n.toLocaleString('en-US')} сум`,
+    routeSavings: (n) => `✅ Экономия: ~${n.toLocaleString('en-US')} сум`,
+    routeMaxDistance: (km) => `📏 Максимальная дистанция: ${km} км`,
     pendingCard: (item, matchedName, unitLabel) => {
       const unitPrice = item.unit_price || item.price || 0;
       const total = item.price || 0;
@@ -228,6 +308,46 @@ const BOT_COPY = {
     btnEditQty: '📦 Qty',
     btnEditUnit: '🧮 Unit',
     btnOpenReader: 'Open Reader 🌐',
+    btnMyStats: '📊 My stats',
+    btnShopping: '🛒 Shopping plan',
+    btnDistance: '📏 Distance',
+    btnNotifyMenu: '📢 Notify',
+    btnScheduledMenu: '📅 Scheduled',
+    mapsView: '🗺️ View on map',
+    mystatsTitle: '📊 Your statistics',
+    mystatsReceipts: (n) => `🧾 Receipts scanned: ${n}`,
+    mystatsItems: (n) => `📦 Items contributed: ${n}`,
+    mystatsStreak: (n) => `🔥 Weekly streak: ${n}`,
+    mystatsHelped: (n) => `👥 People helped: ${n}`,
+    shoppingAsk: 'What do you want to buy this week?',
+    shoppingAskHint: 'Write products separated by commas:\nExample: sugar, rice, eggs, milk, bread',
+    distanceAsk: 'What maximum distance are you willing to travel? (km, for example: 3)',
+    distanceInvalid: 'Please enter a valid km value. Example: 3',
+    distanceSaved: (km) => `✅ Saved. Maximum distance: ${km} km`,
+    notifyStart: '📢 Send notification\n\nChoose one option:',
+    notifyWeeklyOption: '📊 Weekly report',
+    notifyBroadcastOption: '✍️ Broadcast message',
+    notifyAskMessage: 'Type the message text:',
+    notifyAskWhen: 'When should it be sent?',
+    notifyNow: '⚡ Now',
+    notifySchedule: '📅 Schedule',
+    notifyNeedMessage: 'Please enter message text first: /notify',
+    notifyAskDate: 'Enter date and time (for example: 2026-04-15 09:00):',
+    notifyInvalidDate: 'Invalid date/time format. Example: 2026-04-15 09:00',
+    notifyScheduled: (ts) => `✅ Scheduled: ${ts}`,
+    notifySent: (n) => `✅ Message sent to ${n} users`,
+    notifyWeeklySent: (n) => `✅ Weekly reports sent to ${n} users`,
+    scheduledEmpty: '📅 No scheduled notifications',
+    scheduledTitle: '📅 Scheduled notifications:',
+    scheduledCancel: '❌ Cancel',
+    scheduledCancelled: '✅ Scheduled notification cancelled',
+    routeNoData: 'Not enough prices found in the selected city for these items.',
+    routeTitle: '🛒 Your shopping plan',
+    routeOptimal: '📍 Optimal route:',
+    routeStoreTotal: (n) => `   Total: ${n.toLocaleString('en-US')} sum`,
+    routeGrandTotal: (n) => `💰 Grand total: ${n.toLocaleString('en-US')} sum`,
+    routeSavings: (n) => `✅ Estimated savings: ~${n.toLocaleString('en-US')} sum`,
+    routeMaxDistance: (km) => `📏 Max distance: ${km} km`,
     pendingCard: (item, matchedName, unitLabel) => {
       const unitPrice = item.unit_price || item.price || 0;
       const total = item.price || 0;
@@ -369,11 +489,20 @@ async function sendMenu(chatId, lang, telegramId = null) {
       { text: BOT_COPY[lang].btnFind, web_app: { url: `${miniAppUrl}?mode=find&lang=${lang}` } },
       { text: BOT_COPY[lang].btnReport, web_app: { url: `${miniAppUrl}?mode=report&lang=${lang}` } },
     ],
+    [
+      { text: BOT_COPY[lang].btnMyStats, callback_data: 'menu_mystats' },
+      { text: BOT_COPY[lang].btnShopping, callback_data: 'menu_savdo' },
+      { text: BOT_COPY[lang].btnDistance, callback_data: 'menu_masofa' },
+    ],
   ];
 
   if (isAdminUser) {
     inline_keyboard.push([
       { text: BOT_COPY[lang].btnModerate, web_app: { url: `${miniAppUrl}?mode=moderate&lang=${lang}` } },
+    ]);
+    inline_keyboard.push([
+      { text: BOT_COPY[lang].btnNotifyMenu, callback_data: 'menu_notify' },
+      { text: BOT_COPY[lang].btnScheduledMenu, callback_data: 'menu_scheduled' },
     ]);
   }
 
@@ -608,13 +737,14 @@ async function calculateOptimalRoute(items, userCity) {
 }
 
 function formatRouteMessage(routeData, maxDistanceKm, lang) {
+  const tr = BOT_COPY[lang] || BOT_COPY.uz;
   const stores = Object.values(routeData.storeGroups || {});
   if (stores.length === 0) {
-    return applyTagline('Topilmadi: bu mahsulotlar uchun tanlangan shaharda narxlar yetarli emas.', lang);
+    return applyTagline(tr.routeNoData, lang);
   }
 
   let total = 0;
-  let lines = ['🛒 Sizning xarid rejangiz', '', '📍 Optimal marshrut:', ''];
+  let lines = [tr.routeTitle, '', tr.routeOptimal, ''];
   stores.forEach((store, index) => {
     const storeTotal = store.items.reduce((sum, item) => sum + (Number(item.price) || 0), 0);
     total += storeTotal;
@@ -622,16 +752,16 @@ function formatRouteMessage(routeData, maxDistanceKm, lang) {
     for (const item of store.items) {
       lines.push(`   • ${item.name} — ${Number(item.price || 0).toLocaleString('en-US')} so'm`);
     }
-    lines.push(`   Jami: ${storeTotal.toLocaleString('en-US')} so'm`);
+    lines.push(tr.routeStoreTotal(storeTotal));
     lines.push('');
   });
 
   const estimatedSingleStore = Math.round(total * 1.25);
   const savings = Math.max(estimatedSingleStore - total, 0);
-  lines.push(`💰 Umumiy: ${total.toLocaleString('en-US')} so'm`);
-  lines.push(`✅ Tejash: ~${savings.toLocaleString('en-US')} so'm (barchasi bir joydan olsangiz)`);
+  lines.push(tr.routeGrandTotal(total));
+  lines.push(tr.routeSavings(savings));
   lines.push('');
-  lines.push(`📏 Maksimal masofa: ${maxDistanceKm} km`);
+  lines.push(tr.routeMaxDistance(maxDistanceKm));
 
   return applyTagline(lines.join('\n'), lang);
 }
@@ -819,6 +949,7 @@ async function handleMessage(message) {
   const command = getCommand(text);
   const telegramId = message?.from?.id?.toString();
   const lang = getUserLang(message?.from?.language_code);
+  const tr = BOT_COPY[lang] || BOT_COPY.uz;
 
   if (!chatId || !telegramId) {
     return;
@@ -857,9 +988,9 @@ async function handleMessage(message) {
       const waypoints = stores.map(s => `${s.latitude},${s.longitude}`).join('~');
       const mapsUrl = `https://yandex.uz/maps/?rtext=${waypoints}&rtt=auto`;
       await sendTelegramMessage(chatId, {
-        text: '🗺️ Xaritada ko\'rish',
+        text: tr.mapsView,
         reply_markup: {
-          inline_keyboard: [[{ text: '🗺️ Xaritada ko\'rish', url: mapsUrl }]],
+          inline_keyboard: [[{ text: tr.mapsView, url: mapsUrl }]],
         },
       });
     }
@@ -869,12 +1000,12 @@ async function handleMessage(message) {
   if (!command && pendingDistanceUsers.has(telegramId)) {
     const km = Number.parseInt(normalizedText, 10);
     if (!Number.isFinite(km) || km <= 0 || km > 100) {
-      await sendTelegramMessage(chatId, { text: 'Iltimos, km ni to\'g\'ri kiriting. Masalan: 3' });
+      await sendTelegramMessage(chatId, { text: tr.distanceInvalid });
       return;
     }
     pendingDistanceUsers.delete(telegramId);
     await supabase.from('user_profiles').update({ max_distance_km: km, last_seen: new Date().toISOString() }).eq('telegram_id', telegramId);
-    await sendTelegramMessage(chatId, { text: `✅ Saqlandi. Maksimal masofa: ${km} km` });
+    await sendTelegramMessage(chatId, { text: tr.distanceSaved(km) });
     return;
   }
 
@@ -883,11 +1014,11 @@ async function handleMessage(message) {
     if (draft.step === 'await_message') {
       adminNotifyDrafts.set(telegramId, { step: 'await_schedule_choice', message: text.trim() });
       await sendTelegramMessage(chatId, {
-        text: 'Qachon yuborish?',
+        text: tr.notifyAskWhen,
         reply_markup: {
           inline_keyboard: [[
-            { text: '⚡ Hozir', callback_data: 'notify_send_now' },
-            { text: '📅 Rejalashtirish', callback_data: 'notify_schedule' },
+            { text: tr.notifyNow, callback_data: 'notify_send_now' },
+            { text: tr.notifySchedule, callback_data: 'notify_schedule' },
           ]],
         },
       });
@@ -897,7 +1028,7 @@ async function handleMessage(message) {
     if (draft.step === 'await_schedule_time') {
       const parsed = parseDateTimeInput(text);
       if (!parsed) {
-        await sendTelegramMessage(chatId, { text: 'Sana va vaqt formati noto\'g\'ri. Masalan: 2026-04-15 09:00' });
+        await sendTelegramMessage(chatId, { text: tr.notifyInvalidDate });
         return;
       }
 
@@ -909,7 +1040,7 @@ async function handleMessage(message) {
       });
 
       adminNotifyDrafts.delete(telegramId);
-      await sendTelegramMessage(chatId, { text: `✅ Rejalashtirildi: ${parsed.toISOString()}` });
+      await sendTelegramMessage(chatId, { text: tr.notifyScheduled(parsed.toISOString()) });
       return;
     }
   }
@@ -941,11 +1072,11 @@ async function handleMessage(message) {
       .maybeSingle();
 
     const messageText =
-      '📊 Sizning statistikangiz\n\n' +
-      `🧾 Skanerlangan cheklar: ${stats?.total_receipts_scanned || 0} ta\n` +
-      `📦 Qo'shilgan mahsulotlar: ${stats?.total_items_contributed || 0} ta\n` +
-      `🔥 Ketma-ket hafta: ${stats?.current_streak_weeks || 0} hafta\n` +
-      `👥 Yordam berilgan odamlar: ${stats?.total_people_helped || 0} ta`;
+      `${tr.mystatsTitle}\n\n` +
+      `${tr.mystatsReceipts(stats?.total_receipts_scanned || 0)}\n` +
+      `${tr.mystatsItems(stats?.total_items_contributed || 0)}\n` +
+      `${tr.mystatsStreak(stats?.current_streak_weeks || 0)}\n` +
+      `${tr.mystatsHelped(stats?.total_people_helped || 0)}`;
 
     await sendTelegramMessage(chatId, { text: applyTagline(messageText, lang) });
     return;
@@ -956,10 +1087,7 @@ async function handleMessage(message) {
     if (!itemsText) {
       pendingShoppingUsers.add(telegramId);
       await sendTelegramMessage(chatId, {
-        text:
-          'Bu hafta nima sotib olmoqchisiz?\n\n' +
-          'Mahsulotlarni yozing (vergul bilan ajrating):\n' +
-          'Masalan: shakar, guruch, tuxum, sut, non',
+        text: `${tr.shoppingAsk}\n\n${tr.shoppingAskHint}`,
       });
       return;
     }
@@ -980,9 +1108,9 @@ async function handleMessage(message) {
       const waypoints = stores.map(s => `${s.latitude},${s.longitude}`).join('~');
       const mapsUrl = `https://yandex.uz/maps/?rtext=${waypoints}&rtt=auto`;
       await sendTelegramMessage(chatId, {
-        text: '🗺️ Xaritada ko\'rish',
+        text: tr.mapsView,
         reply_markup: {
-          inline_keyboard: [[{ text: '🗺️ Xaritada ko\'rish', url: mapsUrl }]],
+          inline_keyboard: [[{ text: tr.mapsView, url: mapsUrl }]],
         },
       });
     }
@@ -991,7 +1119,7 @@ async function handleMessage(message) {
 
   if (command === '/masofa') {
     pendingDistanceUsers.add(telegramId);
-    await sendTelegramMessage(chatId, { text: 'Qancha masofaga borishga tayyorsiz? (km da yozing, masalan: 3)' });
+    await sendTelegramMessage(chatId, { text: tr.distanceAsk });
     return;
   }
 
@@ -1030,11 +1158,11 @@ async function handleMessage(message) {
     if (command === '/notify') {
       adminNotifyDrafts.delete(telegramId);
       await sendTelegramMessage(chatId, {
-        text: '📢 Xabar yuborish\n\nQuyidagilardan birini tanlang:',
+        text: tr.notifyStart,
         reply_markup: {
           inline_keyboard: [[
-            { text: '📊 Haftalik hisobot', callback_data: 'notify_weekly' },
-            { text: '✍️ Oddiy xabar', callback_data: 'notify_broadcast' },
+            { text: tr.notifyWeeklyOption, callback_data: 'notify_weekly' },
+            { text: tr.notifyBroadcastOption, callback_data: 'notify_broadcast' },
           ]],
         },
       });
@@ -1050,18 +1178,18 @@ async function handleMessage(message) {
         .limit(20);
 
       if (!rows || rows.length === 0) {
-        await sendTelegramMessage(chatId, { text: '📅 Rejalashtirilgan xabarlar yo\'q' });
+        await sendTelegramMessage(chatId, { text: tr.scheduledEmpty });
         return;
       }
 
-      await sendTelegramMessage(chatId, { text: '📅 Rejalashtirilgan xabarlar:' });
+      await sendTelegramMessage(chatId, { text: tr.scheduledTitle });
       for (let index = 0; index < rows.length; index += 1) {
         const row = rows[index];
         const preview = String(row.message || '').slice(0, 120);
         await sendTelegramMessage(chatId, {
           text: `${index + 1}. ${row.scheduled_for}\n"${preview}"`,
           reply_markup: {
-            inline_keyboard: [[{ text: '❌ Bekor qilish', callback_data: `cancel_sched_${row.id}` }]],
+            inline_keyboard: [[{ text: tr.scheduledCancel, callback_data: `cancel_sched_${row.id}` }]],
           },
         });
       }
@@ -1329,6 +1457,9 @@ async function handleCallback(callbackQuery) {
     await upsertUserProfile(telegramId, callbackQuery?.from, 'Tashkent');
   }
 
+  const lang = getUserLang(callbackQuery?.from?.language_code);
+  const tr = BOT_COPY[lang] || BOT_COPY.uz;
+
   if (data.startsWith('lang:')) {
     const lang = data.split(':')[1];
     if (lang === 'uz' || lang === 'ru' || lang === 'en') {
@@ -1337,51 +1468,122 @@ async function handleCallback(callbackQuery) {
     return;
   }
 
+  if (data === 'menu_mystats') {
+    const { data: stats } = await supabase
+      .from('user_stats')
+      .select('*')
+      .eq('telegram_id', telegramId)
+      .maybeSingle();
+
+    const messageText =
+      `${tr.mystatsTitle}\n\n` +
+      `${tr.mystatsReceipts(stats?.total_receipts_scanned || 0)}\n` +
+      `${tr.mystatsItems(stats?.total_items_contributed || 0)}\n` +
+      `${tr.mystatsStreak(stats?.current_streak_weeks || 0)}\n` +
+      `${tr.mystatsHelped(stats?.total_people_helped || 0)}`;
+    await sendTelegramMessage(chatId, { text: applyTagline(messageText, lang) });
+    return;
+  }
+
+  if (data === 'menu_savdo') {
+    pendingShoppingUsers.add(telegramId);
+    await sendTelegramMessage(chatId, { text: `${tr.shoppingAsk}\n\n${tr.shoppingAskHint}` });
+    return;
+  }
+
+  if (data === 'menu_masofa') {
+    pendingDistanceUsers.add(telegramId);
+    await sendTelegramMessage(chatId, { text: tr.distanceAsk });
+    return;
+  }
+
   if (!telegramId || !(await isAdmin(telegramId))) {
     return;
   }
 
-  const adminLang = getUserLang(callbackQuery?.from?.language_code);
+  const adminLang = lang;
+  const adminTr = BOT_COPY[adminLang] || BOT_COPY.uz;
+
+  if (data === 'menu_notify') {
+    adminNotifyDrafts.delete(telegramId);
+    await sendTelegramMessage(chatId, {
+      text: adminTr.notifyStart,
+      reply_markup: {
+        inline_keyboard: [[
+          { text: adminTr.notifyWeeklyOption, callback_data: 'notify_weekly' },
+          { text: adminTr.notifyBroadcastOption, callback_data: 'notify_broadcast' },
+        ]],
+      },
+    });
+    return;
+  }
+
+  if (data === 'menu_scheduled') {
+    const { data: rows } = await supabase
+      .from('scheduled_notifications')
+      .select('id, message, scheduled_for, status')
+      .eq('status', 'pending')
+      .order('scheduled_for', { ascending: true })
+      .limit(20);
+
+    if (!rows || rows.length === 0) {
+      await sendTelegramMessage(chatId, { text: adminTr.scheduledEmpty });
+      return;
+    }
+
+    await sendTelegramMessage(chatId, { text: adminTr.scheduledTitle });
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index];
+      const preview = String(row.message || '').slice(0, 120);
+      await sendTelegramMessage(chatId, {
+        text: `${index + 1}. ${row.scheduled_for}\n"${preview}"`,
+        reply_markup: {
+          inline_keyboard: [[{ text: adminTr.scheduledCancel, callback_data: `cancel_sched_${row.id}` }]],
+        },
+      });
+    }
+    return;
+  }
 
   if (data === 'notify_weekly') {
     const result = await sendWeeklyReports();
-    await sendTelegramMessage(chatId, { text: `✅ Hisobotlar yuborildi: ${result.sentCount || 0} ta foydalanuvchi` });
+    await sendTelegramMessage(chatId, { text: adminTr.notifyWeeklySent(result.sentCount || 0) });
     return;
   }
 
   if (data === 'notify_broadcast') {
     adminNotifyDrafts.set(telegramId, { step: 'await_message', message: '' });
-    await sendTelegramMessage(chatId, { text: 'Xabar matnini yozing:' });
+    await sendTelegramMessage(chatId, { text: adminTr.notifyAskMessage });
     return;
   }
 
   if (data === 'notify_send_now') {
     const draft = adminNotifyDrafts.get(telegramId);
     if (!draft?.message) {
-      await sendTelegramMessage(chatId, { text: 'Avval xabar matnini kiriting: /notify' });
+      await sendTelegramMessage(chatId, { text: adminTr.notifyNeedMessage });
       return;
     }
     const result = await sendBroadcast(draft.message);
     adminNotifyDrafts.delete(telegramId);
-    await sendTelegramMessage(chatId, { text: `✅ Xabar yuborildi: ${result.sentCount || 0} ta foydalanuvchi` });
+    await sendTelegramMessage(chatId, { text: adminTr.notifySent(result.sentCount || 0) });
     return;
   }
 
   if (data === 'notify_schedule') {
     const draft = adminNotifyDrafts.get(telegramId);
     if (!draft?.message) {
-      await sendTelegramMessage(chatId, { text: 'Avval xabar matnini kiriting: /notify' });
+      await sendTelegramMessage(chatId, { text: adminTr.notifyNeedMessage });
       return;
     }
     adminNotifyDrafts.set(telegramId, { step: 'await_schedule_time', message: draft.message });
-    await sendTelegramMessage(chatId, { text: 'Sana va vaqtni kiriting (masalan: 2026-04-15 09:00):' });
+    await sendTelegramMessage(chatId, { text: adminTr.notifyAskDate });
     return;
   }
 
   if (data.startsWith('cancel_sched_')) {
     const id = data.replace('cancel_sched_', '');
     await supabase.from('scheduled_notifications').update({ status: 'cancelled' }).eq('id', id);
-    await sendTelegramMessage(chatId, { text: '✅ Rejalashtirilgan xabar bekor qilindi' });
+    await sendTelegramMessage(chatId, { text: adminTr.scheduledCancelled });
     return;
   }
 
