@@ -1,4 +1,4 @@
-import { handler } from '../netlify/functions/webhook.js';
+import { handler } from '../vercel/functions/webhook.js';
 
 export default async function webhook(req, res) {
   const queryStringParameters = req.query || {};

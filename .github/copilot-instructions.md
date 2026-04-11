@@ -3,14 +3,14 @@
 ## Architecture snapshot
 - This repo has two runtime surfaces:
   - Frontend Mini App: React + Vite in `src/App.tsx`, loaded inside Telegram WebApp (`index.html`, `src/main.tsx`).
-  - Bot backend: Netlify Function at `netlify/functions/webhook.js` (Telegram webhook entrypoint).
+  - Bot backend: Vercel serverless handler source at `vercel/functions/webhook.js`, exposed via `api/webhook.js`.
 - Data store is Supabase; frontend reads/writes with `@supabase/supabase-js`, backend moderates and writes queue/admin flows.
 - Moderation-first model: user submissions go to `pending_prices`; admin approves into `prices`.
 
 ## Key files to understand first
-- `netlify/functions/webhook.js`: Telegram command handling, language selection, moderation callbacks, receipt scraping, admin flows.
+- `vercel/functions/webhook.js`: Telegram command handling, language selection, moderation callbacks, receipt scraping, admin flows.
 - `src/App.tsx`: Find/report UI, trilingual text, map behavior, manual submissions to `pending_prices`.
-- `netlify.toml`: Netlify build + function directory wiring.
+- `vercel.json`: Vercel routes and cron wiring.
 - `.env.example`: required runtime variables.
 
 ## Required environment variables
@@ -23,7 +23,7 @@
 - Type-check: `npm run lint` (uses `tsc --noEmit`)
 - Frontend local dev only: `npm run dev` (Vite)
 - Production build: `npm run build`
-- Netlify function behavior should be validated via deployed function URL (not only local Vite).
+- Vercel function behavior should be validated via deployed function URL (not only local Vite).
 
 ## Project-specific coding patterns
 - Webhook must always return HTTP 200 for Telegram updates; handle errors internally and reply with bot messages.
@@ -35,7 +35,7 @@
 ## External integration constraints
 - Telegram Mini App script is required in `index.html`; `Telegram.WebApp.ready()` and `expand()` are called in `src/main.tsx`.
 - Leaflet map is used in both find and report flows; map overlays must not block pointer events.
-- `ofd.soliq.uz` may timeout from Netlify egress; diagnostics endpoint exists at `/.netlify/functions/webhook?diag=1`.
+- `ofd.soliq.uz` may timeout from serverless egress; diagnostics endpoint exists at `/api/webhook?diag=1`.
 
 ## Safe change guidance
 - Prefer minimal, targeted edits in existing files; avoid introducing new backend frameworks.
