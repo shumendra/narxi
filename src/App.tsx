@@ -1171,76 +1171,33 @@ export default function App() {
     try {
       const text = await file.text();
       const payload = JSON.parse(text);
-      const aliasEntries = payload.aliases || payload.products || payload;
-      if (!Array.isArray(aliasEntries)) {
+      const products = payload.aliases || payload.products || payload;
+      if (!Array.isArray(products)) {
         window.Telegram?.WebApp?.showAlert('Invalid format: expected an array');
         return;
       }
 
-      let insertedCount = 0;
-      let updatedCanonical = 0;
-      let deletedCount = 0;
+      const response = await fetch('/api/import-aliases', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          admin_id: telegramUserId,
+          products,
+          deleted_product_ids: payload.deleted_product_ids,
+        }),
+      });
 
-      // Delete products listed in deleted_product_ids
-      const deletedIds: string[] = Array.isArray(payload.deleted_product_ids) ? payload.deleted_product_ids : [];
-      if (deletedIds.length > 0) {
-        // Delete aliases first (cascade should handle it, but be safe)
-        await supabase.from('product_aliases').delete().in('product_id', deletedIds);
-        // Delete prices referencing these products
-        await supabase.from('prices').delete().in('product_id', deletedIds);
-        await supabase.from('pending_prices').delete().in('product_id', deletedIds);
-        // Delete the products themselves
-        const { error: delErr } = await supabase.from('products').delete().in('id', deletedIds);
-        if (!delErr) deletedCount = deletedIds.length;
+      const result = await response.json();
+      if (!response.ok || !result.ok) {
+        const errMsg = result.error || 'Import failed';
+        const details = result.errors?.length ? `\n${result.errors.map((e: { error: string }) => e.error).join(', ')}` : '';
+        window.Telegram?.WebApp?.showAlert(`${errMsg}${details}`);
+        return;
       }
 
-      for (const entry of aliasEntries) {
-        const productId = String(entry.product_id || '').trim();
-        if (!productId) continue;
-
-        // Update canonical names, category, unit if provided
-        const updates: Record<string, string> = {};
-        if (entry.canonical && typeof entry.canonical === 'object') {
-          if (entry.canonical.name_uz) updates.name_uz = String(entry.canonical.name_uz).trim();
-          if (entry.canonical.name_ru) updates.name_ru = String(entry.canonical.name_ru).trim();
-          if (entry.canonical.name_en) updates.name_en = String(entry.canonical.name_en).trim();
-        }
-        if (entry.category) updates.category = String(entry.category).trim();
-        if (entry.unit) updates.unit = String(entry.unit).trim();
-
-        if (Object.keys(updates).length > 0) {
-          const { data: existing } = await supabase.from('products').select('name_uz,name_ru,name_en').eq('id', productId).maybeSingle();
-          if (existing) {
-            const merged = { name_uz: updates.name_uz || existing.name_uz || '', name_ru: updates.name_ru || existing.name_ru || '', name_en: updates.name_en || existing.name_en || '' };
-            updates.search_text = [merged.name_uz, merged.name_ru, merged.name_en].filter(Boolean).join(' ');
-          }
-          await supabase.from('products').update(updates).eq('id', productId);
-          updatedCanonical++;
-        }
-
-        // Upsert aliases
-        const names = Array.isArray(entry.names) ? entry.names : [];
-        for (const alias of names) {
-          const aliasText = String(alias.alias_text || '').trim();
-          if (!aliasText) continue;
-          const language = String(alias.language || 'unknown');
-          const storeName = alias.store_name ? String(alias.store_name).trim() : null;
-
-          let q = supabase.from('product_aliases').select('id,times_seen').eq('product_id', productId).ilike('alias_text', aliasText);
-          if (storeName) q = q.eq('store_name', storeName);
-          else q = q.is('store_name', null);
-          const { data: existing } = await q.maybeSingle();
-
-          if (existing) {
-            await supabase.from('product_aliases').update({ times_seen: (existing.times_seen || 1) + 1, language }).eq('id', existing.id);
-          } else {
-            await supabase.from('product_aliases').insert({ product_id: productId, alias_text: aliasText, language, store_name: storeName, times_seen: 1 });
-          }
-          insertedCount++;
-        }
-      }
-
-      window.Telegram?.WebApp?.showAlert(`Done: ${updatedCanonical} updated, ${insertedCount} aliases, ${deletedCount} deleted`);
+      window.Telegram?.WebApp?.showAlert(
+        `Done: ${result.canonical_updated || 0} updated, ${(result.aliases_inserted || 0) + (result.aliases_updated || 0)} aliases, ${result.products_deleted || 0} deleted`
+      );
       await fetchProducts();
       if (moderationSection === 'products') await fetchModerationProducts();
     } catch (e) {
