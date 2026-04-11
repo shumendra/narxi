@@ -1179,26 +1179,43 @@ export default function App() {
 
       let insertedCount = 0;
       let updatedCanonical = 0;
+      let deletedCount = 0;
+
+      // Delete products listed in deleted_product_ids
+      const deletedIds: string[] = Array.isArray(payload.deleted_product_ids) ? payload.deleted_product_ids : [];
+      if (deletedIds.length > 0) {
+        // Delete aliases first (cascade should handle it, but be safe)
+        await supabase.from('product_aliases').delete().in('product_id', deletedIds);
+        // Delete prices referencing these products
+        await supabase.from('prices').delete().in('product_id', deletedIds);
+        await supabase.from('pending_prices').delete().in('product_id', deletedIds);
+        // Delete the products themselves
+        const { error: delErr } = await supabase.from('products').delete().in('id', deletedIds);
+        if (!delErr) deletedCount = deletedIds.length;
+      }
 
       for (const entry of aliasEntries) {
         const productId = String(entry.product_id || '').trim();
         if (!productId) continue;
 
-        // Update canonical names if provided
+        // Update canonical names, category, unit if provided
+        const updates: Record<string, string> = {};
         if (entry.canonical && typeof entry.canonical === 'object') {
-          const updates: Record<string, string> = {};
           if (entry.canonical.name_uz) updates.name_uz = String(entry.canonical.name_uz).trim();
           if (entry.canonical.name_ru) updates.name_ru = String(entry.canonical.name_ru).trim();
           if (entry.canonical.name_en) updates.name_en = String(entry.canonical.name_en).trim();
-          if (Object.keys(updates).length > 0) {
-            const { data: existing } = await supabase.from('products').select('name_uz,name_ru,name_en').eq('id', productId).maybeSingle();
-            if (existing) {
-              const merged = { name_uz: updates.name_uz || existing.name_uz || '', name_ru: updates.name_ru || existing.name_ru || '', name_en: updates.name_en || existing.name_en || '' };
-              (updates as Record<string, string>).search_text = [merged.name_uz, merged.name_ru, merged.name_en].filter(Boolean).join(' ');
-            }
-            await supabase.from('products').update(updates).eq('id', productId);
-            updatedCanonical++;
+        }
+        if (entry.category) updates.category = String(entry.category).trim();
+        if (entry.unit) updates.unit = String(entry.unit).trim();
+
+        if (Object.keys(updates).length > 0) {
+          const { data: existing } = await supabase.from('products').select('name_uz,name_ru,name_en').eq('id', productId).maybeSingle();
+          if (existing) {
+            const merged = { name_uz: updates.name_uz || existing.name_uz || '', name_ru: updates.name_ru || existing.name_ru || '', name_en: updates.name_en || existing.name_en || '' };
+            updates.search_text = [merged.name_uz, merged.name_ru, merged.name_en].filter(Boolean).join(' ');
           }
+          await supabase.from('products').update(updates).eq('id', productId);
+          updatedCanonical++;
         }
 
         // Upsert aliases
@@ -1223,7 +1240,7 @@ export default function App() {
         }
       }
 
-      window.Telegram?.WebApp?.showAlert(`Done: ${updatedCanonical} canonical updated, ${insertedCount} aliases processed`);
+      window.Telegram?.WebApp?.showAlert(`Done: ${updatedCanonical} updated, ${insertedCount} aliases, ${deletedCount} deleted`);
       await fetchProducts();
       if (moderationSection === 'products') await fetchModerationProducts();
     } catch (e) {

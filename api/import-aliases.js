@@ -20,19 +20,19 @@ function send(res, status, body) {
  * Body:
  * {
  *   admin_id: "<telegram_id>",
- *   aliases: [
+ *   products: [
  *     {
  *       product_id: "<uuid>",
  *       canonical: { name_uz?: string, name_ru?: string, name_en?: string },
+ *       category?: string,
+ *       unit?: string,
  *       names: [
  *         { alias_text: string, language: "uz"|"ru"|"en"|"unknown", store_name?: string }
  *       ]
  *     }
- *   ]
+ *   ],
+ *   deleted_product_ids?: ["<uuid>", ...]
  * }
- *
- * - canonical: if provided, updates products.name_uz/ru/en and rebuilds search_text.
- * - names: each entry is upserted into product_aliases (increment times_seen if exists).
  */
 export default async function handler(req, res) {
   if (!supabase) return send(res, 500, { ok: false, error: 'SUPABASE_NOT_CONFIGURED' });
@@ -45,15 +45,30 @@ export default async function handler(req, res) {
     return send(res, 403, { ok: false, error: 'FORBIDDEN' });
   }
 
-  const aliasEntries = body.aliases;
-  if (!Array.isArray(aliasEntries) || aliasEntries.length === 0) {
-    return send(res, 400, { ok: false, error: 'ALIASES_ARRAY_REQUIRED' });
+  const aliasEntries = body.products || body.aliases || [];
+  if (!Array.isArray(aliasEntries)) {
+    return send(res, 400, { ok: false, error: 'PRODUCTS_ARRAY_REQUIRED' });
   }
 
   let updated = 0;
   let inserted = 0;
   let canonicalUpdated = 0;
+  let deletedCount = 0;
   const errors = [];
+
+  // Delete products if deleted_product_ids provided
+  const deletedIds = Array.isArray(body.deleted_product_ids) ? body.deleted_product_ids.map(id => String(id).trim()).filter(Boolean) : [];
+  if (deletedIds.length > 0) {
+    await supabase.from('product_aliases').delete().in('product_id', deletedIds);
+    await supabase.from('prices').delete().in('product_id', deletedIds);
+    await supabase.from('pending_prices').delete().in('product_id', deletedIds);
+    const { error: delErr } = await supabase.from('products').delete().in('id', deletedIds);
+    if (delErr) {
+      errors.push({ error: delErr.message, phase: 'delete_products' });
+    } else {
+      deletedCount = deletedIds.length;
+    }
+  }
 
   for (const entry of aliasEntries) {
     const productId = String(entry.product_id || '').trim();
@@ -62,43 +77,42 @@ export default async function handler(req, res) {
       continue;
     }
 
-    // Update canonical names if provided
+    // Update canonical names, category, unit if provided
+    const updates = {};
     if (entry.canonical && typeof entry.canonical === 'object') {
-      const updates = {};
       if (entry.canonical.name_uz) updates.name_uz = String(entry.canonical.name_uz).trim();
       if (entry.canonical.name_ru) updates.name_ru = String(entry.canonical.name_ru).trim();
       if (entry.canonical.name_en) updates.name_en = String(entry.canonical.name_en).trim();
+    }
+    if (entry.category) updates.category = String(entry.category).trim();
+    if (entry.unit) updates.unit = String(entry.unit).trim();
 
-      if (Object.keys(updates).length > 0) {
-        // Rebuild search_text from canonical names
-        const allNames = [updates.name_uz, updates.name_ru, updates.name_en].filter(Boolean);
+    if (Object.keys(updates).length > 0) {
+      // Rebuild search_text from canonical names
+      const { data: existing } = await supabase
+        .from('products')
+        .select('name_uz, name_ru, name_en')
+        .eq('id', productId)
+        .maybeSingle();
 
-        // Also fetch existing names to fill in gaps
-        const { data: existing } = await supabase
-          .from('products')
-          .select('name_uz, name_ru, name_en')
-          .eq('id', productId)
-          .maybeSingle();
+      if (existing) {
+        const merged = {
+          name_uz: updates.name_uz || existing.name_uz || '',
+          name_ru: updates.name_ru || existing.name_ru || '',
+          name_en: updates.name_en || existing.name_en || '',
+        };
+        updates.search_text = [merged.name_uz, merged.name_ru, merged.name_en].filter(Boolean).join(' ');
+      }
 
-        if (existing) {
-          const merged = {
-            name_uz: updates.name_uz || existing.name_uz || '',
-            name_ru: updates.name_ru || existing.name_ru || '',
-            name_en: updates.name_en || existing.name_en || '',
-          };
-          updates.search_text = [merged.name_uz, merged.name_ru, merged.name_en].filter(Boolean).join(' ');
-        }
+      const { error: uErr } = await supabase
+        .from('products')
+        .update(updates)
+        .eq('id', productId);
 
-        const { error: uErr } = await supabase
-          .from('products')
-          .update(updates)
-          .eq('id', productId);
-
-        if (uErr) {
-          errors.push({ product_id: productId, error: uErr.message, phase: 'canonical' });
-        } else {
-          canonicalUpdated++;
-        }
+      if (uErr) {
+        errors.push({ product_id: productId, error: uErr.message, phase: 'canonical' });
+      } else {
+        canonicalUpdated++;
       }
     }
 
@@ -156,6 +170,7 @@ export default async function handler(req, res) {
     canonical_updated: canonicalUpdated,
     aliases_inserted: inserted,
     aliases_updated: updated,
+    products_deleted: deletedCount,
     errors: errors.length > 0 ? errors : undefined,
   });
 }

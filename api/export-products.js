@@ -34,7 +34,7 @@ export default async function handler(req, res) {
 
   const { data: products, error: pErr } = await supabase
     .from('products')
-    .select('id, name_uz, name_ru, name_en, search_text')
+    .select('id, name_uz, name_ru, name_en, search_text, category, unit')
     .order('name_uz');
 
   if (pErr) return send(res, 500, { ok: false, error: pErr.message });
@@ -52,12 +52,11 @@ export default async function handler(req, res) {
   }
 
   const result = (products || []).map(p => ({
-    id: p.id,
-    name_uz: p.name_uz,
-    name_ru: p.name_ru,
-    name_en: p.name_en,
-    search_text: p.search_text,
-    aliases: aliasMap[p.id] || [],
+    product_id: p.id,
+    canonical: { name_uz: p.name_uz, name_ru: p.name_ru, name_en: p.name_en },
+    category: p.category,
+    unit: p.unit,
+    names: aliasMap[p.id] || [],
   }));
 
   return send(res, 200, { ok: true, count: result.length, products: result });

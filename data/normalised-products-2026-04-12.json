@@ -1,0 +1,406 @@
+{
+  "products": [
+    {
+      "product_id": "493aab9f-b2e8-4b0c-ab07-7409c55366f0",
+      "canonical": {
+        "name_uz": "Diabet noni 365kun 300g",
+        "name_ru": "Хлеб диабетический 365kun 300г",
+        "name_en": "Diabetic Bread 365kun 300g"
+      },
+      "category": "Non va xamirlar",
+      "unit": "dona",
+      "names": [
+        { "alias_text": "365 kun non, diabet u/n 300g", "language": "uz", "store_name": null },
+        { "alias_text": "Non diabet 365kun 300g", "language": "uz", "store_name": null }
+      ]
+    },
+    {
+      "product_id": "df09278d-1c8e-455a-8889-4832c59d1dee",
+      "canonical": {
+        "name_uz": "Lay's Krab chips 140g",
+        "name_ru": "Чипсы Lay's Краб 140г",
+        "name_en": "Lay's Crab Chips 140g"
+      },
+      "category": "Shirinliklar va pechene",
+      "unit": "dona",
+      "names": [
+        { "alias_text": "Chips kartoshkali Lay's Krab 140g", "language": "uz", "store_name": null },
+        { "alias_text": "Lays Krab 140g", "language": "uz", "store_name": null },
+        { "alias_text": "Чипсы Лейс краб 140г", "language": "ru", "store_name": null }
+      ]
+    },
+    {
+      "product_id": "c389d467-a9b3-45e0-af9e-f60a76a0c4da",
+      "canonical": {
+        "name_uz": "Lay's Smetana va ko'kat chips 140g",
+        "name_ru": "Чипсы Lay's Сметана и зелень 140г",
+        "name_en": "Lay's Sour Cream and Herbs Chips 140g"
+      },
+      "category": "Shirinliklar va pechene",
+      "unit": "dona",
+      "names": [
+        { "alias_text": "Chips Lays smetana va ko'kat 140g", "language": "uz", "store_name": null },
+        { "alias_text": "Lays smetana zelen 140g", "language": "uz", "store_name": null },
+        { "alias_text": "Чипсы Лейс сметана зелень 140г", "language": "ru", "store_name": null }
+      ]
+    },
+    {
+      "product_id": "7ecc6a79-e6cf-4a25-8aa2-21144add7d69",
+      "canonical": {
+        "name_uz": "Hochland tvorog ko'katli 220g",
+        "name_ru": "Хохланд творожный с зеленью 220г",
+        "name_en": "Hochland Cream Cheese with Herbs 220g"
+      },
+      "category": "Sut mahsulotlari",
+      "unit": "dona",
+      "names": [
+        { "alias_text": "Hochland tvorogli ko'katli 220g", "language": "uz", "store_name": null },
+        { "alias_text": "Hochland tvorog zelen 220g", "language": "uz", "store_name": null },
+        { "alias_text": "Хохланд творожный зелень 220г", "language": "ru", "store_name": null },
+        { "alias_text": "Hochland cream cheese herbs 220g", "language": "en", "store_name": null }
+      ]
+    },
+    {
+      "product_id": "629bbfed-464f-48a0-af0e-2c477e24940a",
+      "canonical": {
+        "name_uz": "Hochland yumshoq sariyog'li 200g",
+        "name_ru": "Хохланд мягкий сливочный 200г",
+        "name_en": "Hochland Soft Butter Cream Cheese 200g"
+      },
+      "category": "Sut mahsulotlari",
+      "unit": "dona",
+      "names": [
+        { "alias_text": "Hochland yumshoq,sariyog'li 200g", "language": "uz", "store_name": null },
+        { "alias_text": "Hochland yumshoq 200g", "language": "uz", "store_name": null },
+        { "alias_text": "Хохланд мягкий сливочный 200г", "language": "ru", "store_name": null },
+        { "alias_text": "Hochland soft cream cheese 200g", "language": "en", "store_name": null }
+      ]
+    },
+    {
+      "product_id": "a9f5deaf-5a5f-43bc-8326-26f82b73d956",
+      "canonical": {
+        "name_uz": "Ismaloq (bog'lam)",
+        "name_ru": "Шпинат (пучок)",
+        "name_en": "Spinach (bunch)"
+      },
+      "category": "Sabzavotlar va mevalar",
+      "unit": "dona",
+      "names": [
+        { "alias_text": "Ismaloq Ozb, boglam", "language": "uz", "store_name": null },
+        { "alias_text": "Ismaloq boglam", "language": "uz", "store_name": null },
+        { "alias_text": "Шпинат пучок", "language": "ru", "store_name": null },
+        { "alias_text": "Spinach bunch", "language": "en", "store_name": null }
+      ]
+    },
+    {
+      "product_id": "0e6921df-82ab-471b-8317-a3311dbc8e5e",
+      "canonical": {
+        "name_uz": "Nesquik kakao 420g",
+        "name_ru": "Несквик какао 420г",
+        "name_en": "Nesquik Cocoa 420g"
+      },
+      "category": "Choy va kofe",
+      "unit": "dona",
+      "names": [
+        { "alias_text": "Kakao Nesquik 420g", "language": "uz", "store_name": null },
+        { "alias_text": "Nesquik 420g", "language": "uz", "store_name": null },
+        { "alias_text": "Какао Несквик 420г", "language": "ru", "store_name": null },
+        { "alias_text": "Nesquik cocoa powder 420g", "language": "en", "store_name": null }
+      ]
+    },
+    {
+      "product_id": "7c160c18-e257-4372-bc8d-2cab91d9445c",
+      "canonical": {
+        "name_uz": "Losos terili bo'lak GF 300g",
+        "name_ru": "Лосось с кожей кусок GF 300г",
+        "name_en": "Salmon Skin-On Fillet GF 300g"
+      },
+      "category": "Gosht mahsulotlari",
+      "unit": "dona",
+      "names": [
+        { "alias_text": "Losos lahm-burda GF terili O/T, 300g", "language": "uz", "store_name": null },
+        { "alias_text": "Лосось с кожей GF 300г", "language": "ru", "store_name": null },
+        { "alias_text": "Salmon fillet skin on 300g", "language": "en", "store_name": null }
+      ]
+    },
+    {
+      "product_id": "33226022-f39d-4567-a744-11c81709f263",
+      "canonical": {
+        "name_uz": "Maxroll tovuqli roll",
+        "name_ru": "Максролл с курицей",
+        "name_en": "Maxroll Chicken Roll"
+      },
+      "category": "Gosht mahsulotlari",
+      "unit": "dona",
+      "names": [
+        { "alias_text": "MAXROLL Чикен", "language": "ru", "store_name": null },
+        { "alias_text": "Maxroll chicken", "language": "en", "store_name": null },
+        { "alias_text": "Maxroll tovuq", "language": "uz", "store_name": null }
+      ]
+    },
+    {
+      "product_id": "ca45accf-98fb-4ec9-96fd-13ca8633f227",
+      "canonical": {
+        "name_uz": "Nok (Xitoy) 1kg",
+        "name_ru": "Груша (Китай) 1кг",
+        "name_en": "Pear (China) 1kg"
+      },
+      "category": "Sabzavotlar va mevalar",
+      "unit": "kg",
+      "names": [
+        { "alias_text": "Nok Xitoy, kg", "language": "uz", "store_name": null },
+        { "alias_text": "Груша китайская кг", "language": "ru", "store_name": null },
+        { "alias_text": "Chinese pear kg", "language": "en", "store_name": null }
+      ]
+    },
+    {
+      "product_id": "edb3febf-3483-4cfe-8947-414e660d4e98",
+      "canonical": {
+        "name_uz": "Non 365kun kislota-shirin 400g",
+        "name_ru": "Хлеб 365kun кисло-сладкий 400г",
+        "name_en": "Bread 365kun Sweet-Sour 400g"
+      },
+      "category": "Non va xamirlar",
+      "unit": "dona",
+      "names": [
+        { "alias_text": "Non 365 kun Кисло-сладкий 400g", "language": "uz", "store_name": null },
+        { "alias_text": "Хлеб 365кун кисло-сладкий 400г", "language": "ru", "store_name": null },
+        { "alias_text": "Bread 365kun sweet sour 400g", "language": "en", "store_name": null }
+      ]
+    },
+    {
+      "product_id": "269c31b5-e6ec-4da3-b100-7ed35e5a53d3",
+      "canonical": {
+        "name_uz": "Pomidor qizil issiqxona (O'zbekiston) 1kg",
+        "name_ru": "Томат красный тепличный (Узбекистан) 1кг",
+        "name_en": "Red Tomato Greenhouse (Uzbekistan) 1kg"
+      },
+      "category": "Sabzavotlar va mevalar",
+      "unit": "kg",
+      "names": [
+        { "alias_text": "Pomidor qizil Issiqxona Ozb, kg", "language": "uz", "store_name": null },
+        { "alias_text": "Pomidor issiqxona kg", "language": "uz", "store_name": null },
+        { "alias_text": "Томат тепличный Узбекистан кг", "language": "ru", "store_name": null },
+        { "alias_text": "Помидор красный кг", "language": "ru", "store_name": null },
+        { "alias_text": "Greenhouse tomato Uzbekistan kg", "language": "en", "store_name": null }
+      ]
+    },
+    {
+      "product_id": "5be18774-4c7a-4550-abca-cedb83eaf5a0",
+      "canonical": {
+        "name_uz": "Rediska (bog'lam)",
+        "name_ru": "Редис (пучок)",
+        "name_en": "Radish (bunch)"
+      },
+      "category": "Sabzavotlar va mevalar",
+      "unit": "dona",
+      "names": [
+        { "alias_text": "Redis Ozb, boglam", "language": "uz", "store_name": null },
+        { "alias_text": "Rediska boglam", "language": "uz", "store_name": null },
+        { "alias_text": "Редис пучок", "language": "ru", "store_name": null },
+        { "alias_text": "Radish bunch", "language": "en", "store_name": null }
+      ]
+    },
+    {
+      "product_id": "783c5ceb-fccf-4fa1-9481-8785b41f5acd",
+      "canonical": {
+        "name_uz": "Viko Apelsin sharbati 1L",
+        "name_ru": "Сок Вико Апельсин 1л",
+        "name_en": "Viko Orange Juice 1L"
+      },
+      "category": "Ichimliklar",
+      "unit": "litre",
+      "names": [
+        { "alias_text": "Sharbat Viko Apelsin 1L", "language": "uz", "store_name": null },
+        { "alias_text": "Viko apelsin 1L", "language": "uz", "store_name": null },
+        { "alias_text": "Сок Вико апельсин 1л", "language": "ru", "store_name": null },
+        { "alias_text": "Viko orange juice 1L", "language": "en", "store_name": null }
+      ]
+    },
+    {
+      "product_id": "1ba923a9-8f03-4e51-9242-f5aa28284b1d",
+      "canonical": {
+        "name_uz": "Hochland Klassika shayba pishloq 140g",
+        "name_ru": "Хохланд Классика плавленый сыр 140г",
+        "name_en": "Hochland Classic Processed Cheese 140g"
+      },
+      "category": "Sut mahsulotlari",
+      "unit": "dona",
+      "names": [
+        { "alias_text": "Shayba pishloq Hochland Klassika 140g", "language": "uz", "store_name": null },
+        { "alias_text": "Hochland klassika 140g", "language": "uz", "store_name": null },
+        { "alias_text": "Хохланд Классика шайба 140г", "language": "ru", "store_name": null },
+        { "alias_text": "Hochland classic cheese 140g", "language": "en", "store_name": null }
+      ]
+    },
+    {
+      "product_id": "5c822e17-af48-411c-a92f-44f0f7836410",
+      "canonical": {
+        "name_uz": "Merci assorti konfet 250g",
+        "name_ru": "Конфеты Мерси ассорти 250г",
+        "name_en": "Merci Assorted Chocolates 250g"
+      },
+      "category": "Shirinliklar va pechene",
+      "unit": "dona",
+      "names": [
+        { "alias_text": "Sovg'a u-n konf Merci assorti 250g", "language": "uz", "store_name": null },
+        { "alias_text": "Merci assorti 250g", "language": "uz", "store_name": null },
+        { "alias_text": "Конфеты Мерси ассорти 250г", "language": "ru", "store_name": null },
+        { "alias_text": "Merci assorted chocolates 250g", "language": "en", "store_name": null }
+      ]
+    },
+    {
+      "product_id": "dbf56856-0a76-4a4b-87f1-7d59c1a64ae6",
+      "canonical": {
+        "name_uz": "Merci sutli konfet 250g",
+        "name_ru": "Конфеты Мерси молочный 250г",
+        "name_en": "Merci Milk Chocolates 250g"
+      },
+      "category": "Shirinliklar va pechene",
+      "unit": "dona",
+      "names": [
+        { "alias_text": "Sovg'a u-n konf Merci sutli 250g", "language": "uz", "store_name": null },
+        { "alias_text": "Merci sutli 250g", "language": "uz", "store_name": null },
+        { "alias_text": "Конфеты Мерси молочный 250г", "language": "ru", "store_name": null },
+        { "alias_text": "Merci milk chocolates 250g", "language": "en", "store_name": null }
+      ]
+    },
+    {
+      "product_id": "46b4b30a-9b8c-4a74-a871-8d03c51afff3",
+      "canonical": {
+        "name_uz": "Suzma 5% (kg)",
+        "name_ru": "Сузьма 5% кг",
+        "name_en": "Suzma Strained Yogurt 5% (kg)"
+      },
+      "category": "Sut mahsulotlari",
+      "unit": "kg",
+      "names": [
+        { "alias_text": "Suzma Dobroye derevutro 5% kg", "language": "uz", "store_name": null },
+        { "alias_text": "Сузьма Доброе деревутро 5% кг", "language": "ru", "store_name": null },
+        { "alias_text": "Suzma strained yogurt 5%", "language": "en", "store_name": null }
+      ]
+    },
+    {
+      "product_id": "4ca0638f-6a5b-43d3-97a9-9e9b5af6a7fe",
+      "canonical": {
+        "name_uz": "Manchester Gin Tonic kokteyli 0.45L",
+        "name_ru": "Коктейль Manchester Джин Тоник 0,45л",
+        "name_en": "Manchester Gin Tonic Cocktail 0.45L"
+      },
+      "category": "Ichimliklar",
+      "unit": "litre",
+      "names": [
+        { "alias_text": "Коктейль Manchester Gin Tonic классический 0,45 л", "language": "ru", "store_name": null },
+        { "alias_text": "Manchester gin tonic 0.45L", "language": "en", "store_name": null },
+        { "alias_text": "Manchester gin tonik 0.45L", "language": "uz", "store_name": null }
+      ]
+    },
+    {
+      "product_id": "03db3610-4a01-4bf5-b67e-39dbbe888775",
+      "canonical": {
+        "name_uz": "Cornellis kakao trüfeli konfet 175g",
+        "name_ru": "Конфеты Корнеллис трюфель с какао 175г",
+        "name_en": "Cornellis Cocoa Truffle Chocolates 175g"
+      },
+      "category": "Shirinliklar va pechene",
+      "unit": "dona",
+      "names": [
+        { "alias_text": "Конфеты Cornellis трюфель с какао 175г", "language": "ru", "store_name": null },
+        { "alias_text": "Cornellis truffle chocolate 175g", "language": "en", "store_name": null },
+        { "alias_text": "Cornellis kakao trüfel 175g", "language": "uz", "store_name": null }
+      ]
+    },
+    {
+      "product_id": "fb2f999e-cb74-46db-8d13-22bbe07aa77c",
+      "canonical": {
+        "name_uz": "Fatty Milk suti 3.2% 1L",
+        "name_ru": "Молоко Fatty Milk 3,2% 1л",
+        "name_en": "Fatty Milk 3.2% 1L"
+      },
+      "category": "Sut mahsulotlari",
+      "unit": "litre",
+      "names": [
+        { "alias_text": "Молоко Fatty milk 3,2%, 1л", "language": "ru", "store_name": null },
+        { "alias_text": "Sut Fatty milk 3,2%, 1L", "language": "uz", "store_name": null },
+        { "alias_text": "Fatty milk 3.2% 1L", "language": "en", "store_name": null }
+      ]
+    },
+    {
+      "product_id": "389c7832-f664-46c8-bd0e-20cea4e4e867",
+      "canonical": {
+        "name_uz": "Kremli losos rolli",
+        "name_ru": "Сливочный лосось ролл",
+        "name_en": "Creamy Salmon Roll"
+      },
+      "category": "Gosht mahsulotlari",
+      "unit": "dona",
+      "names": [
+        { "alias_text": "Сливочный лосось ролл", "language": "ru", "store_name": null },
+        { "alias_text": "Creamy salmon roll", "language": "en", "store_name": null },
+        { "alias_text": "Losos kremli roll", "language": "uz", "store_name": null }
+      ]
+    },
+    {
+      "product_id": "0d02f9f7-c1b8-431f-81ea-4cfb233eb18a",
+      "canonical": {
+        "name_uz": "Ukrop yangi (bog'lam)",
+        "name_ru": "Укроп свежий (пучок)",
+        "name_en": "Fresh Dill (bunch)"
+      },
+      "category": "Sabzavotlar va mevalar",
+      "unit": "dona",
+      "names": [
+        { "alias_text": "Укроп yangi uzilgan Ozb, boglam", "language": "uz", "store_name": null },
+        { "alias_text": "Ukrop boglam", "language": "uz", "store_name": null },
+        { "alias_text": "Укроп свежий пучок", "language": "ru", "store_name": null },
+        { "alias_text": "Fresh dill bunch", "language": "en", "store_name": null }
+      ]
+    },
+    {
+      "product_id": "a70a20b3-3cf5-47ed-97e3-bb7cff0386eb",
+      "canonical": {
+        "name_uz": "Lochira toster noni 600g",
+        "name_ru": "Хлеб тостерный Lochira 600г",
+        "name_en": "Lochira Toast Bread 600g"
+      },
+      "category": "Non va xamirlar",
+      "unit": "dona",
+      "names": [
+        { "alias_text": "Хлеб LOCHIRA Тостерный, 600 гр", "language": "ru", "store_name": null },
+        { "alias_text": "Non LOCHIRA Tosterli, 600g", "language": "uz", "store_name": null },
+        { "alias_text": "Lochira toast bread 600g", "language": "en", "store_name": null }
+      ]
+    },
+    {
+      "product_id": "f2eeccb8-08a2-48d1-bf44-1439b9d437ae",
+      "canonical": {
+        "name_uz": "Tuxum",
+        "name_ru": "Яйца",
+        "name_en": "Eggs"
+      },
+      "category": "Don mahsulotlari",
+      "unit": "dona",
+      "names": [
+        { "alias_text": "Яйца", "language": "ru", "store_name": null },
+        { "alias_text": "Tuxum", "language": "uz", "store_name": null },
+        { "alias_text": "Eggs", "language": "en", "store_name": null },
+        { "alias_text": "Yayco", "language": "ru", "store_name": null }
+      ]
+    }
+  ],
+  "deleted_product_ids": [
+    "4879e64a-f1e7-474e-893d-dc67236a4a9c",
+    "2439b23f-f00c-4661-935c-6a18429fd9f6",
+    "03f2181d-8d87-4305-b0ee-21966c8b2561",
+    "df448bf9-77ee-4eb6-bcc0-597db59827c5",
+    "23f7e29a-5ac8-4126-ba5d-a6881f9e8ff7",
+    "70bfbf4b-68d6-46bf-a97d-31966d52ac94",
+    "7c62be84-e25f-4d23-b3d1-452c3a7151cb",
+    "31a6c43d-c961-4770-8fea-e702cdac9dbc",
+    "a1cea56e-ccc9-4ac1-b325-3b3dc24d347c",
+    "a09a92ca-71fa-40d1-b5db-07fedf29a99c",
+    "fd274219-cb96-4927-a476-2c214270de06",
+    "e73adaa5-d9b5-416b-afe9-1da002e4453f",
+    "9ba6eb5a-0c69-4b6b-a955-c7e5ce56d816"
+  ]
+}
