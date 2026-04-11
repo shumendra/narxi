@@ -216,6 +216,8 @@ export default function App() {
   const [planInput, setPlanInput] = useState('');
   const [planLoading, setPlanLoading] = useState(false);
   const [planMaxStores, setPlanMaxStores] = useState(3);
+  const [planLocationInput, setPlanLocationInput] = useState('');
+  const [planLocatingGps, setPlanLocatingGps] = useState(false);
   const [planResult, setPlanResult] = useState<{
     stores: Array<{
       name: string; address: string;
@@ -457,6 +459,12 @@ export default function App() {
         planMaxStores: 'Do\'konlar soni',
         planNotFound: 'Topilmadi',
         planDistanceAway: (km: string) => `~${km} km uzoqlikda`,
+        planMyLocation: 'Mening joylashuvim',
+        planGpsButton: 'GPS orqali aniqlash',
+        planGpsLocating: 'Aniqlanmoqda...',
+        planGpsSet: 'Joylashuv aniqlandi',
+        planManualHint: 'yoki koordinatalar kiriting (lat, lng)',
+        planLocationClear: 'Tozalash',
         viewedThisWeek: (count: number, product: string) => `👁 ${count} kishi bu hafta ${product} narxini tekshirdi`,
         proofLabel: 'Isbot (chek yoki foto havolasi)',
         proofPlaceholder: 'Chek URL yoki foto URL kiriting',
@@ -690,6 +698,12 @@ export default function App() {
         planMaxStores: 'Кол-во магазинов',
         planNotFound: 'Не найдено',
         planDistanceAway: (km: string) => `~${km} км`,
+        planMyLocation: 'Моё местоположение',
+        planGpsButton: 'Определить по GPS',
+        planGpsLocating: 'Определяем...',
+        planGpsSet: 'Местоположение задано',
+        planManualHint: 'или введите координаты (lat, lng)',
+        planLocationClear: 'Сбросить',
         viewedThisWeek: (count: number, product: string) => `👁 ${count} человек проверили цену ${product} на этой неделе`,
         proofLabel: 'Подтверждение (ссылка на чек или фото)',
         proofPlaceholder: 'Введите URL чека или фото',
@@ -923,6 +937,12 @@ export default function App() {
         planMaxStores: 'Max stores',
         planNotFound: 'Not found',
         planDistanceAway: (km: string) => `~${km} km away`,
+        planMyLocation: 'My location',
+        planGpsButton: 'Use GPS',
+        planGpsLocating: 'Locating...',
+        planGpsSet: 'Location set',
+        planManualHint: 'or enter coordinates (lat, lng)',
+        planLocationClear: 'Clear',
         viewedThisWeek: (count: number, product: string) => `👁 ${count} people checked ${product} price this week`,
         proofLabel: 'Proof (receipt or photo URL)',
         proofPlaceholder: 'Enter receipt URL or photo URL',
@@ -3232,6 +3252,54 @@ export default function App() {
                   className="flex-1 accent-emerald-600 h-1.5"
                 />
                 <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 rounded-md px-2 py-0.5 min-w-[24px] text-center">{planMaxStores}</span>
+              </div>
+
+              <div className="mt-3 pt-3 border-t border-stone-100">
+                <label className="text-xs text-stone-500 block mb-2">{t.planMyLocation}:</label>
+                <div className="flex gap-2 items-center">
+                  <button
+                    onClick={() => {
+                      setPlanLocatingGps(true);
+                      requestUserLocation((coords) => {
+                        setPlanLocationInput(`${coords.lat.toFixed(6)}, ${coords.lng.toFixed(6)}`);
+                        setPlanLocatingGps(false);
+                      });
+                      setTimeout(() => setPlanLocatingGps(false), 25000);
+                    }}
+                    disabled={planLocatingGps}
+                    className="flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 disabled:opacity-50"
+                  >
+                    {planLocatingGps ? <Loader2 className="h-3 w-3 animate-spin" /> : <Navigation className="h-3 w-3" />}
+                    {planLocatingGps ? t.planGpsLocating : userLocation ? t.planGpsSet : t.planGpsButton}
+                  </button>
+                  {(userLocation || planLocationInput) && (
+                    <button
+                      onClick={() => { setUserLocation(null); setPlanLocationInput(''); }}
+                      className="text-xs text-stone-400 hover:text-stone-600 underline"
+                    >
+                      {t.planLocationClear}
+                    </button>
+                  )}
+                </div>
+                <div className="mt-2">
+                  <input
+                    type="text"
+                    value={planLocationInput}
+                    onChange={(e) => {
+                      setPlanLocationInput(e.target.value);
+                      const match = e.target.value.match(/^\s*(-?\d+\.?\d*)\s*[,;]\s*(-?\d+\.?\d*)\s*$/);
+                      if (match) {
+                        const lat = parseFloat(match[1]);
+                        const lng = parseFloat(match[2]);
+                        if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+                          setUserLocation({ lat, lng });
+                        }
+                      }
+                    }}
+                    placeholder={t.planManualHint}
+                    className="w-full rounded-lg border border-stone-200 bg-stone-50 px-3 py-1.5 text-xs text-stone-600"
+                  />
+                </div>
               </div>
             </section>
 
