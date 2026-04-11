@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import dns from 'node:dns';
 import { extractCityFromAddress, getCityLabel, normalizeCityName } from '../../src/constants/cities.js';
 import { isSoliqUrl } from '../../api/utils/receipt.js';
+import { sendBroadcast, sendWeeklyReports } from '../../api/notifications-core.js';
 
 dotenv.config();
 dotenv.config({ path: '.env.local', override: true });
@@ -26,6 +27,14 @@ const PRIMARY_ADMIN_TELEGRAM_ID = ADMIN_TELEGRAM_IDS[0] || '7240925672';
 
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 const DIAGNOSTIC_URL = 'https://ofd.soliq.uz/';
+const TAGLINE_BY_LANG = {
+  uz: 'Narxni bil, pulni teja',
+  ru: 'Знай цену, экономь деньги',
+  en: 'Know the price, save the money',
+};
+const pendingShoppingUsers = new Set();
+const pendingDistanceUsers = new Set();
+const adminNotifyDrafts = new Map();
 
 const BOT_COPY = {
   uz: {
@@ -376,7 +385,11 @@ async function sendMenu(chatId, lang, telegramId = null) {
 
 async function sendLanguagePicker(chatId) {
   await sendTelegramMessage(chatId, {
-    text: BOT_COPY.uz.chooseLang,
+    text:
+      `${BOT_COPY.uz.chooseLang}\n\n` +
+      `${TAGLINE_BY_LANG.uz}\n` +
+      `${TAGLINE_BY_LANG.ru}\n` +
+      `${TAGLINE_BY_LANG.en}`,
     reply_markup: {
       inline_keyboard: [
         [
@@ -428,6 +441,199 @@ function getCommand(text) {
   const normalizedText = (text || '').trim().toLowerCase();
   const firstToken = normalizedText.split(' ')[0] || '';
   return firstToken.includes('@') ? firstToken.split('@')[0] : firstToken;
+}
+
+function parseDateTimeInput(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const normalized = raw.includes('T') ? raw : raw.replace(' ', 'T');
+  const withSeconds = normalized.length === 16 ? `${normalized}:00` : normalized;
+  const date = new Date(withSeconds);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function getWeekNumber(date) {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+}
+
+function applyTagline(text, lang) {
+  const tagline = TAGLINE_BY_LANG[lang] || TAGLINE_BY_LANG.uz;
+  return `${text}\n\n${tagline} 💚`;
+}
+
+async function upsertUserProfile(telegramId, userData, preferredCity = null) {
+  if (!telegramId) return;
+
+  const nowIso = new Date().toISOString();
+  await supabase.from('user_profiles').upsert({
+    telegram_id: telegramId,
+    username: userData?.username || null,
+    first_name: userData?.first_name || null,
+    language_code: userData?.language_code || 'uz',
+    preferred_city: normalizeCityName(preferredCity || '') || preferredCity || 'Tashkent',
+    last_seen: nowIso,
+  }, { onConflict: 'telegram_id' });
+
+  const { data: existing } = await supabase
+    .from('user_stats')
+    .select('telegram_id')
+    .eq('telegram_id', telegramId)
+    .maybeSingle();
+
+  if (!existing) {
+    await supabase.from('user_stats').insert({
+      telegram_id: telegramId,
+      total_receipts_scanned: 0,
+      total_items_contributed: 0,
+      total_people_helped: 0,
+      current_streak_weeks: 0,
+      updated_at: nowIso,
+    });
+  }
+}
+
+async function incrementReceiptStats(telegramId, itemCount) {
+  if (!telegramId) return;
+
+  const { data: stats } = await supabase
+    .from('user_stats')
+    .select('*')
+    .eq('telegram_id', telegramId)
+    .maybeSingle();
+
+  const today = new Date();
+  const todayText = today.toISOString().split('T')[0];
+  const currentWeek = getWeekNumber(today);
+  const currentYear = today.getFullYear();
+
+  let newStreak = stats?.current_streak_weeks || 0;
+  const lastDate = stats?.last_receipt_date;
+
+  if (lastDate) {
+    const parsedLast = new Date(lastDate);
+    const lastWeek = getWeekNumber(parsedLast);
+    const lastYear = parsedLast.getFullYear();
+
+    if (currentWeek === lastWeek && currentYear === lastYear) {
+      // no-op in same week
+    } else if (
+      (currentWeek === lastWeek + 1 && currentYear === lastYear) ||
+      (currentWeek === 1 && lastWeek >= 52 && currentYear === lastYear + 1)
+    ) {
+      newStreak += 1;
+    } else {
+      newStreak = 1;
+    }
+  } else {
+    newStreak = 1;
+  }
+
+  const nextPayload = {
+    total_receipts_scanned: (stats?.total_receipts_scanned || 0) + 1,
+    total_items_contributed: (stats?.total_items_contributed || 0) + (Number(itemCount) || 0),
+    current_streak_weeks: newStreak,
+    last_streak_date: todayText,
+    last_receipt_date: todayText,
+    updated_at: new Date().toISOString(),
+  };
+
+  await supabase.from('user_stats').upsert({ telegram_id: telegramId, ...nextPayload }, { onConflict: 'telegram_id' });
+}
+
+async function saveShoppingList(telegramId, itemsText) {
+  const items = String(itemsText || '').split(',').map(i => i.trim()).filter(Boolean);
+  const now = new Date();
+  const weekNumber = getWeekNumber(now);
+  const year = now.getFullYear();
+
+  const { data: existing } = await supabase
+    .from('shopping_lists')
+    .select('id')
+    .eq('telegram_id', telegramId)
+    .eq('week_number', weekNumber)
+    .eq('year', year)
+    .maybeSingle();
+
+  if (existing?.id) {
+    await supabase.from('shopping_lists').update({ items, created_at: now.toISOString() }).eq('id', existing.id);
+  } else {
+    await supabase.from('shopping_lists').insert({
+      telegram_id: telegramId,
+      items,
+      week_number: weekNumber,
+      year,
+      created_at: now.toISOString(),
+    });
+  }
+
+  return items;
+}
+
+async function calculateOptimalRoute(items, userCity) {
+  const itemPrices = [];
+  for (const item of items) {
+    const { data: prices } = await supabase
+      .from('prices')
+      .select('product_name_raw, price, place_name, place_address, latitude, longitude, receipt_date, city')
+      .eq('city', userCity)
+      .ilike('product_name_raw', `%${item}%`)
+      .order('price', { ascending: true })
+      .limit(5);
+
+    if (prices && prices.length > 0) {
+      itemPrices.push({ item, cheapest: prices[0], allPrices: prices });
+    }
+  }
+
+  const storeGroups = {};
+  for (const itemData of itemPrices) {
+    const storeName = itemData.cheapest.place_name || "Noma'lum do'kon";
+    if (!storeGroups[storeName]) {
+      storeGroups[storeName] = {
+        store: storeName,
+        address: itemData.cheapest.place_address,
+        latitude: itemData.cheapest.latitude,
+        longitude: itemData.cheapest.longitude,
+        items: [],
+      };
+    }
+    storeGroups[storeName].items.push({ name: itemData.item, price: itemData.cheapest.price });
+  }
+
+  return { itemPrices, storeGroups };
+}
+
+function formatRouteMessage(routeData, maxDistanceKm, lang) {
+  const stores = Object.values(routeData.storeGroups || {});
+  if (stores.length === 0) {
+    return applyTagline('Topilmadi: bu mahsulotlar uchun tanlangan shaharda narxlar yetarli emas.', lang);
+  }
+
+  let total = 0;
+  let lines = ['🛒 Sizning xarid rejangiz', '', '📍 Optimal marshrut:', ''];
+  stores.forEach((store, index) => {
+    const storeTotal = store.items.reduce((sum, item) => sum + (Number(item.price) || 0), 0);
+    total += storeTotal;
+    lines.push(`${index + 1}️⃣ ${store.store}`);
+    for (const item of store.items) {
+      lines.push(`   • ${item.name} — ${Number(item.price || 0).toLocaleString('en-US')} so'm`);
+    }
+    lines.push(`   Jami: ${storeTotal.toLocaleString('en-US')} so'm`);
+    lines.push('');
+  });
+
+  const estimatedSingleStore = Math.round(total * 1.25);
+  const savings = Math.max(estimatedSingleStore - total, 0);
+  lines.push(`💰 Umumiy: ${total.toLocaleString('en-US')} so'm`);
+  lines.push(`✅ Tejash: ~${savings.toLocaleString('en-US')} so'm (barchasi bir joydan olsangiz)`);
+  lines.push('');
+  lines.push(`📏 Maksimal masofa: ${maxDistanceKm} km`);
+
+  return applyTagline(lines.join('\n'), lang);
 }
 
 async function isAdmin(telegramId) {
@@ -517,7 +723,11 @@ async function sendPendingQueue(chatId, lang) {
 }
 
 async function sendAdminStats(chatId, lang) {
-  const [{ count: pricesCount }, { count: pendingCount }, { count: rejectedCount }, { count: productsCount }, { count: blockedCount }, { count: appealsCount }, { data: approvedCities }, { data: pendingCities }] = await Promise.all([
+  const weekStart = new Date();
+  weekStart.setDate(weekStart.getDate() - (weekStart.getDay() || 7) + 1);
+  weekStart.setHours(0, 0, 0, 0);
+
+  const [{ count: pricesCount }, { count: pendingCount }, { count: rejectedCount }, { count: productsCount }, { count: blockedCount }, { count: appealsCount }, { data: approvedCities }, { data: pendingCities }, { count: totalUsers }, { count: activeThisWeek }, { data: sentRows }] = await Promise.all([
     supabase.from('prices').select('id', { count: 'exact', head: true }),
     supabase.from('pending_prices').select('id', { count: 'exact', head: true }).or('status.eq.pending,status.is.null'),
     supabase.from('pending_prices').select('id', { count: 'exact', head: true }).eq('status', 'rejected'),
@@ -526,7 +736,12 @@ async function sendAdminStats(chatId, lang) {
     supabase.from('appeals').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
     supabase.from('prices').select('city').limit(5000),
     supabase.from('pending_prices').select('city').or('status.eq.pending,status.is.null').limit(5000),
+    supabase.from('user_profiles').select('telegram_id', { count: 'exact', head: true }),
+    supabase.from('user_profiles').select('telegram_id', { count: 'exact', head: true }).gte('last_seen', weekStart.toISOString()),
+    supabase.from('scheduled_notifications').select('sent_count, sent_at').gte('sent_at', weekStart.toISOString()),
   ]);
+
+  const sentThisWeek = (sentRows || []).reduce((sum, row) => sum + (Number(row.sent_count) || 0), 0);
 
   const approvedCitySummary = formatCityBreakdown(approvedCities, lang);
   const pendingCitySummary = formatCityBreakdown(pendingCities, lang);
@@ -540,6 +755,9 @@ async function sendAdminStats(chatId, lang) {
       `📦 Products: ${productsCount || 0}\n` +
       `🚫 Blocked: ${blockedCount || 0}\n` +
       `📨 Appeals: ${appealsCount || 0}\n\n` +
+      `📨 Xabarlar: ${sentThisWeek} (bu hafta)\n` +
+      `👥 Jami foydalanuvchilar: ${totalUsers || 0}\n` +
+      `🔥 Faol bu hafta: ${activeThisWeek || 0}\n\n` +
       `${BOT_COPY[lang].statsCities}\n` +
       `✅ Approved\n${approvedCitySummary}\n\n` +
       `⏳ Pending\n${pendingCitySummary}`,
@@ -606,6 +824,96 @@ async function handleMessage(message) {
     return;
   }
 
+  const { data: blocked } = await supabase
+    .from('blocked_users')
+    .select('telegram_id, can_appeal')
+    .eq('telegram_id', telegramId)
+    .maybeSingle();
+
+  if (blocked && !normalizedText.startsWith('/appeal')) {
+    await sendTelegramMessage(chatId, { text: BOT_COPY[lang].blockedAppeal });
+    return;
+  }
+
+  await upsertUserProfile(telegramId, message?.from, 'Tashkent');
+
+  if (!command && pendingShoppingUsers.has(telegramId)) {
+    const items = await saveShoppingList(telegramId, text);
+    pendingShoppingUsers.delete(telegramId);
+
+    const { data: profile } = await supabase
+      .from('user_profiles')
+      .select('preferred_city, max_distance_km')
+      .eq('telegram_id', telegramId)
+      .maybeSingle();
+    const city = normalizeCityName(profile?.preferred_city || '') || 'Tashkent';
+    const maxDistanceKm = Number(profile?.max_distance_km) || 5;
+    const routeData = await calculateOptimalRoute(items, city);
+    const messageText = formatRouteMessage(routeData, maxDistanceKm, lang);
+    await sendTelegramMessage(chatId, { text: messageText });
+
+    const stores = Object.values(routeData.storeGroups || {}).filter(s => s.latitude && s.longitude);
+    if (stores.length > 0) {
+      const waypoints = stores.map(s => `${s.latitude},${s.longitude}`).join('~');
+      const mapsUrl = `https://yandex.uz/maps/?rtext=${waypoints}&rtt=auto`;
+      await sendTelegramMessage(chatId, {
+        text: '🗺️ Xaritada ko\'rish',
+        reply_markup: {
+          inline_keyboard: [[{ text: '🗺️ Xaritada ko\'rish', url: mapsUrl }]],
+        },
+      });
+    }
+    return;
+  }
+
+  if (!command && pendingDistanceUsers.has(telegramId)) {
+    const km = Number.parseInt(normalizedText, 10);
+    if (!Number.isFinite(km) || km <= 0 || km > 100) {
+      await sendTelegramMessage(chatId, { text: 'Iltimos, km ni to\'g\'ri kiriting. Masalan: 3' });
+      return;
+    }
+    pendingDistanceUsers.delete(telegramId);
+    await supabase.from('user_profiles').update({ max_distance_km: km, last_seen: new Date().toISOString() }).eq('telegram_id', telegramId);
+    await sendTelegramMessage(chatId, { text: `✅ Saqlandi. Maksimal masofa: ${km} km` });
+    return;
+  }
+
+  if (!command && adminNotifyDrafts.has(telegramId)) {
+    const draft = adminNotifyDrafts.get(telegramId);
+    if (draft.step === 'await_message') {
+      adminNotifyDrafts.set(telegramId, { step: 'await_schedule_choice', message: text.trim() });
+      await sendTelegramMessage(chatId, {
+        text: 'Qachon yuborish?',
+        reply_markup: {
+          inline_keyboard: [[
+            { text: '⚡ Hozir', callback_data: 'notify_send_now' },
+            { text: '📅 Rejalashtirish', callback_data: 'notify_schedule' },
+          ]],
+        },
+      });
+      return;
+    }
+
+    if (draft.step === 'await_schedule_time') {
+      const parsed = parseDateTimeInput(text);
+      if (!parsed) {
+        await sendTelegramMessage(chatId, { text: 'Sana va vaqt formati noto\'g\'ri. Masalan: 2026-04-15 09:00' });
+        return;
+      }
+
+      await supabase.from('scheduled_notifications').insert({
+        message: draft.message,
+        scheduled_for: parsed.toISOString(),
+        target: 'all',
+        status: 'pending',
+      });
+
+      adminNotifyDrafts.delete(telegramId);
+      await sendTelegramMessage(chatId, { text: `✅ Rejalashtirildi: ${parsed.toISOString()}` });
+      return;
+    }
+  }
+
   if (command === '/start') {
     await sendLanguagePicker(chatId);
     return;
@@ -622,6 +930,68 @@ async function handleMessage(message) {
     await sendTelegramMessage(chatId, {
       text: `You are not recognized as admin.\nYour Telegram ID: ${telegramId}`,
     });
+    return;
+  }
+
+  if (command === '/mystats') {
+    const { data: stats } = await supabase
+      .from('user_stats')
+      .select('*')
+      .eq('telegram_id', telegramId)
+      .maybeSingle();
+
+    const messageText =
+      '📊 Sizning statistikangiz\n\n' +
+      `🧾 Skanerlangan cheklar: ${stats?.total_receipts_scanned || 0} ta\n` +
+      `📦 Qo'shilgan mahsulotlar: ${stats?.total_items_contributed || 0} ta\n` +
+      `🔥 Ketma-ket hafta: ${stats?.current_streak_weeks || 0} hafta\n` +
+      `👥 Yordam berilgan odamlar: ${stats?.total_people_helped || 0} ta`;
+
+    await sendTelegramMessage(chatId, { text: applyTagline(messageText, lang) });
+    return;
+  }
+
+  if (command === '/savdo') {
+    const itemsText = text.replace(/^\/savdo(@\w+)?/i, '').trim();
+    if (!itemsText) {
+      pendingShoppingUsers.add(telegramId);
+      await sendTelegramMessage(chatId, {
+        text:
+          'Bu hafta nima sotib olmoqchisiz?\n\n' +
+          'Mahsulotlarni yozing (vergul bilan ajrating):\n' +
+          'Masalan: shakar, guruch, tuxum, sut, non',
+      });
+      return;
+    }
+
+    const items = await saveShoppingList(telegramId, itemsText);
+    const { data: profile } = await supabase
+      .from('user_profiles')
+      .select('preferred_city, max_distance_km')
+      .eq('telegram_id', telegramId)
+      .maybeSingle();
+    const city = normalizeCityName(profile?.preferred_city || '') || 'Tashkent';
+    const maxDistanceKm = Number(profile?.max_distance_km) || 5;
+    const routeData = await calculateOptimalRoute(items, city);
+    await sendTelegramMessage(chatId, { text: formatRouteMessage(routeData, maxDistanceKm, lang) });
+
+    const stores = Object.values(routeData.storeGroups || {}).filter(s => s.latitude && s.longitude);
+    if (stores.length > 0) {
+      const waypoints = stores.map(s => `${s.latitude},${s.longitude}`).join('~');
+      const mapsUrl = `https://yandex.uz/maps/?rtext=${waypoints}&rtt=auto`;
+      await sendTelegramMessage(chatId, {
+        text: '🗺️ Xaritada ko\'rish',
+        reply_markup: {
+          inline_keyboard: [[{ text: '🗺️ Xaritada ko\'rish', url: mapsUrl }]],
+        },
+      });
+    }
+    return;
+  }
+
+  if (command === '/masofa') {
+    pendingDistanceUsers.add(telegramId);
+    await sendTelegramMessage(chatId, { text: 'Qancha masofaga borishga tayyorsiz? (km da yozing, masalan: 3)' });
     return;
   }
 
@@ -657,6 +1027,47 @@ async function handleMessage(message) {
   }
 
   if (await isAdmin(telegramId)) {
+    if (command === '/notify') {
+      adminNotifyDrafts.delete(telegramId);
+      await sendTelegramMessage(chatId, {
+        text: '📢 Xabar yuborish\n\nQuyidagilardan birini tanlang:',
+        reply_markup: {
+          inline_keyboard: [[
+            { text: '📊 Haftalik hisobot', callback_data: 'notify_weekly' },
+            { text: '✍️ Oddiy xabar', callback_data: 'notify_broadcast' },
+          ]],
+        },
+      });
+      return;
+    }
+
+    if (command === '/scheduled') {
+      const { data: rows } = await supabase
+        .from('scheduled_notifications')
+        .select('id, message, scheduled_for, status')
+        .eq('status', 'pending')
+        .order('scheduled_for', { ascending: true })
+        .limit(20);
+
+      if (!rows || rows.length === 0) {
+        await sendTelegramMessage(chatId, { text: '📅 Rejalashtirilgan xabarlar yo\'q' });
+        return;
+      }
+
+      await sendTelegramMessage(chatId, { text: '📅 Rejalashtirilgan xabarlar:' });
+      for (let index = 0; index < rows.length; index += 1) {
+        const row = rows[index];
+        const preview = String(row.message || '').slice(0, 120);
+        await sendTelegramMessage(chatId, {
+          text: `${index + 1}. ${row.scheduled_for}\n"${preview}"`,
+          reply_markup: {
+            inline_keyboard: [[{ text: '❌ Bekor qilish', callback_data: `cancel_sched_${row.id}` }]],
+          },
+        });
+      }
+      return;
+    }
+
     if (command === '/setname') {
       const parts = text.trim().split(' ');
       const pendingId = parts[1];
@@ -877,6 +1288,7 @@ async function handleMessage(message) {
       }
 
       await sendTelegramMessage(chatId, { text: BOT_COPY[lang].queueAccepted });
+      await incrementReceiptStats(telegramId, 0);
       return;
     }
 
@@ -895,6 +1307,7 @@ async function handleMessage(message) {
     }
 
     await sendTelegramMessage(chatId, { text: BOT_COPY[lang].queueAccepted });
+    await incrementReceiptStats(telegramId, 0);
     return;
   }
 
@@ -912,6 +1325,10 @@ async function handleCallback(callbackQuery) {
     await answerCallbackQuery(callbackQuery.id);
   }
 
+  if (telegramId) {
+    await upsertUserProfile(telegramId, callbackQuery?.from, 'Tashkent');
+  }
+
   if (data.startsWith('lang:')) {
     const lang = data.split(':')[1];
     if (lang === 'uz' || lang === 'ru' || lang === 'en') {
@@ -925,6 +1342,48 @@ async function handleCallback(callbackQuery) {
   }
 
   const adminLang = getUserLang(callbackQuery?.from?.language_code);
+
+  if (data === 'notify_weekly') {
+    const result = await sendWeeklyReports();
+    await sendTelegramMessage(chatId, { text: `✅ Hisobotlar yuborildi: ${result.sentCount || 0} ta foydalanuvchi` });
+    return;
+  }
+
+  if (data === 'notify_broadcast') {
+    adminNotifyDrafts.set(telegramId, { step: 'await_message', message: '' });
+    await sendTelegramMessage(chatId, { text: 'Xabar matnini yozing:' });
+    return;
+  }
+
+  if (data === 'notify_send_now') {
+    const draft = adminNotifyDrafts.get(telegramId);
+    if (!draft?.message) {
+      await sendTelegramMessage(chatId, { text: 'Avval xabar matnini kiriting: /notify' });
+      return;
+    }
+    const result = await sendBroadcast(draft.message);
+    adminNotifyDrafts.delete(telegramId);
+    await sendTelegramMessage(chatId, { text: `✅ Xabar yuborildi: ${result.sentCount || 0} ta foydalanuvchi` });
+    return;
+  }
+
+  if (data === 'notify_schedule') {
+    const draft = adminNotifyDrafts.get(telegramId);
+    if (!draft?.message) {
+      await sendTelegramMessage(chatId, { text: 'Avval xabar matnini kiriting: /notify' });
+      return;
+    }
+    adminNotifyDrafts.set(telegramId, { step: 'await_schedule_time', message: draft.message });
+    await sendTelegramMessage(chatId, { text: 'Sana va vaqtni kiriting (masalan: 2026-04-15 09:00):' });
+    return;
+  }
+
+  if (data.startsWith('cancel_sched_')) {
+    const id = data.replace('cancel_sched_', '');
+    await supabase.from('scheduled_notifications').update({ status: 'cancelled' }).eq('id', id);
+    await sendTelegramMessage(chatId, { text: '✅ Rejalashtirilgan xabar bekor qilindi' });
+    return;
+  }
 
   if (data.startsWith('editname_')) {
     const pendingId = data.replace('editname_', '');

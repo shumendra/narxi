@@ -128,6 +128,14 @@ interface ContactMessageItem {
   created_at: string;
 }
 
+function getWeekNumber(date: Date) {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+}
+
 // Map Updater Component
 function ChangeView({ center, zoom }: { center: [number, number]; zoom: number }) {
   const map = useMap();
@@ -394,6 +402,8 @@ export default function App() {
         contactFormHint: 'Qisqa xabar qoldiring, biz siz bilan qayta bog‘lanamiz.',
         reportProductNameLabel: 'Mahsulot nomi',
         reportProductNamePlaceholder: 'Masalan: Shakar',
+        tagline: 'Narxni bil, pulni teja',
+        viewedThisWeek: (count: number, product: string) => `👁 ${count} kishi bu hafta ${product} narxini tekshirdi`,
         proofLabel: 'Isbot (chek yoki foto havolasi)',
         proofPlaceholder: 'Chek URL yoki foto URL kiriting',
         proofRequired: 'Iltimos, isbot uchun chek yoki foto havolasini kiriting',
@@ -589,6 +599,8 @@ export default function App() {
         contactFormHint: 'Оставьте короткое сообщение, и мы свяжемся с вами.',
         reportProductNameLabel: 'Название товара',
         reportProductNamePlaceholder: 'Например: Сахар',
+        tagline: 'Знай цену, экономь деньги',
+        viewedThisWeek: (count: number, product: string) => `👁 ${count} человек проверили цену ${product} на этой неделе`,
         proofLabel: 'Подтверждение (ссылка на чек или фото)',
         proofPlaceholder: 'Введите URL чека или фото',
         proofRequired: 'Пожалуйста, добавьте ссылку на чек или фото как подтверждение',
@@ -784,6 +796,8 @@ export default function App() {
         contactFormHint: 'Leave a short message and we will contact you back.',
         reportProductNameLabel: 'Product name',
         reportProductNamePlaceholder: 'Example: Sugar',
+        tagline: 'Know the price, save the money',
+        viewedThisWeek: (count: number, product: string) => `👁 ${count} people checked ${product} price this week`,
         proofLabel: 'Proof (receipt or photo URL)',
         proofPlaceholder: 'Enter receipt URL or photo URL',
         proofRequired: 'Please add a receipt or photo URL as proof',
@@ -837,6 +851,7 @@ export default function App() {
   const [contactValue, setContactValue] = useState('');
   const [contactMessage, setContactMessage] = useState('');
   const [sendingContact, setSendingContact] = useState(false);
+  const [selectedProductWeeklyViews, setSelectedProductWeeklyViews] = useState<number>(0);
   const miniWindowIframeRef = useRef<HTMLIFrameElement | null>(null);
   const contactFormRef = useRef<HTMLElement | null>(null);
 
@@ -855,6 +870,43 @@ export default function App() {
 
     fetchProducts();
   }, [isAdminUser]);
+
+  useEffect(() => {
+    const upsertMiniAppUser = async () => {
+      if (!telegramUserId) return;
+
+      const nowIso = new Date().toISOString();
+      const { error: profileError } = await supabase.from('user_profiles').upsert({
+        telegram_id: telegramUserId,
+        username: telegramUser?.username || null,
+        first_name: telegramUser?.first_name || null,
+        language_code: telegramUser?.language_code || lang,
+        preferred_city: selectedCity,
+        last_seen: nowIso,
+      }, { onConflict: 'telegram_id' });
+
+      if (profileError) return;
+
+      const { data: existingStats } = await supabase
+        .from('user_stats')
+        .select('telegram_id')
+        .eq('telegram_id', telegramUserId)
+        .maybeSingle();
+
+      if (!existingStats) {
+        await supabase.from('user_stats').insert({
+          telegram_id: telegramUserId,
+          total_receipts_scanned: 0,
+          total_items_contributed: 0,
+          total_people_helped: 0,
+          current_streak_weeks: 0,
+          updated_at: nowIso,
+        });
+      }
+    };
+
+    upsertMiniAppUser();
+  }, [telegramUserId, telegramUser?.username, telegramUser?.first_name, telegramUser?.language_code, lang, selectedCity]);
 
   const fetchProducts = async () => {
     const { data } = await supabase.from('products').select('*').order('name_uz');
@@ -1513,6 +1565,30 @@ export default function App() {
     setSelectedProduct(product);
     setSearchQuery(getProductName(product, lang));
     setShowDropdown(false);
+
+    const now = new Date();
+    const weekNumber = getWeekNumber(now);
+    const year = now.getFullYear();
+
+    if (telegramUserId) {
+      await supabase.from('product_views').insert({
+        product_id: product.id,
+        product_name: getProductName(product, lang),
+        telegram_id: telegramUserId,
+        viewed_at: now.toISOString(),
+        week_number: weekNumber,
+        year,
+      });
+    }
+
+    const { count } = await supabase
+      .from('product_views')
+      .select('id', { count: 'exact', head: true })
+      .eq('product_id', product.id)
+      .eq('week_number', weekNumber)
+      .eq('year', year);
+
+    setSelectedProductWeeklyViews(Number(count || 0));
   };
 
   const sortedPrices = useMemo(() => {
@@ -2535,6 +2611,12 @@ export default function App() {
               <>
                 {/* Results List */}
                 <section>
+                  <div className="mb-2 text-sm font-semibold text-stone-700">{getProductName(selectedProduct, lang)}</div>
+                  {selectedProductWeeklyViews >= 5 && (
+                    <div className="mb-3 text-xs text-emerald-700">
+                      {t.viewedThisWeek(selectedProductWeeklyViews, getProductName(selectedProduct, lang))}
+                    </div>
+                  )}
                   <h3 className="text-sm font-semibold text-stone-500 uppercase tracking-wider mb-3">{t.cheapestTitle}</h3>
                   <div className="space-y-3">
                     {loading ? (
@@ -3615,6 +3697,10 @@ export default function App() {
           </div>
         )}
       </main>
+
+      <div className="pb-20 px-4 text-center text-xs font-semibold text-emerald-700">
+        {t.tagline}
+      </div>
 
       {/* Bottom Nav */}
       <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-stone-200 px-6 py-3 flex justify-around items-center z-50">

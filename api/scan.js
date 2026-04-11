@@ -43,17 +43,80 @@ async function upsertUserProfile(profile) {
 
   await supabase.from('user_profiles').upsert(payload, { onConflict: 'telegram_id' });
 
-  const { data: current } = await supabase
-    .from('user_profiles')
-    .select('receipts_scanned')
+  const { data: existingStats } = await supabase
+    .from('user_stats')
+    .select('telegram_id')
     .eq('telegram_id', telegramId)
     .maybeSingle();
 
-  const nextCount = (Number(current?.receipts_scanned) || 0) + 1;
+  if (!existingStats) {
+    await supabase.from('user_stats').insert({
+      telegram_id: telegramId,
+      total_receipts_scanned: 0,
+      total_items_contributed: 0,
+      total_people_helped: 0,
+      current_streak_weeks: 0,
+      updated_at: nowIso,
+    });
+  }
+
   await supabase
     .from('user_profiles')
-    .update({ receipts_scanned: nextCount, last_seen: nowIso })
+    .update({ last_seen: nowIso })
     .eq('telegram_id', telegramId);
+}
+
+function getWeekNumber(date) {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+}
+
+async function incrementReceiptStats(telegramId, itemCount) {
+  if (!telegramId || telegramId === 'anonymous') return;
+
+  const { data: stats } = await supabase
+    .from('user_stats')
+    .select('*')
+    .eq('telegram_id', telegramId)
+    .maybeSingle();
+
+  const today = new Date();
+  const todayText = today.toISOString().split('T')[0];
+  const currentWeek = getWeekNumber(today);
+  const currentYear = today.getFullYear();
+  let newStreak = stats?.current_streak_weeks || 0;
+  const lastDate = stats?.last_receipt_date;
+
+  if (lastDate) {
+    const parsedLast = new Date(lastDate);
+    const lastWeek = getWeekNumber(parsedLast);
+    const lastYear = parsedLast.getFullYear();
+    if (!((currentWeek === lastWeek && currentYear === lastYear))) {
+      if (
+        (currentWeek === lastWeek + 1 && currentYear === lastYear) ||
+        (currentWeek === 1 && lastWeek >= 52 && currentYear === lastYear + 1)
+      ) {
+        newStreak += 1;
+      } else {
+        newStreak = 1;
+      }
+    }
+  } else {
+    newStreak = 1;
+  }
+
+  await supabase.from('user_stats').upsert({
+    telegram_id: telegramId,
+    total_receipts_scanned: (stats?.total_receipts_scanned || 0) + 1,
+    total_items_contributed: (stats?.total_items_contributed || 0) + (Number(itemCount) || 0),
+    current_streak_weeks: newStreak,
+    last_streak_date: todayText,
+    last_receipt_date: todayText,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: 'telegram_id' });
 }
 
 export default async function handler(req, res) {
@@ -119,6 +182,8 @@ export default async function handler(req, res) {
         return ok(res, { ok: false, error: 'db_error', detail: requeueError.message || 'queue_requeue_failed' });
       }
 
+      await incrementReceiptStats(telegramId, 0);
+
       return ok(res, {
         ok: true,
         queued: true,
@@ -141,6 +206,8 @@ export default async function handler(req, res) {
       console.error('receipt_queue insert error:', queueError);
       return ok(res, { ok: false, error: 'db_error', detail: queueError.message || 'queue_insert_failed' });
     }
+
+    await incrementReceiptStats(telegramId, 0);
 
     return ok(res, {
       ok: true,

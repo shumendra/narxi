@@ -689,7 +689,7 @@ export function parseReceiptHtml(html) {
     return {
       store_name: storeName || "Noma'lum do'kon",
       store_address: storeAddress || '',
-      receipt_date: receiptDate || new Date().toISOString(),
+      receipt_date: receiptDate || null,
       items,
     };
   } catch (error) {
