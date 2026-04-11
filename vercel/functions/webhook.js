@@ -36,6 +36,24 @@ const pendingShoppingUsers = new Set();
 const pendingDistanceUsers = new Set();
 const adminNotifyDrafts = new Map();
 
+async function getPendingAction(telegramId) {
+  if (!telegramId) return null;
+  const { data } = await supabase
+    .from('user_profiles')
+    .select('pending_action')
+    .eq('telegram_id', telegramId)
+    .maybeSingle();
+  return data?.pending_action || null;
+}
+
+async function setPendingAction(telegramId, action) {
+  if (!telegramId) return;
+  await supabase
+    .from('user_profiles')
+    .update({ pending_action: action })
+    .eq('telegram_id', telegramId);
+}
+
 const BOT_COPY = {
   uz: {
     chooseLang: "Tilni tanlang:",
@@ -989,9 +1007,11 @@ async function handleMessage(message) {
 
   await upsertUserProfile(telegramId, message?.from, 'Tashkent');
 
-  if (!command && pendingShoppingUsers.has(telegramId)) {
+  const pendingAction = !command ? await getPendingAction(telegramId) : null;
+
+  if (!command && pendingAction?.action === 'shopping') {
     const items = await saveShoppingList(telegramId, text);
-    pendingShoppingUsers.delete(telegramId);
+    await setPendingAction(telegramId, null);
 
     const { data: profile } = await supabase
       .from('user_profiles')
@@ -1018,52 +1038,49 @@ async function handleMessage(message) {
     return;
   }
 
-  if (!command && pendingDistanceUsers.has(telegramId)) {
+  if (!command && pendingAction?.action === 'distance') {
     const km = Number.parseInt(normalizedText, 10);
     if (!Number.isFinite(km) || km <= 0 || km > 100) {
       await sendTelegramMessage(chatId, { text: tr.distanceInvalid });
       return;
     }
-    pendingDistanceUsers.delete(telegramId);
+    await setPendingAction(telegramId, null);
     await supabase.from('user_profiles').update({ max_distance_km: km, last_seen: new Date().toISOString() }).eq('telegram_id', telegramId);
     await sendTelegramMessage(chatId, { text: tr.distanceSaved(km) });
     return;
   }
 
-  if (!command && adminNotifyDrafts.has(telegramId)) {
-    const draft = adminNotifyDrafts.get(telegramId);
-    if (draft.step === 'await_message') {
-      adminNotifyDrafts.set(telegramId, { step: 'await_schedule_choice', message: text.trim() });
-      await sendTelegramMessage(chatId, {
-        text: tr.notifyAskWhen,
-        reply_markup: {
-          inline_keyboard: [[
-            { text: tr.notifyNow, callback_data: 'notify_send_now' },
-            { text: tr.notifySchedule, callback_data: 'notify_schedule' },
-          ]],
-        },
-      });
+  if (!command && pendingAction?.action === 'notify_message') {
+    await setPendingAction(telegramId, { action: 'notify_schedule_choice', message: text.trim() });
+    await sendTelegramMessage(chatId, {
+      text: tr.notifyAskWhen,
+      reply_markup: {
+        inline_keyboard: [[
+          { text: tr.notifyNow, callback_data: 'notify_send_now' },
+          { text: tr.notifySchedule, callback_data: 'notify_schedule' },
+        ]],
+      },
+    });
+    return;
+  }
+
+  if (!command && pendingAction?.action === 'notify_schedule_time') {
+    const parsed = parseDateTimeInput(text);
+    if (!parsed) {
+      await sendTelegramMessage(chatId, { text: tr.notifyInvalidDate });
       return;
     }
 
-    if (draft.step === 'await_schedule_time') {
-      const parsed = parseDateTimeInput(text);
-      if (!parsed) {
-        await sendTelegramMessage(chatId, { text: tr.notifyInvalidDate });
-        return;
-      }
+    await supabase.from('scheduled_notifications').insert({
+      message: pendingAction.message,
+      scheduled_for: parsed.toISOString(),
+      target: 'all',
+      status: 'pending',
+    });
 
-      await supabase.from('scheduled_notifications').insert({
-        message: draft.message,
-        scheduled_for: parsed.toISOString(),
-        target: 'all',
-        status: 'pending',
-      });
-
-      adminNotifyDrafts.delete(telegramId);
-      await sendTelegramMessage(chatId, { text: tr.notifyScheduled(parsed.toISOString()) });
-      return;
-    }
+    await setPendingAction(telegramId, null);
+    await sendTelegramMessage(chatId, { text: tr.notifyScheduled(parsed.toISOString()) });
+    return;
   }
 
   if (command === '/start') {
@@ -1106,7 +1123,7 @@ async function handleMessage(message) {
   if (command === '/savdo') {
     const itemsText = text.replace(/^\/savdo(@\w+)?/i, '').trim();
     if (!itemsText) {
-      pendingShoppingUsers.add(telegramId);
+      await setPendingAction(telegramId, { action: 'shopping' });
       await sendTelegramMessage(chatId, {
         text: `${tr.shoppingAsk}\n\n${tr.shoppingAskHint}`,
       });
@@ -1139,7 +1156,7 @@ async function handleMessage(message) {
   }
 
   if (command === '/masofa') {
-    pendingDistanceUsers.add(telegramId);
+    await setPendingAction(telegramId, { action: 'distance' });
     await sendTelegramMessage(chatId, { text: tr.distanceAsk });
     return;
   }
@@ -1177,7 +1194,7 @@ async function handleMessage(message) {
 
   if (await isAdmin(telegramId)) {
     if (command === '/notify') {
-      adminNotifyDrafts.delete(telegramId);
+      await setPendingAction(telegramId, null);
       await sendTelegramMessage(chatId, {
         text: tr.notifyStart,
         reply_markup: {
@@ -1507,7 +1524,7 @@ async function handleCallback(callbackQuery) {
   }
 
   if (data === 'menu_savdo') {
-    pendingShoppingUsers.add(telegramId);
+    await setPendingAction(telegramId, { action: 'shopping' });
     await sendTelegramMessage(chatId, { text: `${tr.shoppingAsk}\n\n${tr.shoppingAskHint}` });
     return;
   }
@@ -1520,7 +1537,7 @@ async function handleCallback(callbackQuery) {
   const adminTr = BOT_COPY[adminLang] || BOT_COPY.uz;
 
   if (data === 'menu_notify') {
-    adminNotifyDrafts.delete(telegramId);
+    await setPendingAction(telegramId, null);
     await sendTelegramMessage(chatId, {
       text: adminTr.notifyStart,
       reply_markup: {
@@ -1567,30 +1584,30 @@ async function handleCallback(callbackQuery) {
   }
 
   if (data === 'notify_broadcast') {
-    adminNotifyDrafts.set(telegramId, { step: 'await_message', message: '' });
+    await setPendingAction(telegramId, { action: 'notify_message' });
     await sendTelegramMessage(chatId, { text: adminTr.notifyAskMessage });
     return;
   }
 
   if (data === 'notify_send_now') {
-    const draft = adminNotifyDrafts.get(telegramId);
-    if (!draft?.message) {
+    const pa = await getPendingAction(telegramId);
+    if (!pa?.message) {
       await sendTelegramMessage(chatId, { text: adminTr.notifyNeedMessage });
       return;
     }
-    const result = await sendBroadcast(draft.message);
-    adminNotifyDrafts.delete(telegramId);
+    const result = await sendBroadcast(pa.message);
+    await setPendingAction(telegramId, null);
     await sendTelegramMessage(chatId, { text: adminTr.notifySent(result.sentCount || 0) });
     return;
   }
 
   if (data === 'notify_schedule') {
-    const draft = adminNotifyDrafts.get(telegramId);
-    if (!draft?.message) {
+    const pa = await getPendingAction(telegramId);
+    if (!pa?.message) {
       await sendTelegramMessage(chatId, { text: adminTr.notifyNeedMessage });
       return;
     }
-    adminNotifyDrafts.set(telegramId, { step: 'await_schedule_time', message: draft.message });
+    await setPendingAction(telegramId, { action: 'notify_schedule_time', message: pa.message });
     await sendTelegramMessage(chatId, { text: adminTr.notifyAskDate });
     return;
   }

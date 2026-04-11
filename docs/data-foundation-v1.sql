@@ -108,6 +108,7 @@ alter table if exists user_profiles add column if not exists preferred_city text
 alter table if exists user_profiles add column if not exists max_distance_km integer default 5;
 alter table if exists user_profiles add column if not exists created_at timestamptz default now();
 alter table if exists user_profiles add column if not exists last_seen timestamptz default now();
+alter table if exists user_profiles add column if not exists pending_action jsonb default null;
 
 create table if not exists user_stats (
   telegram_id text primary key references user_profiles(telegram_id) on delete cascade,
