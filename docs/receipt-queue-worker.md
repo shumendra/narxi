@@ -26,9 +26,11 @@ SUPABASE_KEY=your_supabase_service_role_key
 ## 3) Manual mode only
 
 Run manually when needed:
+
 - Double-click [scripts/worker_run_windows.bat](scripts/worker_run_windows.bat)
 
 Disable any previously configured hourly task:
+
 - Double-click [scripts/worker_disable_hourly_windows.bat](scripts/worker_disable_hourly_windows.bat)
 
 ## 4) What “success” means

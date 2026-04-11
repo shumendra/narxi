@@ -210,6 +210,7 @@ export default function App() {
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [findMapFocus, setFindMapFocus] = useState<{ lat: number; lng: number; zoom: number; trigger: number } | null>(null);
   const [geoError, setGeoError] = useState('');
+  const [maxDistanceKm, setMaxDistanceKm] = useState(5);
   const priceFormatter = useMemo(() => new Intl.NumberFormat('en-US'), []);
   const telegramUserId = window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || '';
   const telegramUser = window.Telegram?.WebApp?.initDataUnsafe?.user;
@@ -427,6 +428,8 @@ export default function App() {
         nearbyDistance: 'расстояние',
         nearbyError: 'Не удалось получить геолокацию',
         nearbyRetry: 'Запросить геолокацию снова',
+        maxDistanceLabel: 'Макс. расстояние',
+        maxDistanceKmUnit: 'км',
         searchPlaceholder: 'Название товара (например: Сахар)',
         emptyTitle: 'Поиск цен',
         emptyHint: 'Введите название товара, чтобы найти лучшие цены в выбранном городе',
@@ -624,6 +627,8 @@ export default function App() {
         nearbyDistance: 'distance',
         nearbyError: 'Location access was not granted',
         nearbyRetry: 'Request location again',
+        maxDistanceLabel: 'Max distance',
+        maxDistanceKmUnit: 'km',
         searchPlaceholder: 'Product name (e.g., Sugar)',
         emptyTitle: 'Find prices',
         emptyHint: 'Type a product name to find the best prices in the selected city',
@@ -886,6 +891,16 @@ export default function App() {
       }, { onConflict: 'telegram_id' });
 
       if (profileError) return;
+
+      const { data: profile } = await supabase
+        .from('user_profiles')
+        .select('max_distance_km')
+        .eq('telegram_id', telegramUserId)
+        .maybeSingle();
+
+      if (profile?.max_distance_km) {
+        setMaxDistanceKm(Number(profile.max_distance_km));
+      }
 
       const { data: existingStats } = await supabase
         .from('user_stats')
@@ -1739,6 +1754,14 @@ export default function App() {
     requestUserLocation(() => setNearbyEnabled(true));
   };
 
+  const updateMaxDistance = async (km: number) => {
+    const clamped = Math.min(Math.max(km, 1), 100);
+    setMaxDistanceKm(clamped);
+    if (telegramUserId) {
+      await supabase.from('user_profiles').update({ max_distance_km: clamped }).eq('telegram_id', telegramUserId);
+    }
+  };
+
   useEffect(() => {
     setFindMapFocus(null);
   }, [selectedCity, selectedProduct?.id, nearbyEnabled]);
@@ -2586,6 +2609,23 @@ export default function App() {
               </div>
               <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
                 <div className="text-xs text-stone-500">{t.nearbyHint}</div>
+                <div className="flex items-center gap-2">
+                  <label className="text-xs font-medium text-stone-500">{t.maxDistanceLabel}:</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={maxDistanceKm}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      if (v >= 1 && v <= 100) updateMaxDistance(v);
+                    }}
+                    className="w-14 rounded-md border border-stone-200 bg-stone-50 px-2 py-1 text-xs text-center text-stone-700"
+                  />
+                  <span className="text-xs text-stone-400">{t.maxDistanceKmUnit}</span>
+                </div>
+              </div>
+              <div className="mt-2 flex justify-end">
                 <button
                   onClick={scrollToContactForm}
                   className="inline-flex items-center gap-1 rounded-full border border-stone-200 bg-stone-50 px-3 py-1.5 text-xs font-semibold text-stone-700"

@@ -2,7 +2,7 @@ import axios from 'axios';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import dns from 'node:dns';
-import { extractCityFromAddress, getCityLabel, normalizeCityName } from '../../src/constants/cities.js';
+import { extractCityFromAddress, getCityLabel, normalizeCityName, getCityOption } from '../../src/constants/cities.js';
 import { isSoliqUrl } from '../../api/utils/receipt.js';
 import { sendBroadcast, sendWeeklyReports } from '../../api/notifications-core.js';
 
@@ -492,7 +492,6 @@ async function sendMenu(chatId, lang, telegramId = null) {
     [
       { text: BOT_COPY[lang].btnMyStats, callback_data: 'menu_mystats' },
       { text: BOT_COPY[lang].btnShopping, callback_data: 'menu_savdo' },
-      { text: BOT_COPY[lang].btnDistance, callback_data: 'menu_masofa' },
     ],
   ];
 
@@ -587,6 +586,17 @@ function getWeekNumber(date) {
   d.setUTCDate(d.getUTCDate() + 4 - dayNum);
   const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
   return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+}
+
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 function applyTagline(text, lang) {
@@ -702,7 +712,10 @@ async function saveShoppingList(telegramId, itemsText) {
   return items;
 }
 
-async function calculateOptimalRoute(items, userCity) {
+async function calculateOptimalRoute(items, userCity, maxDistanceKm) {
+  const cityOption = getCityOption(userCity);
+  const cityCenter = cityOption ? { lat: cityOption.center[0], lng: cityOption.center[1] } : null;
+
   const itemPrices = [];
   for (const item of items) {
     const { data: prices } = await supabase
@@ -711,10 +724,18 @@ async function calculateOptimalRoute(items, userCity) {
       .eq('city', userCity)
       .ilike('product_name_raw', `%${item}%`)
       .order('price', { ascending: true })
-      .limit(5);
+      .limit(20);
 
     if (prices && prices.length > 0) {
-      itemPrices.push({ item, cheapest: prices[0], allPrices: prices });
+      const filtered = cityCenter && maxDistanceKm
+        ? prices.filter(p => {
+            if (p.latitude == null || p.longitude == null) return true;
+            const d = haversineKm(cityCenter.lat, cityCenter.lng, p.latitude, p.longitude);
+            return d <= maxDistanceKm;
+          })
+        : prices;
+      const best = filtered.length > 0 ? filtered : prices;
+      itemPrices.push({ item, cheapest: best[0], allPrices: best.slice(0, 5) });
     }
   }
 
@@ -979,7 +1000,7 @@ async function handleMessage(message) {
       .maybeSingle();
     const city = normalizeCityName(profile?.preferred_city || '') || 'Tashkent';
     const maxDistanceKm = Number(profile?.max_distance_km) || 5;
-    const routeData = await calculateOptimalRoute(items, city);
+    const routeData = await calculateOptimalRoute(items, city, maxDistanceKm);
     const messageText = formatRouteMessage(routeData, maxDistanceKm, lang);
     await sendTelegramMessage(chatId, { text: messageText });
 
@@ -1100,7 +1121,7 @@ async function handleMessage(message) {
       .maybeSingle();
     const city = normalizeCityName(profile?.preferred_city || '') || 'Tashkent';
     const maxDistanceKm = Number(profile?.max_distance_km) || 5;
-    const routeData = await calculateOptimalRoute(items, city);
+    const routeData = await calculateOptimalRoute(items, city, maxDistanceKm);
     await sendTelegramMessage(chatId, { text: formatRouteMessage(routeData, maxDistanceKm, lang) });
 
     const stores = Object.values(routeData.storeGroups || {}).filter(s => s.latitude && s.longitude);
@@ -1488,12 +1509,6 @@ async function handleCallback(callbackQuery) {
   if (data === 'menu_savdo') {
     pendingShoppingUsers.add(telegramId);
     await sendTelegramMessage(chatId, { text: `${tr.shoppingAsk}\n\n${tr.shoppingAskHint}` });
-    return;
-  }
-
-  if (data === 'menu_masofa') {
-    pendingDistanceUsers.add(telegramId);
-    await sendTelegramMessage(chatId, { text: tr.distanceAsk });
     return;
   }
 
