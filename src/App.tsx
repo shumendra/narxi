@@ -5,14 +5,15 @@
 
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Search, MapPin, Plus, ChevronRight, Navigation, Camera, Check, QrCode, PencilLine, Loader2, ShoppingCart, Download, Upload } from 'lucide-react';
-import { MapContainer, TileLayer, CircleMarker, Popup, useMap, useMapEvents } from 'react-leaflet';
+import { Search, MapPin, Plus, ChevronRight, Navigation, Camera, Check, QrCode, PencilLine, Loader2, ShoppingCart, Download, Upload, X, Crosshair, Copy, ChevronDown } from 'lucide-react';
+import { MapContainer, TileLayer, CircleMarker, Popup, Polyline, useMap, useMapEvents } from 'react-leaflet';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { formatDistanceToNow } from 'date-fns';
 import { enUS, ru, uz } from 'date-fns/locale';
 import { CITY_OPTIONS, DEFAULT_CITY, getCityLabel, getCityOption } from './constants/cities.js';
 import { haversineDistanceKm } from './utils/haversine.js';
+import { TASHKENT_DISTRICTS, DISTRICT_LIST, findDistrict } from './constants/districts.js';
 
 // Utility for Tailwind classes
 function cn(...inputs: ClassValue[]) {
@@ -213,24 +214,41 @@ export default function App() {
   const [findMapFocus, setFindMapFocus] = useState<{ lat: number; lng: number; zoom: number; trigger: number } | null>(null);
   const [geoError, setGeoError] = useState('');
   const [maxDistanceKm, setMaxDistanceKm] = useState(5);
-  const [planInput, setPlanInput] = useState('');
   const [planLoading, setPlanLoading] = useState(false);
-  const [planMaxStores, setPlanMaxStores] = useState(3);
   const [planLocationInput, setPlanLocationInput] = useState('');
   const [planLocatingGps, setPlanLocatingGps] = useState(false);
+  // Shopping list
+  const [shoppingList, setShoppingList] = useState<Product[]>([]);
+  const [planSearchQuery, setPlanSearchQuery] = useState('');
+  const [planShowDropdown, setPlanShowDropdown] = useState(false);
+  const [planStep, setPlanStep] = useState<'list' | 'results'>('list');
+  const [planDistanceMode, setPlanDistanceMode] = useState<'near' | 'medium' | 'far'>('medium');
+  const [planDistrictQuery, setPlanDistrictQuery] = useState('');
+  const [planDistrictDropdown, setPlanDistrictDropdown] = useState(false);
+  const [planLoadingMsgIdx, setPlanLoadingMsgIdx] = useState(0);
+  const [expandedStoreIdx, setExpandedStoreIdx] = useState<number | null>(null);
   const [planResult, setPlanResult] = useState<{
-    stores: Array<{
-      name: string; address: string;
-      lat: number | null; lng: number | null;
-      distanceKm: number | null;
-      items: Array<{ query: string; productName: string; price: number }>;
-      storeTotal: number;
+    bestPlan: {
+      stores: Array<{ name: string; address: string; latitude: number; longitude: number; distance: number }>;
+      itemAssignments: Record<string, Array<{ item: Product; price: number; isCheapest?: boolean; dataAge?: number }>>;
+      missingItems: Product[];
+      totalItemCost: number;
+      totalTravelPenalty: number;
+      totalScore: number;
+      storeCount: number;
+      coveragePercent: number;
+    };
+    singleStorePlans: Array<{
+      name: string; address: string; distance: number;
+      latitude: number; longitude: number;
+      totalCost: number; missingItems: string[];
+      usedEstimate?: boolean;
+      items: Record<string, number>;
     }>;
-    notFound: string[];
-    grandTotal: number;
-    singleStoreTotal: number | null;
-    singleStoreName: string | null;
     savings: number;
+    cheapestSingleStore: { name: string; totalCost: number } | null;
+    hasSparseData: boolean;
+    hasStaleData: boolean;
   } | null>(null);
   const priceFormatter = useMemo(() => new Intl.NumberFormat('en-US'), []);
   const telegramUserId = window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || '';
@@ -443,27 +461,68 @@ export default function App() {
         reportProductNamePlaceholder: 'Masalan: Shakar',
         tagline: 'Narxni bil, pulni teja',
         planTitle: '🛒 Xarid rejasi',
-        planHint: 'Sotib olmoqchi bo\'lgan mahsulotlarni vergul bilan yozing',
-        planPlaceholder: 'Masalan: shakar, guruch, tuxum, sut',
-        planButton: 'Rejani tuzish',
-        planSearching: 'Narxlar qidirilmoqda...',
-        planNoData: 'Bu mahsulotlar uchun narxlar topilmadi',
-        planRoute: '📍 Optimal marshrut',
-        planStoreTotal: 'Jami',
-        planGrandTotal: '💰 Umumiy',
+        planAddItem: 'Mahsulot qo\'shing',
+        planAddPlaceholder: 'Qidirish: shakar, tuxum, sut...',
+        planClearAll: 'Barchasini tozalash',
+        planEmptyList: 'Xarid ro\'yxatingizga mahsulot qo\'shing',
+        planEmptyArrow: '↑ Yuqoridagi qidiruvdan mahsulot tanlang',
+        planItemCount: (n: number) => `${n} ta mahsulot`,
+        planSetLocation: '📍 Joylashuvimni aniqlash',
+        planOrDistrict: 'yoki tumanni kiriting',
+        planDistNear: '🚶 Yaqin',
+        planDistNearRange: '1-2 km',
+        planDistNearHint: 'tez va qulay',
+        planDistMedium: '🚌 O\'rtacha',
+        planDistMediumRange: '2-5 km',
+        planDistMediumHint: 'tavsiya etiladi',
+        planDistFar: '🚗 Uzoqroq',
+        planDistFarRange: '5-10 km',
+        planDistFarHint: 'maksimal tejash',
+        planCalculate: 'Eng yaxshi rejani hisoblash 🧮',
+        planLoadingMsgs: [
+          'Do\'konlar tekshirilmoqda...',
+          'Narxlar solishtirilmoqda...',
+          'Eng arzon yo\'l hisoblanmoqda...',
+          'Deyarli tayyor...',
+        ],
+        planBestTitle: '🛒 Eng yaxshi reja',
+        planStoreCount: (n: number) => `${n} ta do\'kon`,
+        planTotal: '💰 Jami',
         planSavings: '✅ Tejash',
-        planSavingsVs: (store: string) => `${store} bilan solishtirganda`,
-        planOpenMap: '🗺️ Xaritada ko\'rish',
+        planSavingsVs: 'yagona do\'konga nisbatan',
+        planHourlyWage: (h: string) => `Bu ${h} soatlik ish haqiga teng`,
+        planAnnualSave: (s: string) => `📅 Yiliga: ${s} so'm tejash`,
+        planCheapestBadge: '↓ eng arzon',
+        planDataAge: (d: number) => d === 0 ? 'Bugun' : `${d} kun oldin`,
+        planDataStale: '⚠️',
+        planMissing: 'Topilmadi',
+        planMissingHint: '👉 Ushbu mahsulotlarni do\'konda narxini tekshiring',
+        planMissingNearby: 'yaqin atrofda narx yo\'q',
+        planSingleStoreTitle: '📊 Bir joydan olsangiz qancha to\'laysiz?',
+        planSingleStoreHint: 'Barcha mahsulotlar bir do\'kondan olingan holda',
+        planCheapestStore: '🟢 Eng arzon',
+        planMoreExpensive: (s: string) => `Optimaldan ${s} so'm qimmat`,
+        planEstimateUsed: (n: number) => `⚠️ ${n} ta mahsulot yo'q (taxminiy narx ishlatildi)`,
+        planMapTitle: '🗺️ Marshrut',
+        planOpenMap: '🗺️ Yandex Maps',
+        planCopyPlan: '📋 Rejani nusxalash',
+        planCopied: 'Nusxalandi ✅',
+        planSingleStoreOnly: 'Yaqin atrofda faqat 1 ta do\'kon ma\'lumoti mavjud',
+        planStaleWarning: '⚠️ Ba\'zi narxlar eskirgan bo\'lishi mumkin. Xarid paytida narxni tekshiring.',
+        planSimilarPrices: 'Bu atrofda narxlar bir-biriga yaqin',
+        planNoData: 'Tanlangan masofada narx ma\'lumoti topilmadi',
+        planNoDataHint: 'Masofani oshirib ko\'ring 👆',
+        planNeedLocation: 'Joylashuvni kiriting yoki GPS ruxsat bering',
+        planRetryGps: 'GPS qayta so\'rash',
         planSumLabel: 'so\'m',
         planNewSearch: 'Yangi qidiruv',
-        planMaxStores: 'Do\'konlar soni',
-        planNotFound: 'Topilmadi',
-        planDistanceAway: (km: string) => `~${km} km uzoqlikda`,
+        planDistanceAway: (km: string) => `📍 ${km} km uzoqlikda`,
+        planDataInfo: (d: string) => `⏱ Ma'lumot: ${d}`,
+        planStoreTotal: 'Jami',
         planMyLocation: 'Mening joylashuvim',
         planGpsButton: 'GPS orqali aniqlash',
         planGpsLocating: 'Aniqlanmoqda...',
-        planGpsSet: 'Joylashuv aniqlandi',
-        planManualHint: 'yoki koordinatalar kiriting (lat, lng)',
+        planGpsSet: '📍 Joylashuv aniqlandi',
         planLocationClear: 'Tozalash',
         viewedThisWeek: (count: number, product: string) => `👁 ${count} kishi bu hafta ${product} narxini tekshirdi`,
         proofLabel: 'Isbot (chek yoki foto havolasi)',
@@ -682,27 +741,68 @@ export default function App() {
         reportProductNamePlaceholder: 'Например: Сахар',
         tagline: 'Знай цену, экономь деньги',
         planTitle: '🛒 План покупок',
-        planHint: 'Напишите товары через запятую',
-        planPlaceholder: 'Например: сахар, рис, яйца, молоко',
-        planButton: 'Составить план',
-        planSearching: 'Поиск цен...',
-        planNoData: 'Не найдено цен для этих товаров',
-        planRoute: '📍 Оптимальный маршрут',
-        planStoreTotal: 'Итого',
-        planGrandTotal: '💰 Общая сумма',
+        planAddItem: 'Добавьте товар',
+        planAddPlaceholder: 'Поиск: сахар, яйца, молоко...',
+        planClearAll: 'Очистить всё',
+        planEmptyList: 'Добавьте товары в список покупок',
+        planEmptyArrow: '↑ Выберите товар из поиска выше',
+        planItemCount: (n: number) => `${n} товар(ов)`,
+        planSetLocation: '📍 Определить местоположение',
+        planOrDistrict: 'или введите район',
+        planDistNear: '🚶 Рядом',
+        planDistNearRange: '1-2 км',
+        planDistNearHint: 'быстро и удобно',
+        planDistMedium: '🚌 Средне',
+        planDistMediumRange: '2-5 км',
+        planDistMediumHint: 'рекомендуется',
+        planDistFar: '🚗 Далеко',
+        planDistFarRange: '5-10 км',
+        planDistFarHint: 'максимальная экономия',
+        planCalculate: 'Рассчитать лучший план 🧮',
+        planLoadingMsgs: [
+          'Проверяем магазины...',
+          'Сравниваем цены...',
+          'Считаем самый дешёвый путь...',
+          'Почти готово...',
+        ],
+        planBestTitle: '🛒 Лучший план',
+        planStoreCount: (n: number) => `${n} магазин(ов)`,
+        planTotal: '💰 Итого',
         planSavings: '✅ Экономия',
-        planSavingsVs: (store: string) => `по сравнению с ${store}`,
-        planOpenMap: '🗺️ Открыть на карте',
+        planSavingsVs: 'по сравнению с одним магазином',
+        planHourlyWage: (h: string) => `Это ${h} час(ов) работы`,
+        planAnnualSave: (s: string) => `📅 В год: ${s} сум экономии`,
+        planCheapestBadge: '↓ дешевле всех',
+        planDataAge: (d: number) => d === 0 ? 'Сегодня' : `${d} дн. назад`,
+        planDataStale: '⚠️',
+        planMissing: 'Не найдено',
+        planMissingHint: '👉 Уточните цены в магазине',
+        planMissingNearby: 'нет данных поблизости',
+        planSingleStoreTitle: '📊 Сколько стоит купить всё в одном месте?',
+        planSingleStoreHint: 'Все товары из одного магазина',
+        planCheapestStore: '🟢 Самый дешёвый',
+        planMoreExpensive: (s: string) => `На ${s} сум дороже оптимала`,
+        planEstimateUsed: (n: number) => `⚠️ ${n} товар(ов) нет (оценочная цена)`,
+        planMapTitle: '🗺️ Маршрут',
+        planOpenMap: '🗺️ Yandex Maps',
+        planCopyPlan: '📋 Скопировать план',
+        planCopied: 'Скопировано ✅',
+        planSingleStoreOnly: 'Поблизости данные только из 1 магазина',
+        planStaleWarning: '⚠️ Некоторые цены могут быть устаревшими. Проверьте при покупке.',
+        planSimilarPrices: 'Цены поблизости примерно одинаковы',
+        planNoData: 'Нет данных о ценах в выбранном радиусе',
+        planNoDataHint: 'Попробуйте увеличить расстояние 👆',
+        planNeedLocation: 'Укажите местоположение или разрешите GPS',
+        planRetryGps: 'Повторить GPS',
         planSumLabel: 'сум',
         planNewSearch: 'Новый поиск',
-        planMaxStores: 'Кол-во магазинов',
-        planNotFound: 'Не найдено',
-        planDistanceAway: (km: string) => `~${km} км`,
+        planDistanceAway: (km: string) => `📍 ${km} км`,
+        planDataInfo: (d: string) => `⏱ Данные: ${d}`,
+        planStoreTotal: 'Итого',
         planMyLocation: 'Моё местоположение',
         planGpsButton: 'Определить по GPS',
         planGpsLocating: 'Определяем...',
-        planGpsSet: 'Местоположение задано',
-        planManualHint: 'или введите координаты (lat, lng)',
+        planGpsSet: '📍 Местоположение задано',
         planLocationClear: 'Сбросить',
         viewedThisWeek: (count: number, product: string) => `👁 ${count} человек проверили цену ${product} на этой неделе`,
         proofLabel: 'Подтверждение (ссылка на чек или фото)',
@@ -921,27 +1021,68 @@ export default function App() {
         reportProductNamePlaceholder: 'Example: Sugar',
         tagline: 'Know the price, save the money',
         planTitle: '🛒 Shopping plan',
-        planHint: 'Write products separated by commas',
-        planPlaceholder: 'Example: sugar, rice, eggs, milk',
-        planButton: 'Build plan',
-        planSearching: 'Searching prices...',
-        planNoData: 'No prices found for these products',
-        planRoute: '📍 Optimal route',
-        planStoreTotal: 'Total',
-        planGrandTotal: '💰 Grand total',
+        planAddItem: 'Add a product',
+        planAddPlaceholder: 'Search: sugar, eggs, milk...',
+        planClearAll: 'Clear all',
+        planEmptyList: 'Add products to your shopping list',
+        planEmptyArrow: '↑ Select a product from search above',
+        planItemCount: (n: number) => `${n} item(s)`,
+        planSetLocation: '📍 Detect my location',
+        planOrDistrict: 'or enter a district',
+        planDistNear: '🚶 Near',
+        planDistNearRange: '1-2 km',
+        planDistNearHint: 'quick and easy',
+        planDistMedium: '🚌 Medium',
+        planDistMediumRange: '2-5 km',
+        planDistMediumHint: 'recommended',
+        planDistFar: '🚗 Far',
+        planDistFarRange: '5-10 km',
+        planDistFarHint: 'maximum savings',
+        planCalculate: 'Calculate best plan 🧮',
+        planLoadingMsgs: [
+          'Checking stores...',
+          'Comparing prices...',
+          'Calculating cheapest route...',
+          'Almost ready...',
+        ],
+        planBestTitle: '🛒 Best plan',
+        planStoreCount: (n: number) => `${n} store(s)`,
+        planTotal: '💰 Total',
         planSavings: '✅ Savings',
-        planSavingsVs: (store: string) => `vs. buying all at ${store}`,
-        planOpenMap: '🗺️ View on map',
+        planSavingsVs: 'vs. buying from one store',
+        planHourlyWage: (h: string) => `Equivalent to ${h} hour(s) of work`,
+        planAnnualSave: (s: string) => `📅 Annual: ${s} sum saved`,
+        planCheapestBadge: '↓ cheapest',
+        planDataAge: (d: number) => d === 0 ? 'Today' : `${d} day(s) ago`,
+        planDataStale: '⚠️',
+        planMissing: 'Not found',
+        planMissingHint: '👉 Check prices at the store',
+        planMissingNearby: 'no price data nearby',
+        planSingleStoreTitle: '📊 How much at a single store?',
+        planSingleStoreHint: 'If you buy everything from one place',
+        planCheapestStore: '🟢 Cheapest',
+        planMoreExpensive: (s: string) => `${s} sum more expensive than optimal`,
+        planEstimateUsed: (n: number) => `⚠️ ${n} item(s) missing (estimated price used)`,
+        planMapTitle: '🗺️ Route',
+        planOpenMap: '🗺️ Yandex Maps',
+        planCopyPlan: '📋 Copy plan',
+        planCopied: 'Copied ✅',
+        planSingleStoreOnly: 'Only 1 store has data nearby',
+        planStaleWarning: '⚠️ Some prices may be outdated. Verify when shopping.',
+        planSimilarPrices: 'Prices nearby are similar',
+        planNoData: 'No price data within selected range',
+        planNoDataHint: 'Try increasing the distance 👆',
+        planNeedLocation: 'Set your location or allow GPS',
+        planRetryGps: 'Retry GPS',
         planSumLabel: 'sum',
         planNewSearch: 'New search',
-        planMaxStores: 'Max stores',
-        planNotFound: 'Not found',
-        planDistanceAway: (km: string) => `~${km} km away`,
+        planDistanceAway: (km: string) => `📍 ${km} km away`,
+        planDataInfo: (d: string) => `⏱ Data: ${d}`,
+        planStoreTotal: 'Total',
         planMyLocation: 'My location',
         planGpsButton: 'Use GPS',
         planGpsLocating: 'Locating...',
-        planGpsSet: 'Location set',
-        planManualHint: 'or enter coordinates (lat, lng)',
+        planGpsSet: '📍 Location set',
         planLocationClear: 'Clear',
         viewedThisWeek: (count: number, product: string) => `👁 ${count} people checked ${product} price this week`,
         proofLabel: 'Proof (receipt or photo URL)',
@@ -1776,6 +1917,51 @@ export default function App() {
     );
   }, [searchQuery, cityProducts]);
 
+  const planFilteredProducts = useMemo(() => {
+    if (!planSearchQuery || planSearchQuery.length < 2) return [];
+    const q = planSearchQuery.toLowerCase();
+    return cityProducts
+      .filter(p =>
+        !shoppingList.some(s => s.id === p.id) && (
+          p.name_uz.toLowerCase().includes(q) ||
+          p.name_ru.toLowerCase().includes(q) ||
+          (p.name_en || '').toLowerCase().includes(q) ||
+          (p.search_text || '').toLowerCase().includes(q)
+        )
+      )
+      .slice(0, 8);
+  }, [planSearchQuery, cityProducts, shoppingList]);
+
+  useEffect(() => {
+    if (!planLoading) return;
+    const interval = setInterval(() => {
+      setPlanLoadingMsgIdx(i => i + 1);
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [planLoading]);
+
+  const copyPlanToClipboard = () => {
+    if (!planResult || !planResult.bestPlan) return;
+    const lines: string[] = [];
+    lines.push(t.planBestTitle);
+    for (const store of planResult.bestPlan.stores) {
+      lines.push('');
+      lines.push(`📍 ${store.name}${store.address ? ` — ${store.address}` : ''}`);
+      const items = planResult.bestPlan.itemAssignments[store.name];
+      if (items) {
+        for (const it of items) {
+          lines.push(`  • ${getProductName(it.item, lang)}: ${priceFormatter.format(it.price)} ${t.planSumLabel}`);
+        }
+      }
+    }
+    lines.push('');
+    lines.push(`${t.planTotal}: ${priceFormatter.format(planResult.bestPlan.totalItemCost)} ${t.planSumLabel}`);
+    if (planResult.savings > 0) {
+      lines.push(`${t.planSavings}: ${priceFormatter.format(planResult.savings)} ${t.planSumLabel}`);
+    }
+    navigator.clipboard.writeText(lines.join('\n'));
+  };
+
   useEffect(() => {
     if (mode !== 'find') return;
     const q = searchQuery.trim();
@@ -1988,60 +2174,50 @@ export default function App() {
   };
 
   const runShoppingPlan = async () => {
-    const queryItems = planInput.split(',').map(s => s.trim()).filter(Boolean);
-    if (queryItems.length === 0) return;
+    if (shoppingList.length === 0) return;
     setPlanLoading(true);
     setPlanResult(null);
+    setPlanStep('results');
+    setPlanLoadingMsgIdx(0);
 
-    // Request user location if not already available
-    if (!userLocation) {
-      requestUserLocation();
-    }
+    const distanceRadiusKm = planDistanceMode === 'near' ? 2 : planDistanceMode === 'medium' ? 5 : 10;
+    const TRANSPORT_COST_PER_KM = 2000;
 
     const origin = userLocation || (() => {
       const city = getCityOption(selectedCity);
       return city ? { lat: city.center[0], lng: city.center[1] } : null;
     })();
 
-    // 1. Match each query to product IDs using locally cached products (enriched with aliases)
-    const itemMatches: Array<{ query: string; productIds: string[] }> = [];
-    for (const query of queryItems) {
-      const q = query.toLowerCase();
-      const matching = products.filter(p =>
-        p.name_uz?.toLowerCase().includes(q) ||
-        p.name_ru?.toLowerCase().includes(q) ||
-        (p.name_en || '').toLowerCase().includes(q) ||
-        (p.search_text || '').toLowerCase().includes(q)
-      );
-      itemMatches.push({ query, productIds: matching.map(p => p.id) });
-    }
+    const productIds = shoppingList.map(p => p.id);
 
-    const allProductIds = [...new Set(itemMatches.flatMap(m => m.productIds))];
-    const notFound: string[] = [];
-
-    if (allProductIds.length === 0) {
-      setPlanResult({ stores: [], notFound: queryItems, grandTotal: 0, singleStoreTotal: null, singleStoreName: null, savings: 0 });
-      setPlanLoading(false);
-      return;
-    }
-
-    // 2. Fetch all prices for matched products in the city (batch if needed)
-    let allPrices: Array<{ product_id: string; product_name_raw: string; price: number; place_name: string; place_address: string; latitude: number | null; longitude: number | null }> = [];
+    // Phase 1: Fetch all prices for products in city
+    let allPrices: Array<{
+      product_id: string; product_name_raw: string; price: number;
+      place_name: string; place_address: string;
+      latitude: number | null; longitude: number | null;
+      receipt_date: string | null;
+    }> = [];
     const batchSize = 50;
-    for (let i = 0; i < allProductIds.length; i += batchSize) {
-      const batch = allProductIds.slice(i, i + batchSize);
+    for (let i = 0; i < productIds.length; i += batchSize) {
+      const batch = productIds.slice(i, i + batchSize);
       const { data } = await supabase
         .from('prices')
-        .select('product_id, product_name_raw, price, place_name, place_address, latitude, longitude')
+        .select('product_id, product_name_raw, price, place_name, place_address, latitude, longitude, receipt_date')
         .eq('city', selectedCity)
         .in('product_id', batch);
       if (data) allPrices = [...allPrices, ...data];
     }
 
-    // 3. Build store inventory: for each store, the cheapest price for each product
+    // Phase 2: Build store inventory with distances
     type StoreKey = string;
-    const storeInventory = new Map<StoreKey, Map<string, { productId: string; productName: string; price: number; storeName: string; storeAddress: string; lat: number | null; lng: number | null }>>();
+    type StoreEntry = {
+      productId: string; productName: string; price: number;
+      storeName: string; storeAddress: string;
+      lat: number | null; lng: number | null; dataAge: number;
+    };
+    const storeInventory = new Map<StoreKey, Map<string, StoreEntry>>();
 
+    const now = Date.now();
     for (const row of allPrices) {
       const storeKey = `${(row.place_name || '').trim().toLowerCase()}|${(row.place_address || '').trim().toLowerCase()}`;
       if (!storeInventory.has(storeKey)) storeInventory.set(storeKey, new Map());
@@ -2052,6 +2228,7 @@ export default function App() {
         const looksLikeCode = rawName.length > 0 && !/\s/.test(rawName) && /^[A-Z0-9]+$/i.test(rawName);
         const displayName = looksLikeCode ? (row.place_address || rawName) : (rawName || '?');
         const displayAddress = looksLikeCode ? '' : (row.place_address || '');
+        const dataAge = row.receipt_date ? Math.floor((now - new Date(row.receipt_date).getTime()) / 86400000) : 999;
         inv.set(row.product_id, {
           productId: row.product_id,
           productName: row.product_name_raw || '',
@@ -2060,80 +2237,155 @@ export default function App() {
           storeAddress: displayAddress,
           lat: row.latitude,
           lng: row.longitude,
+          dataAge,
         });
       }
     }
 
-    // 4. Compute distances and filter stores beyond maxDistanceKm
+    // Compute distances and filter by radius
     const storeDistances = new Map<StoreKey, number>();
     for (const [storeKey, inv] of storeInventory) {
       const first = [...inv.values()][0];
       if (origin && first.lat != null && first.lng != null) {
         const dist = haversineDistanceKm(origin, { lat: first.lat, lng: first.lng });
         storeDistances.set(storeKey, dist);
-        if (userLocation && dist > maxDistanceKm) {
+        if (dist > distanceRadiusKm) {
           storeInventory.delete(storeKey);
         }
       }
     }
 
-    // 5. For each query, determine which stores can serve it (with best price per store)
-    const itemStoreOptions: Array<{ query: string; options: Map<StoreKey, { productName: string; price: number }> }> = [];
-    for (const { query, productIds } of itemMatches) {
-      if (productIds.length === 0) { notFound.push(query); continue; }
-      const options = new Map<StoreKey, { productName: string; price: number }>();
-      for (const [storeKey, inv] of storeInventory) {
-        let best: { productName: string; price: number } | null = null;
-        for (const pid of productIds) {
-          const entry = inv.get(pid);
-          if (entry && (!best || entry.price < best.price)) {
-            best = { productName: entry.productName, price: entry.price };
-          }
-        }
-        if (best) options.set(storeKey, best);
-      }
-      if (options.size === 0) notFound.push(query);
-      else itemStoreOptions.push({ query, options });
-    }
-
-    if (itemStoreOptions.length === 0) {
-      setPlanResult({ stores: [], notFound, grandTotal: 0, singleStoreTotal: null, singleStoreName: null, savings: 0 });
+    if (storeInventory.size === 0) {
+      setPlanResult({
+        bestPlan: {
+          stores: [], itemAssignments: {}, missingItems: [...shoppingList],
+          totalItemCost: 0, totalTravelPenalty: 0, totalScore: 0, storeCount: 0, coveragePercent: 0,
+        },
+        singleStorePlans: [], savings: 0, cheapestSingleStore: null,
+        hasSparseData: true, hasStaleData: false,
+      });
       setPlanLoading(false);
       return;
     }
 
-    // 6. Compute single-store baseline (store covering most items cheapest)
-    let bestSingleStore: { storeKey: StoreKey; total: number; count: number } | null = null;
-    for (const [storeKey] of storeInventory) {
-      let total = 0;
-      let count = 0;
-      for (const { options } of itemStoreOptions) {
-        const opt = options.get(storeKey);
-        if (opt) { total += opt.price; count++; }
+    // Phase 3: Build single-store plans
+    const singleStorePlans: Array<{
+      name: string; address: string; distance: number;
+      latitude: number; longitude: number;
+      totalCost: number; missingItems: string[];
+      usedEstimate?: boolean;
+      items: Record<string, number>;
+    }> = [];
+
+    // Compute median prices for estimates
+    const productMedians = new Map<string, number>();
+    for (const pid of productIds) {
+      const prices: number[] = [];
+      for (const [, inv] of storeInventory) {
+        const entry = inv.get(pid);
+        if (entry) prices.push(entry.price);
       }
-      if (count > 0 && (!bestSingleStore || count > bestSingleStore.count || (count === bestSingleStore.count && total < bestSingleStore.total))) {
-        bestSingleStore = { storeKey, total, count };
+      if (prices.length > 0) {
+        prices.sort((a, b) => a - b);
+        productMedians.set(pid, prices[Math.floor(prices.length / 2)]);
       }
     }
 
-    // 7. Greedy set-cover: pick stores that maximise coverage and minimise cost + travel
-    const TRANSPORT_COST_PER_KM = 2000; // so'm equivalent per km of travel
-    const selectedStores = new Map<StoreKey, Array<{ query: string; productName: string; price: number }>>();
+    for (const [storeKey, inv] of storeInventory) {
+      const first = [...inv.values()][0];
+      if (!first.lat || !first.lng) continue;
+      let totalCost = 0;
+      const missing: string[] = [];
+      const items: Record<string, number> = {};
+      let usedEstimate = false;
+      for (const p of shoppingList) {
+        const entry = inv.get(p.id);
+        if (entry) {
+          totalCost += entry.price;
+          items[p.id] = entry.price;
+        } else {
+          const median = productMedians.get(p.id);
+          if (median) {
+            totalCost += median;
+            items[p.id] = median;
+            usedEstimate = true;
+          }
+          missing.push(getProductName(p, lang));
+        }
+      }
+      singleStorePlans.push({
+        name: first.storeName,
+        address: first.storeAddress,
+        distance: storeDistances.get(storeKey) || 0,
+        latitude: first.lat,
+        longitude: first.lng,
+        totalCost,
+        missingItems: missing,
+        usedEstimate,
+        items,
+      });
+    }
+    singleStorePlans.sort((a, b) => a.totalCost - b.totalCost);
+
+    // Phase 4: Greedy set-cover for optimal multi-store plan
+    const itemStoreOptions: Array<{
+      product: Product;
+      options: Map<StoreKey, { productName: string; price: number; dataAge: number }>;
+    }> = [];
+    const missingItems: Product[] = [];
+
+    for (const p of shoppingList) {
+      const options = new Map<StoreKey, { productName: string; price: number; dataAge: number }>();
+      for (const [storeKey, inv] of storeInventory) {
+        const entry = inv.get(p.id);
+        if (entry) options.set(storeKey, { productName: entry.productName, price: entry.price, dataAge: entry.dataAge });
+      }
+      if (options.size === 0) missingItems.push(p);
+      else itemStoreOptions.push({ product: p, options });
+    }
+
+    if (itemStoreOptions.length === 0) {
+      setPlanResult({
+        bestPlan: {
+          stores: [], itemAssignments: {}, missingItems,
+          totalItemCost: 0, totalTravelPenalty: 0, totalScore: 0, storeCount: 0, coveragePercent: 0,
+        },
+        singleStorePlans: singleStorePlans.slice(0, 10),
+        savings: 0, cheapestSingleStore: null,
+        hasSparseData: true, hasStaleData: false,
+      });
+      setPlanLoading(false);
+      return;
+    }
+
+    const MAX_STORES = 5;
+    const selectedStores = new Map<StoreKey, Array<{ item: Product; price: number; isCheapest?: boolean; dataAge?: number }>>();
     const coveredItems = new Set<number>();
 
-    while (coveredItems.size < itemStoreOptions.length && selectedStores.size < planMaxStores) {
+    // Find cheapest price per item globally for "cheapest" badge
+    const cheapestPricePerItem = new Map<string, number>();
+    for (const { product, options } of itemStoreOptions) {
+      let min = Infinity;
+      for (const [, opt] of options) if (opt.price < min) min = opt.price;
+      cheapestPricePerItem.set(product.id, min);
+    }
+
+    while (coveredItems.size < itemStoreOptions.length && selectedStores.size < MAX_STORES) {
       let bestStore: StoreKey | null = null;
       let bestScore = -Infinity;
-      let bestItems: Array<{ idx: number; query: string; productName: string; price: number }> = [];
+      let bestItems: Array<{ idx: number; item: Product; price: number; dataAge: number }> = [];
 
       for (const [storeKey] of storeInventory) {
         if (selectedStores.has(storeKey)) continue;
-        const items: Array<{ idx: number; query: string; productName: string; price: number }> = [];
+        const items: Array<{ idx: number; item: Product; price: number; dataAge: number }> = [];
         let totalPrice = 0;
         for (let i = 0; i < itemStoreOptions.length; i++) {
           if (coveredItems.has(i)) continue;
           const opt = itemStoreOptions[i].options.get(storeKey);
-          if (opt) { items.push({ idx: i, query: itemStoreOptions[i].query, ...opt }); totalPrice += opt.price; }
+          if (opt) {
+            items.push({ idx: i, item: itemStoreOptions[i].product, price: opt.price, dataAge: opt.dataAge });
+            totalPrice += opt.price;
+          }
         }
         if (items.length === 0) continue;
         const distKm = storeDistances.get(storeKey) || 0;
@@ -2142,35 +2394,73 @@ export default function App() {
       }
 
       if (!bestStore) break;
-      selectedStores.set(bestStore, bestItems.map(({ query, productName, price }) => ({ query, productName, price })));
-      for (const item of bestItems) coveredItems.add(item.idx);
+      selectedStores.set(bestStore, bestItems.map(({ item, price, dataAge }) => ({
+        item,
+        price,
+        isCheapest: cheapestPricePerItem.get(item.id) === price,
+        dataAge,
+      })));
+      for (const it of bestItems) coveredItems.add(it.idx);
     }
 
-    // Mark uncovered items as not found
+    // Mark uncovered items
     for (let i = 0; i < itemStoreOptions.length; i++) {
-      if (!coveredItems.has(i)) notFound.push(itemStoreOptions[i].query);
+      if (!coveredItems.has(i)) missingItems.push(itemStoreOptions[i].product);
     }
 
-    // 8. Build result
-    const stores = [...selectedStores.entries()].map(([storeKey, items]) => {
+    // Build stores array
+    const bestStores = [...selectedStores.entries()].map(([storeKey]) => {
       const first = [...(storeInventory.get(storeKey)?.values() || [])][0];
       return {
         name: first?.storeName || '?',
         address: first?.storeAddress || '',
-        lat: first?.lat || null,
-        lng: first?.lng || null,
-        distanceKm: storeDistances.get(storeKey) ?? null,
-        items,
-        storeTotal: items.reduce((s, i) => s + i.price, 0),
+        latitude: first?.lat || 0,
+        longitude: first?.lng || 0,
+        distance: storeDistances.get(storeKey) ?? 0,
       };
-    }).sort((a, b) => (a.distanceKm ?? 999) - (b.distanceKm ?? 999));
+    }).sort((a, b) => a.distance - b.distance);
 
-    const grandTotal = stores.reduce((s, g) => s + g.storeTotal, 0);
-    const singleStoreTotal = bestSingleStore ? bestSingleStore.total : null;
-    const singleStoreName = bestSingleStore ? ([...(storeInventory.get(bestSingleStore.storeKey)?.values() || [])][0]?.storeName || null) : null;
-    const savings = singleStoreTotal != null ? Math.max(singleStoreTotal - grandTotal, 0) : 0;
+    // Build item assignments by store name
+    const itemAssignments: Record<string, Array<{ item: Product; price: number; isCheapest?: boolean; dataAge?: number }>> = {};
+    for (const [storeKey, items] of selectedStores) {
+      const first = [...(storeInventory.get(storeKey)?.values() || [])][0];
+      const storeName = first?.storeName || '?';
+      itemAssignments[storeName] = items;
+    }
 
-    setPlanResult({ stores, notFound, grandTotal, singleStoreTotal, singleStoreName, savings });
+    const totalItemCost = [...selectedStores.values()].flat().reduce((s, i) => s + i.price, 0);
+    const totalTravelPenalty = bestStores.reduce((s, st) => s + st.distance * TRANSPORT_COST_PER_KM, 0);
+    const totalScore = totalItemCost + totalTravelPenalty;
+    const coveragePercent = shoppingList.length > 0 ? Math.round(((shoppingList.length - missingItems.length) / shoppingList.length) * 100) : 0;
+
+    const cheapestSingle = singleStorePlans.length > 0 ? singleStorePlans[0] : null;
+    const savings = cheapestSingle ? Math.max(cheapestSingle.totalCost - totalItemCost, 0) : 0;
+
+    let hasStaleData = false;
+    for (const items of selectedStores.values()) {
+      for (const it of items) {
+        if ((it.dataAge ?? 999) > 7) { hasStaleData = true; break; }
+      }
+      if (hasStaleData) break;
+    }
+
+    setPlanResult({
+      bestPlan: {
+        stores: bestStores,
+        itemAssignments,
+        missingItems,
+        totalItemCost,
+        totalTravelPenalty,
+        totalScore,
+        storeCount: bestStores.length,
+        coveragePercent,
+      },
+      singleStorePlans: singleStorePlans.slice(0, 10),
+      savings,
+      cheapestSingleStore: cheapestSingle ? { name: cheapestSingle.name, totalCost: cheapestSingle.totalCost } : null,
+      hasSparseData: storeInventory.size < 3,
+      hasStaleData,
+    });
     setPlanLoading(false);
   };
 
@@ -3220,184 +3510,391 @@ export default function App() {
             </section>
           </div>
         ) : mode === 'plan' ? (
-          <div className="space-y-6">
-            <section className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
-              <h2 className="text-lg font-bold text-stone-900 mb-1">{t.planTitle}</h2>
-              <p className="text-xs text-stone-500 mb-3">{t.planHint}</p>
-              <div className="flex gap-2 mb-3">
-                <input
-                  type="text"
-                  value={planInput}
-                  onChange={(e) => setPlanInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') runShoppingPlan(); }}
-                  placeholder={t.planPlaceholder}
-                  className="flex-1 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm"
-                />
+          <div className="space-y-4">
+            {planStep === 'list' ? (
+              <>
+                {/* Section 1: Product search & shopping list */}
+                <section className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
+                  <h2 className="text-lg font-bold text-stone-900 mb-1">{t.planTitle}</h2>
+
+                  {/* Search input */}
+                  <div className="relative mb-3">
+                    <input
+                      type="text"
+                      value={planSearchQuery}
+                      onChange={(e) => { setPlanSearchQuery(e.target.value); setPlanShowDropdown(true); }}
+                      onFocus={() => setPlanShowDropdown(true)}
+                      placeholder={t.planAddPlaceholder}
+                      className="w-full rounded-lg border border-stone-200 bg-stone-50 px-3 py-2.5 text-sm pr-8"
+                    />
+                    {planSearchQuery && (
+                      <button onClick={() => { setPlanSearchQuery(''); setPlanShowDropdown(false); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-stone-400">
+                        <X className="h-4 w-4" />
+                      </button>
+                    )}
+
+                    {/* Dropdown */}
+                    {planShowDropdown && planFilteredProducts.length > 0 && (
+                      <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-stone-200 rounded-lg shadow-lg z-30 max-h-48 overflow-y-auto">
+                        {planFilteredProducts.map(p => (
+                          <button
+                            key={p.id}
+                            onClick={() => {
+                              setShoppingList(prev => [...prev, p]);
+                              setPlanSearchQuery('');
+                              setPlanShowDropdown(false);
+                            }}
+                            className="w-full text-left px-3 py-2 text-sm hover:bg-stone-50 border-b border-stone-50 last:border-0"
+                          >
+                            <div className="font-medium text-stone-900">{getProductName(p, lang)}</div>
+                            <div className="text-xs text-stone-400">{getProductSecondary(p, lang)}{p.unit ? ` · ${p.unit}` : ''}</div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Shopping list chips */}
+                  {shoppingList.length > 0 ? (
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap gap-2">
+                        {shoppingList.map(p => (
+                          <span key={p.id} className="inline-flex items-center gap-1 rounded-full bg-emerald-50 border border-emerald-200 px-3 py-1.5 text-sm font-medium text-emerald-800">
+                            {getProductName(p, lang)}
+                            <button onClick={() => setShoppingList(prev => prev.filter(s => s.id !== p.id))} className="ml-0.5 text-emerald-400 hover:text-emerald-700">
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-stone-400">{t.planItemCount(shoppingList.length)}</span>
+                        <button onClick={() => setShoppingList([])} className="text-xs text-stone-400 hover:text-red-500 underline">{t.planClearAll}</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-center py-6">
+                      <ShoppingCart className="h-8 w-8 text-stone-200 mx-auto mb-2" />
+                      <p className="text-sm text-stone-400">{t.planEmptyList}</p>
+                      <p className="text-xs text-stone-300 mt-1">{t.planEmptyArrow}</p>
+                    </div>
+                  )}
+                </section>
+
+                {/* Section 2: Location */}
+                <section className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
+                  <label className="text-xs font-semibold text-stone-500 uppercase tracking-wide block mb-2">{t.planMyLocation}</label>
+                  <div className="flex gap-2 items-center mb-2">
+                    <button
+                      onClick={() => {
+                        setPlanLocatingGps(true);
+                        requestUserLocation((coords) => {
+                          setPlanLocationInput(`${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}`);
+                          setPlanLocatingGps(false);
+                        });
+                        setTimeout(() => setPlanLocatingGps(false), 25000);
+                      }}
+                      disabled={planLocatingGps}
+                      className="flex-1 flex items-center justify-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm font-medium text-emerald-700 disabled:opacity-50"
+                    >
+                      {planLocatingGps ? <Loader2 className="h-4 w-4 animate-spin" /> : <Crosshair className="h-4 w-4" />}
+                      {planLocatingGps ? t.planGpsLocating : userLocation ? t.planGpsSet : t.planSetLocation}
+                    </button>
+                    {(userLocation || planLocationInput) && (
+                      <button onClick={() => { setUserLocation(null); setPlanLocationInput(''); }} className="text-xs text-stone-400 hover:text-stone-600 underline px-2">
+                        {t.planLocationClear}
+                      </button>
+                    )}
+                  </div>
+
+                  {/* District fallback */}
+                  <div className="relative">
+                    <p className="text-xs text-stone-400 mb-1">{t.planOrDistrict}</p>
+                    <input
+                      type="text"
+                      value={planDistrictQuery}
+                      onChange={(e) => { setPlanDistrictQuery(e.target.value); setPlanDistrictDropdown(true); }}
+                      onFocus={() => setPlanDistrictDropdown(true)}
+                      placeholder="Mirzo Ulugbek, Yunusabad..."
+                      className="w-full rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm"
+                    />
+                    {planDistrictDropdown && planDistrictQuery.length > 0 && (
+                      <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-stone-200 rounded-lg shadow-lg z-30 max-h-36 overflow-y-auto">
+                        {DISTRICT_LIST.filter((d: { name: string }) => d.name.toLowerCase().includes(planDistrictQuery.toLowerCase())).map((d: { name: string; lat: number; lng: number }) => (
+                          <button
+                            key={d.name}
+                            onClick={() => {
+                              setUserLocation({ lat: d.lat, lng: d.lng });
+                              setPlanDistrictQuery(d.name);
+                              setPlanDistrictDropdown(false);
+                              setPlanLocationInput(`${d.lat}, ${d.lng}`);
+                            }}
+                            className="w-full text-left px-3 py-2 text-sm hover:bg-stone-50 border-b border-stone-50 last:border-0"
+                          >
+                            {d.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </section>
+
+                {/* Section 3: Distance preference cards */}
+                <section className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
+                  <div className="grid grid-cols-3 gap-2">
+                    {([
+                      { key: 'near' as const, emoji: t.planDistNear, range: t.planDistNearRange, hint: t.planDistNearHint },
+                      { key: 'medium' as const, emoji: t.planDistMedium, range: t.planDistMediumRange, hint: t.planDistMediumHint },
+                      { key: 'far' as const, emoji: t.planDistFar, range: t.planDistFarRange, hint: t.planDistFarHint },
+                    ]).map(d => (
+                      <button
+                        key={d.key}
+                        onClick={() => setPlanDistanceMode(d.key)}
+                        className={`rounded-xl border-2 p-3 text-center transition-all ${
+                          planDistanceMode === d.key
+                            ? 'border-emerald-500 bg-emerald-50 shadow-sm'
+                            : 'border-stone-200 bg-white'
+                        }`}
+                      >
+                        <div className="text-lg mb-0.5">{d.emoji}</div>
+                        <div className="text-xs font-bold text-stone-700">{d.range}</div>
+                        <div className="text-[10px] text-stone-400">{d.hint}</div>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+
+                {/* Calculate button */}
                 <button
                   onClick={runShoppingPlan}
-                  disabled={planLoading || !planInput.trim()}
-                  className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                  disabled={planLoading || shoppingList.length === 0}
+                  className="w-full rounded-2xl bg-emerald-600 px-4 py-4 text-base font-bold text-white disabled:opacity-40 shadow-lg shadow-emerald-200 flex items-center justify-center gap-2"
                 >
-                  {planLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
+                  {planLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
+                  {t.planCalculate}
                 </button>
-              </div>
-              <div className="flex items-center gap-3">
-                <label className="text-xs text-stone-500 whitespace-nowrap">{t.planMaxStores}:</label>
-                <input
-                  type="range"
-                  min={1}
-                  max={5}
-                  value={planMaxStores}
-                  onChange={(e) => setPlanMaxStores(Number(e.target.value))}
-                  className="flex-1 accent-emerald-600 h-1.5"
-                />
-                <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 rounded-md px-2 py-0.5 min-w-[24px] text-center">{planMaxStores}</span>
-              </div>
-
-              <div className="mt-3 pt-3 border-t border-stone-100">
-                <label className="text-xs text-stone-500 block mb-2">{t.planMyLocation}:</label>
-                <div className="flex gap-2 items-center">
-                  <button
-                    onClick={() => {
-                      setPlanLocatingGps(true);
-                      requestUserLocation((coords) => {
-                        setPlanLocationInput(`${coords.lat.toFixed(6)}, ${coords.lng.toFixed(6)}`);
-                        setPlanLocatingGps(false);
-                      });
-                      setTimeout(() => setPlanLocatingGps(false), 25000);
-                    }}
-                    disabled={planLocatingGps}
-                    className="flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 disabled:opacity-50"
-                  >
-                    {planLocatingGps ? <Loader2 className="h-3 w-3 animate-spin" /> : <Navigation className="h-3 w-3" />}
-                    {planLocatingGps ? t.planGpsLocating : userLocation ? t.planGpsSet : t.planGpsButton}
-                  </button>
-                  {(userLocation || planLocationInput) && (
-                    <button
-                      onClick={() => { setUserLocation(null); setPlanLocationInput(''); }}
-                      className="text-xs text-stone-400 hover:text-stone-600 underline"
-                    >
-                      {t.planLocationClear}
-                    </button>
-                  )}
-                </div>
-                <div className="mt-2">
-                  <input
-                    type="text"
-                    value={planLocationInput}
-                    onChange={(e) => {
-                      setPlanLocationInput(e.target.value);
-                      const match = e.target.value.match(/^\s*(-?\d+\.?\d*)\s*[,;]\s*(-?\d+\.?\d*)\s*$/);
-                      if (match) {
-                        const lat = parseFloat(match[1]);
-                        const lng = parseFloat(match[2]);
-                        if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-                          setUserLocation({ lat, lng });
-                        }
-                      }
-                    }}
-                    placeholder={t.planManualHint}
-                    className="w-full rounded-lg border border-stone-200 bg-stone-50 px-3 py-1.5 text-xs text-stone-600"
-                  />
-                </div>
-              </div>
-            </section>
-
-            {planLoading && (
-              <div className="text-center py-12">
-                <Loader2 className="h-8 w-8 animate-spin text-emerald-500 mx-auto mb-3" />
-                <p className="text-sm text-stone-500">{t.planSearching}</p>
-              </div>
-            )}
-
-            {planResult && planResult.stores.length === 0 && !planLoading && (
-              <div className="text-center py-12">
-                <ShoppingCart className="h-10 w-10 text-stone-300 mx-auto mb-3" />
-                <p className="text-sm text-stone-500">{t.planNoData}</p>
-              </div>
-            )}
-
-            {planResult && planResult.stores.length > 0 && (
-              <section className="space-y-3">
-                <h3 className="text-sm font-bold text-stone-700">{t.planRoute}</h3>
-                {planResult.stores.map((store, idx) => (
-                  <div key={idx} className="rounded-xl border border-stone-200 bg-white p-4 shadow-sm">
-                    <div className="flex items-start gap-3 mb-2">
-                      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-700">
-                        {idx + 1}
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        <div className="font-semibold text-stone-900 truncate">{store.name}</div>
-                        <div className="text-xs text-stone-400 truncate">{store.address}</div>
-                        {store.distanceKm != null && (
-                          <div className="text-xs text-blue-500 mt-0.5">{t.planDistanceAway(store.distanceKm.toFixed(1))}</div>
-                        )}
-                      </div>
-                    </div>
-                    {store.items.map((item, j) => (
-                      <div key={j} className="flex justify-between text-sm py-1 border-t border-stone-50">
-                        <span className="text-stone-700">{item.query}</span>
-                        <span className="font-medium text-stone-900">{priceFormatter.format(item.price)} {t.planSumLabel}</span>
-                      </div>
-                    ))}
-                    <div className="flex justify-between text-sm font-bold pt-2 border-t border-stone-200 mt-1">
-                      <span>{t.planStoreTotal}</span>
-                      <span>{priceFormatter.format(store.storeTotal)} {t.planSumLabel}</span>
-                    </div>
-                  </div>
-                ))}
-
-                {planResult.notFound.length > 0 && (
-                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
-                    <div className="text-xs font-semibold text-amber-700 mb-1">{t.planNotFound}:</div>
-                    <div className="text-sm text-amber-600">{planResult.notFound.join(', ')}</div>
+              </>
+            ) : (
+              /* ===== RESULTS VIEW ===== */
+              <>
+                {/* Loading */}
+                {planLoading && (
+                  <div className="text-center py-16">
+                    <Loader2 className="h-10 w-10 animate-spin text-emerald-500 mx-auto mb-4" />
+                    <p className="text-sm text-stone-500 animate-pulse">{t.planLoadingMsgs[planLoadingMsgIdx % t.planLoadingMsgs.length]}</p>
                   </div>
                 )}
 
-                <div className="rounded-xl border-2 border-emerald-200 bg-emerald-50 p-4">
-                  <div className="flex justify-between text-base font-bold text-emerald-900">
-                    <span>{t.planGrandTotal}</span>
-                    <span>{priceFormatter.format(planResult.grandTotal)} {t.planSumLabel}</span>
+                {/* No data */}
+                {!planLoading && planResult && planResult.bestPlan.stores.length === 0 && (
+                  <div className="text-center py-12">
+                    <ShoppingCart className="h-10 w-10 text-stone-300 mx-auto mb-3" />
+                    <p className="text-sm font-medium text-stone-600 mb-1">{t.planNoData}</p>
+                    <p className="text-xs text-stone-400">{t.planNoDataHint}</p>
+                    <button onClick={() => setPlanStep('list')} className="mt-4 rounded-lg border border-stone-200 px-4 py-2 text-sm text-stone-600">{t.planNewSearch}</button>
                   </div>
-                  {planResult.savings > 0 && planResult.singleStoreName && (
-                    <div className="mt-1">
-                      <div className="flex justify-between text-sm text-emerald-700">
-                        <span>{t.planSavings}</span>
-                        <span>~{priceFormatter.format(planResult.savings)} {t.planSumLabel}</span>
-                      </div>
-                      <div className="text-xs text-emerald-600 mt-0.5">
-                        {t.planSavingsVs(planResult.singleStoreName)}
-                      </div>
-                    </div>
-                  )}
-                </div>
+                )}
 
-                {(() => {
-                  const storesWithCoords = planResult.stores.filter(g => g.lat && g.lng);
-                  if (storesWithCoords.length === 0) return null;
-                  const originPoint = userLocation ? `${userLocation.lat},${userLocation.lng}` : '';
-                  const storePoints = storesWithCoords.map(g => `${g.lat},${g.lng}`).join('~');
-                  const waypoints = originPoint ? `${originPoint}~${storePoints}` : storePoints;
-                  const mapsUrl = `https://yandex.uz/maps/?rtext=${waypoints}&rtt=auto`;
-                  return (
-                    <a
-                      href={mapsUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="block w-full rounded-xl bg-blue-600 px-4 py-3 text-center text-sm font-semibold text-white"
+                {/* Results */}
+                {!planLoading && planResult && planResult.bestPlan.stores.length > 0 && (
+                  <div className="space-y-4">
+                    {/* Section A: Best plan */}
+                    <section className="rounded-2xl border-2 border-emerald-200 bg-gradient-to-b from-emerald-50 to-white p-4 shadow-sm">
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="text-lg font-bold text-emerald-900">{t.planBestTitle}</h3>
+                        <span className="text-xs bg-emerald-100 text-emerald-700 rounded-full px-2.5 py-1 font-semibold">
+                          {t.planStoreCount(planResult.bestPlan.storeCount)}
+                        </span>
+                      </div>
+
+                      {/* Store cards */}
+                      {planResult.bestPlan.stores.map((store, idx) => {
+                        const storeItems = planResult.bestPlan.itemAssignments[store.name] || [];
+                        const storeTotal = storeItems.reduce((s, i) => s + i.price, 0);
+                        const isExpanded = expandedStoreIdx === idx;
+                        return (
+                          <div key={idx} className="mb-3 last:mb-0">
+                            <button
+                              onClick={() => setExpandedStoreIdx(isExpanded ? null : idx)}
+                              className="w-full text-left rounded-xl border border-stone-200 bg-white p-3 shadow-sm"
+                            >
+                              <div className="flex items-center gap-3">
+                                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-100 text-sm font-bold text-emerald-700 shrink-0">
+                                  {idx + 1}
+                                </span>
+                                <div className="flex-1 min-w-0">
+                                  <div className="font-semibold text-stone-900 truncate">{store.name}</div>
+                                  {store.address && <div className="text-xs text-stone-400 truncate">{store.address}</div>}
+                                  <div className="flex items-center gap-2 mt-0.5">
+                                    {store.distance > 0 && (
+                                      <span className="text-xs text-blue-500">{t.planDistanceAway(store.distance.toFixed(1))}</span>
+                                    )}
+                                    <span className="text-xs font-medium text-stone-600">{storeItems.length} item(s) · {priceFormatter.format(storeTotal)} {t.planSumLabel}</span>
+                                  </div>
+                                </div>
+                                <ChevronDown className={`h-4 w-4 text-stone-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                              </div>
+                            </button>
+                            {isExpanded && (
+                              <div className="mt-1 ml-11 space-y-1">
+                                {storeItems.map((it, j) => (
+                                  <div key={j} className="flex justify-between text-sm py-1.5 px-2 rounded-lg bg-stone-50">
+                                    <span className="text-stone-700 flex items-center gap-1">
+                                      {getProductName(it.item, lang)}
+                                      {it.isCheapest && <span className="text-[10px] text-emerald-600 font-semibold">{t.planCheapestBadge}</span>}
+                                    </span>
+                                    <div className="text-right">
+                                      <span className="font-medium text-stone-900">{priceFormatter.format(it.price)} {t.planSumLabel}</span>
+                                      {it.dataAge != null && it.dataAge <= 30 && (
+                                        <div className="text-[10px] text-stone-400">
+                                          {it.dataAge > 7 && t.planDataStale}{t.planDataAge(it.dataAge)}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+
+                      {/* Missing items */}
+                      {planResult.bestPlan.missingItems.length > 0 && (
+                        <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                          <div className="text-xs font-semibold text-amber-700 mb-1">{t.planMissing}</div>
+                          <div className="text-sm text-amber-600">
+                            {planResult.bestPlan.missingItems.map(p => getProductName(p, lang)).join(', ')}
+                          </div>
+                          <div className="text-xs text-amber-500 mt-1">{t.planMissingHint}</div>
+                        </div>
+                      )}
+
+                      {/* Totals */}
+                      <div className="mt-4 pt-3 border-t border-emerald-200 space-y-1">
+                        <div className="flex justify-between text-base font-bold text-emerald-900">
+                          <span>{t.planTotal}</span>
+                          <span>{priceFormatter.format(planResult.bestPlan.totalItemCost)} {t.planSumLabel}</span>
+                        </div>
+                        {planResult.savings > 0 && (
+                          <div>
+                            <div className="flex justify-between text-sm text-emerald-700">
+                              <span>{t.planSavings}</span>
+                              <span>~{priceFormatter.format(planResult.savings)} {t.planSumLabel}</span>
+                            </div>
+                            <div className="text-xs text-emerald-500 mt-0.5">{t.planSavingsVs}</div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Stale warning */}
+                      {planResult.hasStaleData && (
+                        <div className="mt-2 text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-2">{t.planStaleWarning}</div>
+                      )}
+                    </section>
+
+                    {/* Section B: Single-store comparison */}
+                    {planResult.singleStorePlans.length > 0 && (
+                      <section className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
+                        <h3 className="text-sm font-bold text-stone-700 mb-1">{t.planSingleStoreTitle}</h3>
+                        <p className="text-xs text-stone-400 mb-3">{t.planSingleStoreHint}</p>
+                        <div className="space-y-2">
+                          {planResult.singleStorePlans.slice(0, 5).map((sp, idx) => {
+                            const diff = sp.totalCost - planResult.bestPlan.totalItemCost;
+                            return (
+                              <div key={idx} className="flex items-center justify-between rounded-lg border border-stone-100 bg-stone-50 px-3 py-2.5">
+                                <div className="flex-1 min-w-0">
+                                  <div className="text-sm font-medium text-stone-800 truncate flex items-center gap-1.5">
+                                    {sp.name}
+                                    {idx === 0 && <span className="text-[10px] bg-emerald-100 text-emerald-700 rounded-full px-1.5 py-0.5 font-semibold">{t.planCheapestStore}</span>}
+                                  </div>
+                                  {sp.distance > 0 && <div className="text-xs text-blue-500">{t.planDistanceAway(sp.distance.toFixed(1))}</div>}
+                                  {diff > 0 && idx > 0 && <div className="text-xs text-stone-400">{t.planMoreExpensive(priceFormatter.format(diff))}</div>}
+                                  {sp.usedEstimate && sp.missingItems.length > 0 && (
+                                    <div className="text-[10px] text-amber-500">{t.planEstimateUsed(sp.missingItems.length)}</div>
+                                  )}
+                                </div>
+                                <div className="text-sm font-bold text-stone-800 ml-3">{priceFormatter.format(sp.totalCost)} {t.planSumLabel}</div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </section>
+                    )}
+
+                    {/* Section C: Map & actions */}
+                    <section className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm space-y-3">
+                      <h3 className="text-sm font-bold text-stone-700">{t.planMapTitle}</h3>
+                      {planResult.bestPlan.stores.some(s => s.latitude && s.longitude) && (
+                        <div className="rounded-xl overflow-hidden border border-stone-200" style={{ height: 200 }}>
+                          <MapContainer
+                            center={[
+                              planResult.bestPlan.stores[0]?.latitude || 41.311,
+                              planResult.bestPlan.stores[0]?.longitude || 69.279,
+                            ]}
+                            zoom={13}
+                            style={{ height: '100%', width: '100%' }}
+                            zoomControl={false}
+                            attributionControl={false}
+                          >
+                            <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                            {userLocation && (
+                              <CircleMarker center={[userLocation.lat, userLocation.lng]} radius={8} pathOptions={{ color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.5 }}>
+                                <Popup>{t.planMyLocation}</Popup>
+                              </CircleMarker>
+                            )}
+                            {planResult.bestPlan.stores.filter(s => s.latitude && s.longitude).map((s, i) => (
+                              <CircleMarker key={i} center={[s.latitude, s.longitude]} radius={8} pathOptions={{ color: '#10b981', fillColor: '#10b981', fillOpacity: 0.7 }}>
+                                <Popup>{`${i + 1}. ${s.name}`}</Popup>
+                              </CircleMarker>
+                            ))}
+                            {(() => {
+                              const points: Array<[number, number]> = [];
+                              if (userLocation) points.push([userLocation.lat, userLocation.lng]);
+                              for (const s of planResult.bestPlan.stores) {
+                                if (s.latitude && s.longitude) points.push([s.latitude, s.longitude]);
+                              }
+                              return points.length >= 2 ? <Polyline positions={points} pathOptions={{ color: '#10b981', weight: 2, dashArray: '6 4' }} /> : null;
+                            })()}
+                          </MapContainer>
+                        </div>
+                      )}
+
+                      {/* Yandex Maps link */}
+                      {(() => {
+                        const stores = planResult.bestPlan.stores.filter(s => s.latitude && s.longitude);
+                        if (stores.length === 0) return null;
+                        const originPoint = userLocation ? `${userLocation.lat},${userLocation.lng}` : '';
+                        const storePoints = stores.map(s => `${s.latitude},${s.longitude}`).join('~');
+                        const waypoints = originPoint ? `${originPoint}~${storePoints}` : storePoints;
+                        const mapsUrl = `https://yandex.uz/maps/?rtext=${waypoints}&rtt=auto`;
+                        return (
+                          <a href={mapsUrl} target="_blank" rel="noopener noreferrer" className="flex items-center justify-center gap-2 w-full rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white">
+                            {t.planOpenMap}
+                          </a>
+                        );
+                      })()}
+
+                      {/* Copy plan button */}
+                      <button
+                        onClick={() => { copyPlanToClipboard(); }}
+                        className="flex items-center justify-center gap-2 w-full rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm font-semibold text-stone-600"
+                      >
+                        <Copy className="h-4 w-4" />
+                        {t.planCopyPlan}
+                      </button>
+                    </section>
+
+                    {/* New search button */}
+                    <button
+                      onClick={() => { setPlanResult(null); setPlanStep('list'); setExpandedStoreIdx(null); }}
+                      className="w-full rounded-xl border border-stone-200 bg-white px-4 py-3 text-center text-sm font-semibold text-stone-600"
                     >
-                      {t.planOpenMap}
-                    </a>
-                  );
-                })()}
-
-                <button
-                  onClick={() => { setPlanResult(null); setPlanInput(''); }}
-                  className="w-full rounded-xl border border-stone-200 bg-white px-4 py-3 text-center text-sm font-semibold text-stone-600"
-                >
-                  {t.planNewSearch}
-                </button>
-              </section>
+                      {t.planNewSearch}
+                    </button>
+                  </div>
+                )}
+              </>
             )}
           </div>
         ) : mode === 'report' ? (
@@ -4258,6 +4755,18 @@ export default function App() {
         >
           <Plus className="w-6 h-6" />
           <span className="text-[10px] font-bold uppercase tracking-widest">{t.modeReport}</span>
+        </button>
+        <button 
+          onClick={() => { setMode('plan'); setPlanStep('list'); }}
+          className={cn("flex flex-col items-center gap-1 relative", mode === 'plan' ? "text-emerald-600" : "text-stone-400")}
+        >
+          <ShoppingCart className="w-6 h-6" />
+          {shoppingList.length > 0 && (
+            <span className="absolute -top-1 -right-1 bg-emerald-600 text-white text-[9px] font-bold rounded-full h-4 min-w-[16px] flex items-center justify-center px-1">
+              {shoppingList.length}
+            </span>
+          )}
+          <span className="text-[10px] font-bold uppercase tracking-widest">{t.modePlan}</span>
         </button>
         {isAdminUser && (
           <button 
