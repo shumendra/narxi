@@ -190,6 +190,8 @@ export default function App() {
   const [contactMessages, setContactMessages] = useState<ContactMessageItem[]>([]);
   const [selectedModerationIds, setSelectedModerationIds] = useState<string[]>([]);
   const [selectedApprovedIds, setSelectedApprovedIds] = useState<string[]>([]);
+  const [scrapeLoading, setScrapeLoading] = useState<string | null>(null);
+  const [scrapeResult, setScrapeResult] = useState<string | null>(null);
   const [newApprovedItem, setNewApprovedItem] = useState({
     product_name_raw: '',
     price: '',
@@ -387,6 +389,10 @@ export default function App() {
         productsTab: 'Mahsulotlar',
         pricesTab: 'Narxlar',
         messagesTab: 'Xabarlar',
+        scrapeImport: 'Import qilish',
+        scrapeMakro: 'Makro narxlari',
+        scrapeKorzinka: 'Korzinka narxlari',
+        scrapeLoading: 'Yuklanmoqda...',
         messagesTitle: 'Foydalanuvchi xabarlari',
         messagesEmpty: 'Xabarlar yo‘q',
         contactReceivedAt: 'Qabul qilingan',
@@ -667,6 +673,10 @@ export default function App() {
         productsTab: 'Товары',
         pricesTab: 'Цены',
         messagesTab: 'Сообщения',
+        scrapeImport: 'Импорт',
+        scrapeMakro: 'Цены Makro',
+        scrapeKorzinka: 'Цены Korzinka',
+        scrapeLoading: 'Загрузка...',
         messagesTitle: 'Сообщения от пользователей',
         messagesEmpty: 'Сообщений пока нет',
         contactReceivedAt: 'Получено',
@@ -947,6 +957,10 @@ export default function App() {
         productsTab: 'Products',
         pricesTab: 'Prices',
         messagesTab: 'Messages',
+        scrapeImport: 'Import',
+        scrapeMakro: 'Makro prices',
+        scrapeKorzinka: 'Korzinka prices',
+        scrapeLoading: 'Loading...',
         messagesTitle: 'User messages',
         messagesEmpty: 'No messages yet',
         contactReceivedAt: 'Received',
@@ -1282,6 +1296,30 @@ export default function App() {
     }
 
     return json;
+  };
+
+  const handleScrapeStore = async (store: 'makro' | 'korzinka') => {
+    if (!isAdminUser || scrapeLoading) return;
+    setScrapeLoading(store);
+    setScrapeResult(null);
+    try {
+      const res = await fetch('/api/scrape-stores', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ admin_id: telegramUserId, store }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setScrapeResult(`${store}: +${data.inserted} (${data.matched} matched / ${data.total})`);
+        fetchModerationItems();
+      } else {
+        setScrapeResult(`Error: ${data.error || 'Unknown'}`);
+      }
+    } catch (err: any) {
+      setScrapeResult(`Error: ${err.message || 'Network error'}`);
+    } finally {
+      setScrapeLoading(null);
+    }
   };
 
   const fetchModerationItems = async () => {
@@ -4282,6 +4320,30 @@ export default function App() {
                   >
                     {t.moderationApproveSelected} ({selectedModerationIds.length})
                   </button>
+                )}
+                {moderationSection === 'prices' && (
+                  <div className="flex items-center gap-1">
+                    <span className="text-xs text-stone-500">{t.scrapeImport}:</span>
+                    <button
+                      onClick={() => handleScrapeStore('makro')}
+                      disabled={!!scrapeLoading}
+                      className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                    >
+                      {scrapeLoading === 'makro' ? t.scrapeLoading : t.scrapeMakro}
+                    </button>
+                    <button
+                      onClick={() => handleScrapeStore('korzinka')}
+                      disabled={!!scrapeLoading}
+                      className="rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                    >
+                      {scrapeLoading === 'korzinka' ? t.scrapeLoading : t.scrapeKorzinka}
+                    </button>
+                  </div>
+                )}
+                {scrapeResult && (
+                  <div className="text-xs text-stone-600 bg-stone-100 rounded-lg px-3 py-1.5">
+                    {scrapeResult}
+                  </div>
                 )}
               </div>
             </div>
