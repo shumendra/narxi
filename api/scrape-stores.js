@@ -215,13 +215,18 @@ export default async function handler(req, res) {
       return send(res, 200, { ok: true, inserted: 0, matched: 0, total: 0, message: 'No products found from store API' });
     }
 
-    // 3. Check which products already have receipt-based prices (receipt > API)
-    const sourcePrefix = `store_api_`;
+    // 3. Check which products already have receipt-based prices at this store chain
+    // Only skip if a receipt price exists for the same product at the same store brand
+    const storeBrand = store === 'makro' ? 'Makro' : 'Korzinka';
     const { data: existingPrices } = await supabase
       .from('prices')
-      .select('product_id, source')
-      .not('source', 'like', `${sourcePrefix}%`);
-    const receiptProductIds = new Set((existingPrices || []).map(p => p.product_id));
+      .select('product_id, source, place_name')
+      .or(`place_name.ilike.%${storeBrand}%`);
+    const receiptProductIds = new Set(
+      (existingPrices || [])
+        .filter(p => !p.source || !p.source.startsWith('store_api_'))
+        .map(p => p.product_id)
+    );
 
     // 4. Match and insert into pending_prices
     let inserted = 0;

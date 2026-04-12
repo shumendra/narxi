@@ -29,6 +29,34 @@ const adminTelegramIds = (import.meta.env.VITE_ADMIN_TELEGRAM_IDS || import.meta
   .filter(Boolean);
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+// Known store locations for display name resolution
+const KNOWN_STORES: Array<{ name: string; lat: number; lng: number }> = [
+  { name: 'Makro', lat: 41.313097, lng: 69.332279 },
+  { name: 'Makro', lat: 41.303898, lng: 69.340257 },
+  { name: 'Makro', lat: 41.304013, lng: 69.322374 },
+  { name: 'Makro', lat: 41.313467, lng: 69.340916 },
+  { name: 'Makro', lat: 41.312521, lng: 69.332519 },
+  { name: 'Makro', lat: 41.318621, lng: 69.357059 },
+  { name: 'Makro', lat: 41.286313, lng: 69.323630 },
+  { name: 'Korzinka', lat: 41.288861, lng: 69.344876 },
+  { name: 'Korzinka', lat: 41.299428, lng: 69.342156 },
+  { name: 'Korzinka', lat: 41.312781, lng: 69.330166 },
+  { name: 'Korzinka', lat: 41.300976, lng: 69.263439 },
+  { name: 'Korzinka', lat: 41.291199, lng: 69.358471 },
+  { name: 'Korzinka', lat: 41.287455, lng: 69.337313 },
+  { name: 'Korzinka', lat: 41.327718, lng: 69.343438 },
+  { name: 'Korzinka', lat: 41.283104, lng: 69.349174 },
+];
+
+function identifyStoreByCoords(lat: number, lng: number): string | null {
+  for (const s of KNOWN_STORES) {
+    const dlat = (s.lat - lat) * 111320;
+    const dlng = (s.lng - lng) * 111320 * Math.cos(lat * Math.PI / 180);
+    if (Math.sqrt(dlat * dlat + dlng * dlng) < 500) return s.name; // within 500m
+  }
+  return null;
+}
+
 // Types
 interface Product {
   id: string;
@@ -2280,11 +2308,11 @@ export default function App() {
       const inv = storeInventory.get(storeKey)!;
       const existing = inv.get(row.product_id);
       if (!existing || row.price < existing.price) {
-        // Determine best display name: prefer address, skip receipt codes
+        // Determine best display name: prefer address, skip receipt codes, fall back to known store
         const rawName = (row.place_name || '').trim();
         const rawAddr = (row.place_address || '').trim();
         const looksLikeCode = rawName.length > 0 && !/\s/.test(rawName) && /^[A-Z0-9]+$/i.test(rawName);
-        const displayName = rawAddr || (looksLikeCode ? '' : rawName) || '';
+        const displayName = rawAddr || (looksLikeCode ? '' : rawName) || identifyStoreByCoords(row.latitude, row.longitude) || '';
         const displayAddress = looksLikeCode ? '' : rawAddr;
         const dataAge = row.receipt_date ? Math.floor((now - new Date(row.receipt_date).getTime()) / 86400000) : 999;
         inv.set(row.product_id, {
@@ -2481,10 +2509,11 @@ export default function App() {
         if (entry.storeName.length > bestName.length) bestName = entry.storeName;
         if (entry.storeAddress.length > bestAddr.length) bestAddr = entry.storeAddress;
       }
-      // If no human-readable name found, show coordinates
+      // If no human-readable name found, try known store lookup by coordinates
       if (!bestName && !bestAddr) {
         const first = [...inv.values()][0];
-        bestName = `📍 ${first.lat.toFixed(4)}, ${first.lng.toFixed(4)}`;
+        const knownName = identifyStoreByCoords(first.lat, first.lng);
+        bestName = knownName || `📍 ${first.lat.toFixed(4)}, ${first.lng.toFixed(4)}`;
       }
       return { name: bestName || bestAddr || storeKey, address: bestAddr !== bestName ? bestAddr : '' };
     };
@@ -3468,7 +3497,7 @@ export default function App() {
                               </span>
                               <h4 className="font-bold text-stone-900">{priceFormatter.format(p.price)} {t.sumLabel}</h4>
                             </div>
-                            <p className="text-sm text-stone-600 truncate">{p.place_name || t.unknownStore}</p>
+                            <p className="text-sm text-stone-600 truncate">{p.place_name || (p.latitude != null && p.longitude != null ? identifyStoreByCoords(p.latitude, p.longitude) : null) || t.unknownStore}</p>
                             <p className="text-xs text-stone-500 truncate">{p.place_address || '-'}</p>
                             <p className="text-xs text-stone-400 truncate">{p.city || selectedCityLabel}</p>
                             <p className="text-xs text-stone-400">
@@ -3530,7 +3559,7 @@ export default function App() {
                           <Popup>
                             <div className="p-1">
                               <div className="font-bold text-lg">{priceFormatter.format(p.price)} {t.sumLabel}</div>
-                              <div className="text-sm text-stone-600">{p.place_name || t.unknownStore}</div>
+                              <div className="text-sm text-stone-600">{p.place_name || (p.latitude != null && p.longitude != null ? identifyStoreByCoords(p.latitude, p.longitude) : null) || t.unknownStore}</div>
                               <div className="text-xs text-stone-500">{p.place_address || '-'}</div>
                               <div className="text-xs text-stone-500">{p.city || selectedCityLabel}</div>
                             </div>
