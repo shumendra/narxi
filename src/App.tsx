@@ -1310,7 +1310,9 @@ export default function App() {
       });
       const data = await res.json();
       if (data.ok) {
-        setScrapeResult(`${store}: +${data.inserted} (${data.matched} matched / ${data.total})`);
+        const parts = [`${store}: +${data.inserted}`, `${data.matched} matched`, `${data.total} total`];
+        if (data.skippedReceipt) parts.push(`${data.skippedReceipt} skipped (receipt)`);
+        setScrapeResult(parts.join(' · '));
         fetchModerationItems();
       } else {
         setScrapeResult(`Error: ${data.error || 'Unknown'}`);
@@ -1633,6 +1635,14 @@ export default function App() {
 
   const clearApprovedSelection = () => {
     setSelectedApprovedIds([]);
+  };
+
+  const selectAllApprovedItems = () => {
+    setSelectedApprovedIds(approvedItems.map(item => item.id));
+  };
+
+  const selectApprovedBySource = (source: string) => {
+    setSelectedApprovedIds(approvedItems.filter(item => item.source === source).map(item => item.id));
   };
 
   const deleteSelectedApprovedItems = async () => {
@@ -4517,7 +4527,29 @@ export default function App() {
                   </div>
 
                   {approvedItems.length > 0 && (
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        onClick={selectAllApprovedItems}
+                        className="rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-medium text-stone-700"
+                      >
+                        {t.moderationSelectAll}
+                      </button>
+                      {approvedItems.some(i => i.source === 'store_api_makro') && (
+                        <button
+                          onClick={() => selectApprovedBySource('store_api_makro')}
+                          className="rounded-xl border border-blue-300 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700"
+                        >
+                          Makro ({approvedItems.filter(i => i.source === 'store_api_makro').length})
+                        </button>
+                      )}
+                      {approvedItems.some(i => i.source === 'store_api_korzinka') && (
+                        <button
+                          onClick={() => selectApprovedBySource('store_api_korzinka')}
+                          className="rounded-xl border border-orange-300 bg-orange-50 px-3 py-2 text-xs font-medium text-orange-700"
+                        >
+                          Korzinka ({approvedItems.filter(i => i.source === 'store_api_korzinka').length})
+                        </button>
+                      )}
                       <button
                         onClick={clearApprovedSelection}
                         className="rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-medium text-stone-700"

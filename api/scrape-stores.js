@@ -15,13 +15,28 @@ function send(res, status, body) {
 }
 
 // ─── Store configs ─────────────────────────────────────────────────────────
-// Makro: known Tashkent branches with coordinates
+// Makro Tashkent branches (coordinates from Google Maps)
 const MAKRO_STORES = [
-  { name: 'Makro', address: 'Tashkent, Makro Qorasaroy', lat: 41.3111, lng: 69.2796, region: 3 },
+  { name: 'Makro', address: 'Parkent ko\u2018chasi 215', lat: 41.313097, lng: 69.332279 },
+  { name: 'Makro', address: 'Qorasuv ko\u2018chasi 6', lat: 41.303898, lng: 69.340257 },
+  { name: 'Makro', address: 'Mahtumquli ko\u2018chasi 134', lat: 41.304013, lng: 69.322374 },
+  { name: 'Makro', address: 'Qaynarsoy ko\u2018chasi 45', lat: 41.313467, lng: 69.340916 },
+  { name: 'Makro', address: 'Oltintepa ko\u2018chasi 2', lat: 41.312521, lng: 69.332519 },
+  { name: 'Makro', address: 'Nurafshon aylanma yo\u2018li', lat: 41.318621, lng: 69.357059 },
+  { name: 'Makro Express', address: 'Aviasozlar-2', lat: 41.286313, lng: 69.323630 },
 ];
 
-// Korzinka store info (generic — no branch-level pricing from catalog API)
-const KORZINKA_STORE = { name: 'Korzinka', address: 'Tashkent, Korzinka', lat: 41.3111, lng: 69.2796 };
+// Korzinka Tashkent branches (coordinates from Google Maps)
+const KORZINKA_STORES = [
+  { name: 'Korzinka', address: 'Aviasozlar ko\u2018chasi', lat: 41.288861, lng: 69.344876 },
+  { name: 'Korzinka', address: 'Qorasuv ko\u2018chasi 36', lat: 41.299428, lng: 69.342156 },
+  { name: 'Korzinka', address: 'Oltintepa ko\u2018chasi 3A/1', lat: 41.312781, lng: 69.330166 },
+  { name: 'Korzinka', address: 'Yusuf Xos Hojib ko\u2018chasi 1', lat: 41.300976, lng: 69.263439 },
+  { name: 'Korzinka', address: 'Tuzel 2-kvartal 13B/1', lat: 41.291199, lng: 69.358471 },
+  { name: 'Korzinka', address: 'Buyuk Ipak Yo\u2018li 158a', lat: 41.287455, lng: 69.337313 },
+  { name: 'Korzinka', address: 'Buyuk Ipak Yo\u2018li (Salom)', lat: 41.327718, lng: 69.343438 },
+  { name: 'Korzinka', address: 'Aviasozlar 62', lat: 41.283104, lng: 69.349174 },
+];
 
 // ─── Makro scraper ─────────────────────────────────────────────────────────
 async function scrapeMakro() {
@@ -187,25 +202,36 @@ export default async function handler(req, res) {
 
     // 2. Scrape store
     let storeProducts;
-    let storeInfo;
+    let stores;
     if (store === 'makro') {
       storeProducts = await scrapeMakro();
-      storeInfo = MAKRO_STORES[0];
+      stores = MAKRO_STORES;
     } else {
       storeProducts = await scrapeKorzinka();
-      storeInfo = KORZINKA_STORE;
+      stores = KORZINKA_STORES;
     }
 
     if (!storeProducts || storeProducts.length === 0) {
       return send(res, 200, { ok: true, inserted: 0, matched: 0, total: 0, message: 'No products found from store API' });
     }
 
-    // 3. Match and insert into pending_prices
+    // 3. Check which products already have receipt-based prices (receipt > API)
+    const sourcePrefix = `store_api_`;
+    const { data: existingPrices } = await supabase
+      .from('prices')
+      .select('product_id, source')
+      .not('source', 'like', `${sourcePrefix}%`);
+    const receiptProductIds = new Set((existingPrices || []).map(p => p.product_id));
+
+    // 4. Match and insert into pending_prices
     let inserted = 0;
     let matched = 0;
     let skipped = 0;
+    let skippedReceipt = 0;
     const errors = [];
     const now = new Date().toISOString();
+    // Pick first store as representative (API prices are chain-wide, not branch-specific)
+    const storeInfo = stores[0];
 
     for (const sp of storeProducts) {
       const rawName = sp.nameUz || sp.name || '';
@@ -223,6 +249,12 @@ export default async function handler(req, res) {
           finalMatch = ruMatch;
           finalScore = ruScore;
         }
+      }
+
+      // Skip if this product already has a receipt-based price (receipt > API)
+      if (finalMatch && receiptProductIds.has(finalMatch.id)) {
+        skippedReceipt++;
+        continue;
       }
 
       const payload = {
@@ -259,8 +291,9 @@ export default async function handler(req, res) {
       inserted,
       matched,
       skipped,
+      skippedReceipt,
       errors: errors.length > 0 ? errors.slice(0, 10) : undefined,
-      message: `Scraped ${storeProducts.length} products from ${store}, inserted ${inserted} into pending_prices (${matched} matched to catalog).`,
+      message: `Scraped ${storeProducts.length} from ${store}: ${inserted} inserted (${matched} matched), ${skippedReceipt} skipped (receipt exists).`,
     });
   } catch (err) {
     console.error('scrape-stores error:', err);
