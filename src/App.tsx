@@ -2209,25 +2209,35 @@ export default function App() {
     }
 
     // Phase 2: Build store inventory with distances
+    // Key stores by rounded coordinates (~100m precision) to merge receipts from same physical store
     type StoreKey = string;
     type StoreEntry = {
       productId: string; productName: string; price: number;
       storeName: string; storeAddress: string;
-      lat: number | null; lng: number | null; dataAge: number;
+      lat: number; lng: number; dataAge: number;
     };
     const storeInventory = new Map<StoreKey, Map<string, StoreEntry>>();
 
     const now = Date.now();
     for (const row of allPrices) {
-      const storeKey = `${(row.place_name || '').trim().toLowerCase()}|${(row.place_address || '').trim().toLowerCase()}`;
+      // Skip rows without coordinates — can't place on map or compute distance
+      if (row.latitude == null || row.longitude == null) continue;
+
+      // Round to ~100m grid to merge nearby receipts into one store
+      const latRound = Math.round(row.latitude * 1000) / 1000;
+      const lngRound = Math.round(row.longitude * 1000) / 1000;
+      const storeKey = `${latRound},${lngRound}`;
+
       if (!storeInventory.has(storeKey)) storeInventory.set(storeKey, new Map());
       const inv = storeInventory.get(storeKey)!;
       const existing = inv.get(row.product_id);
       if (!existing || row.price < existing.price) {
+        // Determine best display name: prefer address, skip receipt codes
         const rawName = (row.place_name || '').trim();
+        const rawAddr = (row.place_address || '').trim();
         const looksLikeCode = rawName.length > 0 && !/\s/.test(rawName) && /^[A-Z0-9]+$/i.test(rawName);
-        const displayName = looksLikeCode ? (row.place_address || rawName) : (rawName || '?');
-        const displayAddress = looksLikeCode ? '' : (row.place_address || '');
+        const displayName = rawAddr || (looksLikeCode ? '' : rawName) || '';
+        const displayAddress = looksLikeCode ? '' : rawAddr;
         const dataAge = row.receipt_date ? Math.floor((now - new Date(row.receipt_date).getTime()) / 86400000) : 999;
         inv.set(row.product_id, {
           productId: row.product_id,
@@ -2239,6 +2249,12 @@ export default function App() {
           lng: row.longitude,
           dataAge,
         });
+      } else if (existing) {
+        // Even if price not cheaper, update display name if current entry has a better name
+        const rawAddr = (row.place_address || '').trim();
+        if (rawAddr && !existing.storeName) {
+          existing.storeName = rawAddr;
+        }
       }
     }
 
@@ -2246,7 +2262,7 @@ export default function App() {
     const storeDistances = new Map<StoreKey, number>();
     for (const [storeKey, inv] of storeInventory) {
       const first = [...inv.values()][0];
-      if (origin && first.lat != null && first.lng != null) {
+      if (origin) {
         const dist = haversineDistanceKm(origin, { lat: first.lat, lng: first.lng });
         storeDistances.set(storeKey, dist);
         if (dist > distanceRadiusKm) {
@@ -2293,7 +2309,6 @@ export default function App() {
 
     for (const [storeKey, inv] of storeInventory) {
       const first = [...inv.values()][0];
-      if (!first.lat || !first.lng) continue;
       let totalCost = 0;
       const missing: string[] = [];
       const items: Record<string, number> = {};
@@ -2314,8 +2329,8 @@ export default function App() {
         }
       }
       singleStorePlans.push({
-        name: first.storeName,
-        address: first.storeAddress,
+        name: (() => { let best = ''; for (const e of inv.values()) { if (e.storeName.length > best.length) best = e.storeName; } return best || first.storeAddress || '?'; })(),
+        address: (() => { let best = ''; for (const e of inv.values()) { if (e.storeAddress.length > best.length) best = e.storeAddress; } return best; })(),
         distance: storeDistances.get(storeKey) || 0,
         latitude: first.lat,
         longitude: first.lng,
@@ -2408,24 +2423,42 @@ export default function App() {
       if (!coveredItems.has(i)) missingItems.push(itemStoreOptions[i].product);
     }
 
+    // Helper: best display name for a store (picks longest non-code name from all entries)
+    const getStoreDisplayName = (storeKey: StoreKey): { name: string; address: string } => {
+      const inv = storeInventory.get(storeKey);
+      if (!inv) return { name: storeKey, address: '' };
+      let bestName = '';
+      let bestAddr = '';
+      for (const entry of inv.values()) {
+        if (entry.storeName.length > bestName.length) bestName = entry.storeName;
+        if (entry.storeAddress.length > bestAddr.length) bestAddr = entry.storeAddress;
+      }
+      // If no human-readable name found, show coordinates
+      if (!bestName && !bestAddr) {
+        const first = [...inv.values()][0];
+        bestName = `📍 ${first.lat.toFixed(4)}, ${first.lng.toFixed(4)}`;
+      }
+      return { name: bestName || bestAddr || storeKey, address: bestAddr !== bestName ? bestAddr : '' };
+    };
+
     // Build stores array
     const bestStores = [...selectedStores.entries()].map(([storeKey]) => {
       const first = [...(storeInventory.get(storeKey)?.values() || [])][0];
+      const display = getStoreDisplayName(storeKey);
       return {
-        name: first?.storeName || '?',
-        address: first?.storeAddress || '',
+        name: display.name,
+        address: display.address,
         latitude: first?.lat || 0,
         longitude: first?.lng || 0,
         distance: storeDistances.get(storeKey) ?? 0,
       };
     }).sort((a, b) => a.distance - b.distance);
 
-    // Build item assignments by store name
+    // Build item assignments keyed by store name (use storeKey to avoid name collisions)
     const itemAssignments: Record<string, Array<{ item: Product; price: number; isCheapest?: boolean; dataAge?: number }>> = {};
     for (const [storeKey, items] of selectedStores) {
-      const first = [...(storeInventory.get(storeKey)?.values() || [])][0];
-      const storeName = first?.storeName || '?';
-      itemAssignments[storeName] = items;
+      const display = getStoreDisplayName(storeKey);
+      itemAssignments[display.name] = items;
     }
 
     const totalItemCost = [...selectedStores.values()].flat().reduce((s, i) => s + i.price, 0);
