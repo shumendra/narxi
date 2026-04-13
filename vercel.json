@@ -14,10 +14,7 @@
       "src": "/reader\\.html",
       "dest": "/reader.html"
     },
-    {
-      "src": "/test-scanner\\.html",
-      "dest": "/test-scanner.html"
-    },
+
     {
       "handle": "filesystem"
     },
