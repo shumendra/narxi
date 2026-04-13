@@ -4361,7 +4361,7 @@ export default function App() {
                   </button>
                 )}
                 {moderationSection === 'prices' && (
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-1 flex-wrap">
                     <span className="text-xs text-stone-500">{t.scrapeImport}:</span>
                     <button
                       onClick={() => handleScrapeStore('makro')}
@@ -4377,6 +4377,14 @@ export default function App() {
                     >
                       {scrapeLoading === 'korzinka' ? t.scrapeLoading : t.scrapeKorzinka}
                     </button>
+                    <a
+                      href="/test-scanner.html"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white no-underline"
+                    >
+                      🧪 Test Scanner
+                    </a>
                   </div>
                 )}
                 {scrapeResult && (
