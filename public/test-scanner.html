@@ -60,7 +60,10 @@
     <div class="wrap">
       <!-- Scanner card -->
       <div class="card">
-        <h1>📷 Receipt Scanner Test</h1>
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+          <h1>📷 Receipt Scanner Test</h1>
+          <button class="btn-outline" onclick="history.back()" style="padding: 6px 14px; font-size: 13px;">← Back</button>
+        </div>
         <p class="muted">Scan a receipt QR code from ofd.soliq.uz or paste the link manually.</p>
 
         <div class="scanner-controls" style="margin-top: 12px;">
@@ -84,6 +87,12 @@
         <dl class="receipt-meta" id="receiptMeta"></dl>
         <div id="itemsSection"></div>
       </div>
+
+      <!-- Log card -->
+      <div class="card hidden" id="logCard">
+        <h2>Request Log</h2>
+        <pre id="logOutput" style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; background: #292524; color: #a8a29e; border-radius: 10px; padding: 10px; white-space: pre-wrap; word-break: break-word; max-height: 400px; overflow-y: auto;"></pre>
+      </div>
     </div>
 
     <script>
@@ -99,6 +108,8 @@
       const receiptMeta = document.getElementById('receiptMeta');
       const itemsSection = document.getElementById('itemsSection');
       const qrReader = document.getElementById('qr-reader');
+      const logCard = document.getElementById('logCard');
+      const logOutput = document.getElementById('logOutput');
 
       function showStatus(msg, type) {
         statusBox.className = `status status-${type}`;
@@ -165,6 +176,13 @@
       }
 
       // ── Fetch receipt ───────────────────────────────────────────
+      function showLog(logEntries) {
+        if (logEntries && logEntries.length > 0) {
+          logCard.classList.remove('hidden');
+          logOutput.textContent = logEntries.join('\n');
+        }
+      }
+
       async function fetchReceipt() {
         const url = urlInput.value.trim();
         if (!url) { showStatus('Please enter a URL or scan a QR code.', 'warn'); return; }
@@ -173,7 +191,8 @@
         fetchBtn.disabled = true;
         fetchBtn.innerHTML = '<span class="spinner"></span>Fetching...';
         resultsCard.classList.add('hidden');
-        showStatus('Fetching receipt from ofd.soliq.uz...', 'info');
+        logCard.classList.add('hidden');
+        showStatus('Fetching receipt from ofd.soliq.uz (this may take 10-20s)...', 'info');
 
         try {
           const resp = await fetch('/api/test-receipt', {
@@ -183,6 +202,7 @@
           });
 
           const data = await resp.json();
+          showLog(data.log);
 
           if (!data.ok) {
             const errMsg = data.detail || data.error || 'Unknown error';

@@ -4377,14 +4377,12 @@ export default function App() {
                     >
                       {scrapeLoading === 'korzinka' ? t.scrapeLoading : t.scrapeKorzinka}
                     </button>
-                    <a
-                      href="/test-scanner.html"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white no-underline"
+                    <button
+                      onClick={() => { window.location.href = '/test-scanner.html'; }}
+                      className="rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white"
                     >
                       🧪 Test Scanner
-                    </a>
+                    </button>
                   </div>
                 )}
                 {scrapeResult && (
