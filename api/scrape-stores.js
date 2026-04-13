@@ -228,11 +228,27 @@ export default async function handler(req, res) {
         .map(p => p.product_id)
     );
 
+    // Check for existing API-sourced entries to avoid duplicates on re-run
+    const sourceTag = `store_api_${store}`;
+    const { data: existingApiPrices } = await supabase
+      .from('pending_prices')
+      .select('product_name_raw, price')
+      .eq('source', sourceTag);
+    const { data: existingApprovedApi } = await supabase
+      .from('prices')
+      .select('product_name_raw, price')
+      .eq('source', sourceTag);
+    const existingApiSet = new Set([
+      ...((existingApiPrices || []).map(p => `${p.product_name_raw}|${p.price}`)),
+      ...((existingApprovedApi || []).map(p => `${p.product_name_raw}|${p.price}`)),
+    ]);
+
     // 4. Match and insert into pending_prices
     let inserted = 0;
     let matched = 0;
     let skipped = 0;
     let skippedReceipt = 0;
+    let skippedDup = 0;
     const errors = [];
     const now = new Date().toISOString();
     // Pick first store as representative (API prices are chain-wide, not branch-specific)
@@ -262,6 +278,13 @@ export default async function handler(req, res) {
         continue;
       }
 
+      // Skip if this exact product+price was already imported from this API source
+      const dedupKey = `${sp.name || rawName}|${sp.price}`;
+      if (existingApiSet.has(dedupKey)) {
+        skippedDup++;
+        continue;
+      }
+
       const payload = {
         product_name_raw: sp.name || rawName,
         product_id: finalMatch?.id || null,
@@ -285,6 +308,7 @@ export default async function handler(req, res) {
         errors.push({ name: rawName, error: error.message });
       } else {
         inserted++;
+        existingApiSet.add(dedupKey);
         if (finalScore >= 60) matched++;
       }
     }
@@ -297,8 +321,9 @@ export default async function handler(req, res) {
       matched,
       skipped,
       skippedReceipt,
+      skippedDup,
       errors: errors.length > 0 ? errors.slice(0, 10) : undefined,
-      message: `Scraped ${storeProducts.length} from ${store}: ${inserted} inserted (${matched} matched), ${skippedReceipt} skipped (receipt exists).`,
+      message: `Scraped ${storeProducts.length} from ${store}: ${inserted} inserted (${matched} matched), ${skippedReceipt} skipped (receipt exists), ${skippedDup} skipped (already imported).`,
     });
   } catch (err) {
     console.error('scrape-stores error:', err);
