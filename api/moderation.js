@@ -662,6 +662,15 @@ async function rejectPending(id) {
   if (error) throw error;
 }
 
+async function rejectMany(ids) {
+  const targetIds = Array.isArray(ids) ? ids.filter(Boolean) : [];
+  if (targetIds.length === 0) return { rejectedCount: 0 };
+
+  const { error } = await supabase.from('pending_prices').update({ status: 'rejected' }).in('id', targetIds);
+  if (error) throw error;
+  return { rejectedCount: targetIds.length };
+}
+
 async function deleteApproved(id) {
   const { error } = await supabase.from('prices').delete().eq('id', id);
   if (error) throw error;
@@ -717,6 +726,10 @@ export default async function moderation(req, res) {
       case 'reject': {
         await rejectPending(body.id);
         return send(res, 200, { ok: true });
+      }
+      case 'rejectMany': {
+        const result = await rejectMany(body.ids);
+        return send(res, 200, { ok: true, ...result });
       }
       case 'deleteApproved': {
         await deleteApproved(body.id);

@@ -411,7 +411,8 @@ export default function App() {
         approvedCreate: "Yangi narx qo'shish",
         approvedDeleteSelected: "Tanlanganlarni o'chirish",
         approvedBulkDeleted: "Tanlangan narxlar o'chirildi ✅",
-        moderationApproveSelected: 'Tanlanganlarni tasdiqlash',
+        moderationApproveSelected: 'Tasdiqlash',
+        moderationRejectSelected: 'Rad etish',
         moderationSelectAll: 'Barchasini tanlash',
         moderationClearSelection: 'Tanlovni tozalash',
         productsTab: 'Mahsulotlar',
@@ -695,7 +696,8 @@ export default function App() {
         approvedCreate: 'Добавить новую цену',
         approvedDeleteSelected: 'Удалить выбранные',
         approvedBulkDeleted: 'Выбранные цены удалены ✅',
-        moderationApproveSelected: 'Одобрить выбранные',
+        moderationApproveSelected: 'Одобрить',
+        moderationRejectSelected: 'Отклонить',
         moderationSelectAll: 'Выбрать все',
         moderationClearSelection: 'Очистить выбор',
         productsTab: 'Товары',
@@ -979,7 +981,8 @@ export default function App() {
         approvedCreate: 'Add new price',
         approvedDeleteSelected: 'Delete selected',
         approvedBulkDeleted: 'Selected prices deleted ✅',
-        moderationApproveSelected: 'Approve selected',
+        moderationApproveSelected: 'Approve',
+        moderationRejectSelected: 'Reject',
         moderationSelectAll: 'Select all',
         moderationClearSelection: 'Clear selection',
         productsTab: 'Products',
@@ -1630,6 +1633,20 @@ export default function App() {
       await callModerationApi('approveMany', { ids: selectedModerationIds });
       await fetchModerationItems();
       window.Telegram?.WebApp?.showAlert(t.moderationApproved);
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } finally {
+      setModerationSavingId(null);
+    }
+  };
+
+  const rejectSelectedModerationItems = async () => {
+    if (selectedModerationIds.length === 0) return;
+    setModerationSavingId('bulk-reject');
+    try {
+      await callModerationApi('rejectMany', { ids: selectedModerationIds });
+      await fetchModerationItems();
+      window.Telegram?.WebApp?.showAlert(t.moderationRejected);
     } catch {
       window.Telegram?.WebApp?.showAlert(t.moderationError);
     } finally {
@@ -4307,16 +4324,17 @@ export default function App() {
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">
+            {/* Row 1: Title + section tabs */}
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-lg font-semibold whitespace-nowrap">
                 {moderationSection === 'prices' ? t.moderationTitle : moderationSection === 'products' ? t.productsTitle : t.messagesTitle}
               </h2>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1">
                 <button
                   onClick={() => setModerationSection('prices')}
                   className={cn(
-                    'rounded-xl px-3 py-2 text-sm font-semibold',
-                    moderationSection === 'prices' ? 'bg-emerald-600 text-white' : 'border border-stone-200 bg-white text-stone-700'
+                    'rounded-lg px-3 py-1.5 text-xs font-semibold',
+                    moderationSection === 'prices' ? 'bg-emerald-600 text-white' : 'border border-stone-200 bg-white text-stone-600'
                   )}
                 >
                   {t.pricesTab}
@@ -4324,8 +4342,8 @@ export default function App() {
                 <button
                   onClick={() => setModerationSection('products')}
                   className={cn(
-                    'rounded-xl px-3 py-2 text-sm font-semibold',
-                    moderationSection === 'products' ? 'bg-emerald-600 text-white' : 'border border-stone-200 bg-white text-stone-700'
+                    'rounded-lg px-3 py-1.5 text-xs font-semibold',
+                    moderationSection === 'products' ? 'bg-emerald-600 text-white' : 'border border-stone-200 bg-white text-stone-600'
                   )}
                 >
                   {t.productsTab}
@@ -4333,8 +4351,8 @@ export default function App() {
                 <button
                   onClick={() => setModerationSection('messages')}
                   className={cn(
-                    'rounded-xl px-3 py-2 text-sm font-semibold',
-                    moderationSection === 'messages' ? 'bg-emerald-600 text-white' : 'border border-stone-200 bg-white text-stone-700'
+                    'rounded-lg px-3 py-1.5 text-xs font-semibold',
+                    moderationSection === 'messages' ? 'bg-emerald-600 text-white' : 'border border-stone-200 bg-white text-stone-600'
                   )}
                 >
                   {t.messagesTab}
@@ -4347,51 +4365,64 @@ export default function App() {
                         ? fetchModerationProducts
                         : fetchModerationMessages
                   }
-                  className="rounded-xl border border-stone-200 bg-white px-4 py-2 text-sm font-medium text-stone-700"
+                  className="rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-stone-600"
                 >
-                  {t.moderationRefresh}
+                  ↻
                 </button>
-                {moderationSection === 'prices' && (
-                  <button
-                    onClick={approveSelectedModerationItems}
-                    disabled={selectedModerationIds.length === 0 || moderationSavingId === 'bulk-approve'}
-                    className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                  >
-                    {t.moderationApproveSelected} ({selectedModerationIds.length})
-                  </button>
-                )}
-                {moderationSection === 'prices' && (
-                  <div className="flex items-center gap-1 flex-wrap">
-                    <span className="text-xs text-stone-500">{t.scrapeImport}:</span>
-                    <button
-                      onClick={() => handleScrapeStore('makro')}
-                      disabled={!!scrapeLoading}
-                      className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
-                    >
-                      {scrapeLoading === 'makro' ? t.scrapeLoading : t.scrapeMakro}
-                    </button>
-                    <button
-                      onClick={() => handleScrapeStore('korzinka')}
-                      disabled={!!scrapeLoading}
-                      className="rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
-                    >
-                      {scrapeLoading === 'korzinka' ? t.scrapeLoading : t.scrapeKorzinka}
-                    </button>
-                    <button
-                      onClick={() => { window.location.href = '/test-scanner.html'; }}
-                      className="rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white"
-                    >
-                      🧪 Test Scanner
-                    </button>
-                  </div>
-                )}
-                {scrapeResult && (
-                  <div className="text-xs text-stone-600 bg-stone-100 rounded-lg px-3 py-1.5">
-                    {scrapeResult}
-                  </div>
-                )}
               </div>
             </div>
+
+            {/* Row 2: Bulk actions (prices only) */}
+            {moderationSection === 'prices' && selectedModerationIds.length > 0 && (
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-medium text-stone-500">{selectedModerationIds.length} selected:</span>
+                <button
+                  onClick={approveSelectedModerationItems}
+                  disabled={moderationSavingId === 'bulk-approve'}
+                  className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                >
+                  ✓ {t.moderationApproveSelected}
+                </button>
+                <button
+                  onClick={rejectSelectedModerationItems}
+                  disabled={moderationSavingId === 'bulk-reject'}
+                  className="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                >
+                  ✕ {t.moderationRejectSelected}
+                </button>
+              </div>
+            )}
+
+            {/* Row 3: Tools (prices only) */}
+            {moderationSection === 'prices' && (
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <button
+                  onClick={() => handleScrapeStore('makro')}
+                  disabled={!!scrapeLoading}
+                  className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                >
+                  {scrapeLoading === 'makro' ? t.scrapeLoading : t.scrapeMakro}
+                </button>
+                <button
+                  onClick={() => handleScrapeStore('korzinka')}
+                  disabled={!!scrapeLoading}
+                  className="rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                >
+                  {scrapeLoading === 'korzinka' ? t.scrapeLoading : t.scrapeKorzinka}
+                </button>
+                <button
+                  onClick={() => { window.location.href = '/test-scanner.html'; }}
+                  className="rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white"
+                >
+                  🧪 Scanner
+                </button>
+                {scrapeResult && (
+                  <span className="text-xs text-stone-500 bg-stone-100 rounded-lg px-2 py-1">
+                    {scrapeResult}
+                  </span>
+                )}
+              </div>
+            )}
 
             {moderationSection === 'prices' ? (
               <>

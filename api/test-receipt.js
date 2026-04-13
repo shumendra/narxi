@@ -1,4 +1,3 @@
-import axios from 'axios';
 import { createClient } from '@supabase/supabase-js';
 import {
   isSoliqUrl,
@@ -10,8 +9,8 @@ import {
 } from './utils/receipt.js';
 
 export const config = {
-  api: { bodyParser: true },
-  maxDuration: 60,
+  api: { bodyParser: { sizeLimit: '2mb' } },
+  maxDuration: 30,
 };
 
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
@@ -27,110 +26,6 @@ function withCors(res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
 
-/**
- * Session-based fetch: ofd.soliq.uz requires visiting the homepage first
- * to get session cookies, then using those cookies on the check URL.
- */
-async function fetchReceiptWithSession(checkUrl, log) {
-  log.push(`[1] Starting session fetch for: ${checkUrl}`);
-
-  // Step 1: Visit homepage to get session cookies
-  let sessionCookies = '';
-  try {
-    const homeResp = await axios.get('https://ofd.soliq.uz', {
-      timeout: 15000,
-      maxRedirects: 5,
-      validateStatus: () => true,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'ru,uz;q=0.9,en;q=0.8',
-      },
-    });
-
-    log.push(`[2] Homepage response: status=${homeResp.status}, headers=${Object.keys(homeResp.headers).join(',')}`);
-
-    // Extract Set-Cookie headers
-    const setCookieHeaders = homeResp.headers['set-cookie'];
-    if (setCookieHeaders) {
-      const cookies = (Array.isArray(setCookieHeaders) ? setCookieHeaders : [setCookieHeaders]);
-      sessionCookies = cookies.map(c => c.split(';')[0]).join('; ');
-      log.push(`[3] Got cookies: ${sessionCookies.substring(0, 120)}...`);
-    } else {
-      log.push('[3] No Set-Cookie headers from homepage');
-    }
-  } catch (err) {
-    log.push(`[2] Homepage error: ${err.message}`);
-  }
-
-  // Step 2: Fetch the actual check URL with session cookies
-  const fetchHeaders = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    'Accept-Language': 'ru,uz;q=0.9,en;q=0.8',
-    'Referer': 'https://ofd.soliq.uz/',
-    'Cache-Control': 'no-cache',
-  };
-  if (sessionCookies) {
-    fetchHeaders['Cookie'] = sessionCookies;
-  }
-
-  let html = '';
-  let lastError = null;
-
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      log.push(`[4] Fetching check URL (attempt ${attempt + 1}/3)...`);
-
-      const resp = await axios.get(checkUrl, {
-        timeout: 30000,
-        maxRedirects: 5,
-        validateStatus: () => true,
-        headers: fetchHeaders,
-      });
-
-      log.push(`[5] Check response: status=${resp.status}, length=${String(resp.data || '').length}`);
-
-      html = String(resp.data || '');
-
-      // Check if receipt is still generating
-      const lower = html.toLowerCase();
-      if (lower.includes('shakllanmoqda') || (lower.includes('alert-danger') && !lower.includes('products-tables') && !lower.includes('nomi'))) {
-        log.push('[6] Receipt still generating, will retry...');
-        if (attempt < 2) {
-          await new Promise(r => setTimeout(r, 4000));
-          continue;
-        }
-        return { html: '', generating: true, log };
-      }
-
-      // Check if we got actual receipt data
-      const hasTable = html.includes('products-tables') || html.includes('Nomi') || html.includes('nomi') || html.includes('Наименование');
-      log.push(`[6] Has receipt table: ${hasTable}, HTML snippet: ${html.substring(0, 300).replace(/\s+/g, ' ')}`);
-
-      if (!hasTable && attempt < 2) {
-        log.push('[6] No receipt table found, retrying...');
-        await new Promise(r => setTimeout(r, 3000));
-        continue;
-      }
-
-      break;
-    } catch (err) {
-      lastError = err;
-      log.push(`[5] Fetch error (attempt ${attempt + 1}): ${err.message}`);
-      if (attempt < 2) {
-        await new Promise(r => setTimeout(r, 2000));
-      }
-    }
-  }
-
-  if (!html && lastError) {
-    return { html: '', error: lastError.message, log };
-  }
-
-  return { html, log };
-}
-
 export default async function handler(req, res) {
   withCors(res);
 
@@ -143,45 +38,39 @@ export default async function handler(req, res) {
 
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+
+    // Mode 1: Client sends pre-fetched HTML → parse + match only
+    // Mode 2: Client sends URL → we normalize it (no fetch from server)
     const rawUrl = String(body.url || '').trim();
+    const html = String(body.html || '');
     const url = normalizeSoliqUrl(rawUrl) || rawUrl;
 
-    log.push(`Input URL: ${rawUrl}`);
-    log.push(`Normalized URL: ${url}`);
+    log.push(`URL: ${url || '(none)'}`);
+    log.push(`HTML length: ${html.length}`);
 
-    if (!isSoliqUrl(url)) {
-      return res.status(200).json({ ok: false, error: 'not_soliq_url', detail: 'URL must be an ofd.soliq.uz/check link', log });
-    }
-
-    // Fetch with session
-    const result = await fetchReceiptWithSession(url, log);
-
-    if (result.generating) {
-      return res.status(200).json({ ok: false, error: 'generating', detail: 'Receipt is still being generated. Try again in a few seconds.', log: result.log });
-    }
-
-    if (result.error || !result.html) {
-      return res.status(200).json({ ok: false, error: 'fetch_failed', detail: result.error || 'Empty HTML response', log: result.log });
+    if (!html) {
+      // No HTML provided — just validate the URL and return
+      if (!isSoliqUrl(url)) {
+        return res.status(200).json({ ok: false, error: 'not_soliq_url', detail: 'Provide { html } (pre-fetched) or a valid ofd.soliq.uz URL', log });
+      }
+      return res.status(200).json({ ok: false, error: 'no_html', detail: 'Server cannot reach ofd.soliq.uz. Send the HTML from client-side fetch.', log });
     }
 
     // Parse the HTML
-    log.push(`[7] Parsing HTML (${result.html.length} chars)...`);
-    const parsed = parseReceiptHtml(result.html);
+    log.push('[1] Parsing HTML...');
+    const parsed = parseReceiptHtml(html);
 
     if (!parsed) {
-      log.push('[8] parseReceiptHtml returned null');
+      log.push('[2] parseReceiptHtml returned null');
       return res.status(200).json({ ok: false, error: 'parse_failed', detail: 'Could not parse receipt HTML', log });
     }
 
-    log.push(`[8] Parsed: store="${parsed.store_name}", address="${parsed.store_address}", date="${parsed.receipt_date}", items=${(parsed.items || []).length}`);
+    log.push(`[2] Parsed: store="${parsed.store_name}", items=${(parsed.items || []).length}`);
 
     // Extract coordinates from HTML
-    const coordMatch = result.html.match(/Placemark\s*\(\s*\[\s*(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)\s*\]/);
+    const coordMatch = html.match(/Placemark\s*\(\s*\[\s*(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)\s*\]/);
     const latitude = coordMatch ? parseFloat(coordMatch[1]) : null;
     const longitude = coordMatch ? parseFloat(coordMatch[2]) : null;
-    if (coordMatch) {
-      log.push(`[9] Coordinates: ${latitude}, ${longitude}`);
-    }
 
     const city = extractCityFromAddress(parsed.store_address) || 'Tashkent';
 
@@ -199,7 +88,7 @@ export default async function handler(req, res) {
       try {
         const supabase = createClient(supabaseUrl, supabaseKey);
         const products = await fetchProductsIndex(supabase);
-        log.push(`[10] Loaded ${products.length} products for matching`);
+        log.push(`[3] Loaded ${products.length} products for matching`);
 
         matchedItems = matchedItems.map(item => {
           const { product, score } = fuzzyMatchProduct(item.name, products);
@@ -210,15 +99,15 @@ export default async function handler(req, res) {
           };
         });
       } catch (matchErr) {
-        log.push(`[10] Product matching error: ${matchErr.message}`);
+        log.push(`[3] Product matching error: ${matchErr.message}`);
       }
     }
 
-    log.push(`[11] Done: ${matchedItems.length} items matched`);
+    log.push(`[4] Done: ${matchedItems.length} items`);
 
     return res.status(200).json({
       ok: true,
-      receiptUrl: url,
+      receiptUrl: url || null,
       storeName: parsed.store_name || null,
       storeAddress: parsed.store_address || null,
       city,
