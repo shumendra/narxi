@@ -29,27 +29,63 @@ const adminTelegramIds = (import.meta.env.VITE_ADMIN_TELEGRAM_IDS || import.meta
   .filter(Boolean);
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Known store locations for display name resolution
-const KNOWN_STORES: Array<{ name: string; lat: number; lng: number }> = [
+// Known store locations for display name resolution — fetched dynamically
+let _knownStoresCache: Array<{ name: string; lat: number; lng: number }> | null = null;
+
+async function fetchKnownStores(): Promise<Array<{ name: string; lat: number; lng: number }>> {
+  if (_knownStoresCache) return _knownStoresCache;
+  const stores: Array<{ name: string; lat: number; lng: number }> = [];
+  try {
+    // Makro: regions 1-14
+    const makroFetches = Array.from({ length: 14 }, (_, i) =>
+      fetch(`https://api.makromarket.uz/api/location-list/?region=${i + 1}`, {
+        headers: { 'Accept': 'application/json', 'Origin': 'https://makromarket.uz' },
+      }).then(r => r.json()).catch(() => [])
+    );
+    const makroRegions = await Promise.all(makroFetches);
+    for (const region of makroRegions) {
+      if (Array.isArray(region)) {
+        for (const s of region) {
+          const lat = parseFloat(s.latitude);
+          const lng = parseFloat(s.longitude);
+          if (lat && lng) stores.push({ name: s.title || 'Makro', lat, lng });
+        }
+      }
+    }
+    // Korzinka
+    const kRes = await fetch('https://api.korzinka.uz/shop_search/?q=&category[]=66&category[]=64', {
+      headers: { 'Accept': 'application/json', 'Origin': 'https://korzinka.uz' },
+    });
+    const kData = await kRes.json();
+    const kItems = kData?.data?.items?.ru || kData?.data?.items?.uz || [];
+    for (const s of kItems) {
+      const lat = parseFloat(s.location?.lat);
+      const lng = parseFloat(s.location?.lon);
+      if (lat && lng) stores.push({ name: s.name || 'Korzinka', lat, lng });
+    }
+  } catch { /* use whatever we got */ }
+  // Deduplicate by coordinates
+  const seen = new Set<string>();
+  _knownStoresCache = stores.filter(s => {
+    const key = `${s.lat.toFixed(4)},${s.lng.toFixed(4)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return _knownStoresCache;
+}
+
+// Fallback for sync usage (before fetch completes)
+const KNOWN_STORES_FALLBACK: Array<{ name: string; lat: number; lng: number }> = [
   { name: 'Makro', lat: 41.313097, lng: 69.332279 },
-  { name: 'Makro', lat: 41.303898, lng: 69.340257 },
   { name: 'Makro', lat: 41.304013, lng: 69.322374 },
-  { name: 'Makro', lat: 41.313467, lng: 69.340916 },
-  { name: 'Makro', lat: 41.312521, lng: 69.332519 },
-  { name: 'Makro', lat: 41.318621, lng: 69.357059 },
-  { name: 'Makro', lat: 41.286313, lng: 69.323630 },
-  { name: 'Korzinka', lat: 41.288861, lng: 69.344876 },
-  { name: 'Korzinka', lat: 41.299428, lng: 69.342156 },
-  { name: 'Korzinka', lat: 41.312781, lng: 69.330166 },
   { name: 'Korzinka', lat: 41.300976, lng: 69.263439 },
-  { name: 'Korzinka', lat: 41.291199, lng: 69.358471 },
-  { name: 'Korzinka', lat: 41.287455, lng: 69.337313 },
   { name: 'Korzinka', lat: 41.327718, lng: 69.343438 },
-  { name: 'Korzinka', lat: 41.283104, lng: 69.349174 },
 ];
 
-function identifyStoreByCoords(lat: number, lng: number): string | null {
-  for (const s of KNOWN_STORES) {
+function identifyStoreByCoords(lat: number, lng: number, knownStores?: Array<{ name: string; lat: number; lng: number }>): string | null {
+  const stores = knownStores || _knownStoresCache || KNOWN_STORES_FALLBACK;
+  for (const s of stores) {
     const dlat = (s.lat - lat) * 111320;
     const dlng = (s.lng - lng) * 111320 * Math.cos(lat * Math.PI / 180);
     if (Math.sqrt(dlat * dlat + dlng * dlng) < 500) return s.name; // within 500m
@@ -421,6 +457,7 @@ export default function App() {
         scrapeImport: 'Import qilish',
         scrapeMakro: 'Makro narxlari',
         scrapeKorzinka: 'Korzinka narxlari',
+        scrapeYandexBaraka: 'Baraka (Yandex)',
         scrapeLoading: 'Yuklanmoqda...',
         messagesTitle: 'Foydalanuvchi xabarlari',
         messagesEmpty: 'Xabarlar yo‘q',
@@ -706,6 +743,7 @@ export default function App() {
         scrapeImport: 'Импорт',
         scrapeMakro: 'Цены Makro',
         scrapeKorzinka: 'Цены Korzinka',
+        scrapeYandexBaraka: 'Baraka (Yandex)',
         scrapeLoading: 'Загрузка...',
         messagesTitle: 'Сообщения от пользователей',
         messagesEmpty: 'Сообщений пока нет',
@@ -991,6 +1029,7 @@ export default function App() {
         scrapeImport: 'Import',
         scrapeMakro: 'Makro prices',
         scrapeKorzinka: 'Korzinka prices',
+        scrapeYandexBaraka: 'Baraka (Yandex)',
         scrapeLoading: 'Loading...',
         messagesTitle: 'User messages',
         messagesEmpty: 'No messages yet',
@@ -1201,6 +1240,8 @@ export default function App() {
     }
 
     fetchProducts();
+    // Pre-fetch known store locations for coordinate-based store identification
+    fetchKnownStores().catch(() => {});
   }, [isAdminUser]);
 
   useEffect(() => {
@@ -1329,7 +1370,7 @@ export default function App() {
     return json;
   };
 
-  const handleScrapeStore = async (store: 'makro' | 'korzinka') => {
+  const handleScrapeStore = async (store: 'makro' | 'korzinka' | 'yandex_baraka') => {
     if (!isAdminUser || scrapeLoading) return;
     setScrapeLoading(store);
     setScrapeResult(null);
@@ -2608,6 +2649,7 @@ export default function App() {
 
     setSubmitting(true);
     const manualName = selectedProduct ? getProductName(selectedProduct, lang) : searchQuery.trim();
+    const detectedStore = reportLocation ? identifyStoreByCoords(reportLocation.lat, reportLocation.lng) : null;
     const { error } = await supabase.from('pending_prices').insert({
       product_id: selectedProduct?.id || null,
       product_name_raw: manualName || searchQuery.trim(),
@@ -2618,6 +2660,7 @@ export default function App() {
       unit_price: parseInt(reportPrice),
       latitude: reportLocation?.lat ?? null,
       longitude: reportLocation?.lng ?? null,
+      place_name: detectedStore || null,
       city: selectedCity,
       receipt_date: new Date().toISOString(),
       receipt_url: reportProofUrl.trim(),
@@ -4409,6 +4452,13 @@ export default function App() {
                   className="rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
                 >
                   {scrapeLoading === 'korzinka' ? t.scrapeLoading : t.scrapeKorzinka}
+                </button>
+                <button
+                  onClick={() => handleScrapeStore('yandex_baraka')}
+                  disabled={!!scrapeLoading}
+                  className="rounded-lg bg-purple-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                >
+                  {scrapeLoading === 'yandex_baraka' ? t.scrapeLoading : t.scrapeYandexBaraka}
                 </button>
                 {scrapeResult && (
                   <span className="text-xs text-stone-500 bg-stone-100 rounded-lg px-2 py-1">

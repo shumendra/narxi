@@ -14,29 +14,163 @@ function send(res, status, body) {
   res.status(status).send(JSON.stringify(body));
 }
 
-// ─── Store configs ─────────────────────────────────────────────────────────
-// Makro Tashkent branches (coordinates from Google Maps)
-const MAKRO_STORES = [
-  { name: 'Makro', address: 'Parkent ko\u2018chasi 215', lat: 41.313097, lng: 69.332279 },
-  { name: 'Makro', address: 'Qorasuv ko\u2018chasi 6', lat: 41.303898, lng: 69.340257 },
-  { name: 'Makro', address: 'Mahtumquli ko\u2018chasi 134', lat: 41.304013, lng: 69.322374 },
-  { name: 'Makro', address: 'Qaynarsoy ko\u2018chasi 45', lat: 41.313467, lng: 69.340916 },
-  { name: 'Makro', address: 'Oltintepa ko\u2018chasi 2', lat: 41.312521, lng: 69.332519 },
-  { name: 'Makro', address: 'Nurafshon aylanma yo\u2018li', lat: 41.318621, lng: 69.357059 },
-  { name: 'Makro Express', address: 'Aviasozlar-2', lat: 41.286313, lng: 69.323630 },
-];
+// ─── Dynamic store location fetching ───────────────────────────────────────
+const MAKRO_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+  'Accept': 'application/json',
+  'Accept-Language': 'ru',
+  'Origin': 'https://makromarket.uz',
+  'Referer': 'https://makromarket.uz/',
+};
 
-// Korzinka Tashkent branches (coordinates from Google Maps)
-const KORZINKA_STORES = [
-  { name: 'Korzinka', address: 'Aviasozlar ko\u2018chasi', lat: 41.288861, lng: 69.344876 },
-  { name: 'Korzinka', address: 'Qorasuv ko\u2018chasi 36', lat: 41.299428, lng: 69.342156 },
-  { name: 'Korzinka', address: 'Oltintepa ko\u2018chasi 3A/1', lat: 41.312781, lng: 69.330166 },
-  { name: 'Korzinka', address: 'Yusuf Xos Hojib ko\u2018chasi 1', lat: 41.300976, lng: 69.263439 },
-  { name: 'Korzinka', address: 'Tuzel 2-kvartal 13B/1', lat: 41.291199, lng: 69.358471 },
-  { name: 'Korzinka', address: 'Buyuk Ipak Yo\u2018li 158a', lat: 41.287455, lng: 69.337313 },
-  { name: 'Korzinka', address: 'Buyuk Ipak Yo\u2018li (Salom)', lat: 41.327718, lng: 69.343438 },
-  { name: 'Korzinka', address: 'Aviasozlar 62', lat: 41.283104, lng: 69.349174 },
-];
+const KORZINKA_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+  'Accept': 'application/json',
+  'Origin': 'https://korzinka.uz',
+  'Referer': 'https://korzinka.uz/',
+};
+
+async function fetchMakroStores() {
+  const stores = [];
+  for (let region = 1; region <= 14; region++) {
+    try {
+      const res = await fetch(
+        `https://api.makromarket.uz/api/location-list/?region=${region}`,
+        { headers: MAKRO_HEADERS }
+      );
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        for (const s of data) {
+          stores.push({
+            name: s.title || 'Makro',
+            address: s.address || '',
+            lat: parseFloat(s.latitude) || 0,
+            lng: parseFloat(s.longitude) || 0,
+            city: (s.address || '').split(',')[0].replace(/^г\.\s*/, '').trim() || 'Tashkent',
+          });
+        }
+      }
+    } catch { /* skip failed region */ }
+  }
+  return stores;
+}
+
+async function fetchKorzinkaStores() {
+  const stores = [];
+  try {
+    const res = await fetch(
+      'https://api.korzinka.uz/shop_search/?q=&category[]=66&category[]=64',
+      { headers: KORZINKA_HEADERS }
+    );
+    const data = await res.json();
+    const items = data?.data?.items?.ru || data?.data?.items?.uz || [];
+    for (const s of items) {
+      const loc = s.location || {};
+      stores.push({
+        name: s.name || 'Korzinka',
+        address: s.address || '',
+        lat: parseFloat(loc.lat) || 0,
+        lng: parseFloat(loc.lon) || 0,
+        city: (s.address || '').split(',')[0].replace(/^г\.\s*/, '').trim() || 'Tashkent',
+      });
+    }
+  } catch { /* skip on failure */ }
+  // Deduplicate by lat+lng (same store can appear in multiple categories)
+  const seen = new Set();
+  return stores.filter(s => {
+    const key = `${s.lat.toFixed(5)},${s.lng.toFixed(5)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return s.lat !== 0 && s.lng !== 0;
+  });
+}
+
+// ─── Yandex Eats config & scraper ──────────────────────────────────────────
+const YANDEX_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
+  'Accept': 'application/json',
+  'Content-Type': 'application/json;charset=UTF-8',
+  'Origin': 'https://eats.yandex.com',
+  'Referer': 'https://eats.yandex.com/en-uz/',
+  'x-platform': 'desktop_web',
+  'x-app-version': '18.25.0',
+  'x-ya-coordinates': 'latitude=41.311151,longitude=69.279737',
+};
+
+// Yandex Eats store slugs — add more as discovered
+const YANDEX_STORES = {
+  baraka: {
+    slug: 'baraka_market_m4krs',
+    name: 'Baraka Market',
+    // Representative location (Tashkent)
+    lat: 41.311151,
+    lng: 69.279737,
+    address: 'Tashkent',
+    city: 'Tashkent',
+  },
+};
+
+async function scrapeYandexStore(storeKey) {
+  const storeConfig = YANDEX_STORES[storeKey];
+  if (!storeConfig) throw new Error(`Unknown Yandex store: ${storeKey}`);
+
+  const { slug } = storeConfig;
+
+  // Step 1: Get top-level categories
+  const catRes = await fetch('https://eats.yandex.com/api/v2/menu/goods?auto_translate=false', {
+    method: 'POST',
+    headers: YANDEX_HEADERS,
+    body: JSON.stringify({ slug, maxDepth: 0 }),
+  });
+  const catData = await catRes.json();
+  const topCategories = catData?.payload?.categories || [];
+
+  if (topCategories.length === 0) throw new Error('No categories returned from Yandex Eats');
+
+  // Step 2: Fetch items per category (items only populate with specific category + maxDepth)
+  const allProducts = [];
+  for (const cat of topCategories) {
+    try {
+      const res = await fetch('https://eats.yandex.com/api/v2/menu/goods?auto_translate=false', {
+        method: 'POST',
+        headers: YANDEX_HEADERS,
+        body: JSON.stringify({ slug, category: cat.id, maxDepth: 100 }),
+      });
+      const data = await res.json();
+      const categories = data?.payload?.categories || [];
+
+      // Recursively collect items from all nested categories
+      const collectItems = (cats) => {
+        for (const c of cats) {
+          if (c.items && Array.isArray(c.items)) {
+            for (const item of c.items) {
+              if (item.price > 0 && item.available !== false) {
+                allProducts.push({
+                  name: item.name || '',
+                  price: item.price, // already in UZS
+                  promoPrice: item.promoPrice || null,
+                  weight: item.weight || '',
+                  uid: item.uid || item.id,
+                  category: cat.name || '',
+                });
+              }
+            }
+          }
+          if (c.categories) collectItems(c.categories);
+        }
+      };
+      collectItems(categories);
+    } catch { /* skip failed category */ }
+  }
+
+  // Deduplicate by uid
+  const seen = new Set();
+  return allProducts.filter(p => {
+    if (seen.has(p.uid)) return false;
+    seen.add(p.uid);
+    return true;
+  });
+}
 
 // ─── Makro scraper ─────────────────────────────────────────────────────────
 async function scrapeMakro() {
@@ -44,26 +178,14 @@ async function scrapeMakro() {
 
   // Fetch categories first
   const catRes = await fetch('https://api.makromarket.uz/api/category-list/', {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-      'Accept': 'application/json',
-      'Origin': 'https://makromarket.uz',
-      'Referer': 'https://makromarket.uz/',
-    },
+    headers: MAKRO_HEADERS,
   });
   const categories = await catRes.json();
 
   // Fetch products from each category
   for (const cat of categories) {
     const url = `https://api.makromarket.uz/api/product-list/?category=${cat.id}&region=3&limit=500&p=true`;
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-        'Accept': 'application/json',
-        'Origin': 'https://makromarket.uz',
-        'Referer': 'https://makromarket.uz/',
-      },
-    });
+    const res = await fetch(url, { headers: MAKRO_HEADERS });
     const data = await res.json();
     if (data.results) {
       for (const item of data.results) {
@@ -91,12 +213,7 @@ async function scrapeMakro() {
 async function scrapeKorzinka() {
   // Get all categories
   const catRes = await fetch('https://catalog.korzinka.uz/api/catalogs/categories', {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-      'Accept': 'application/json',
-      'Origin': 'https://korzinka.uz',
-      'Referer': 'https://korzinka.uz/',
-    },
+    headers: KORZINKA_HEADERS,
   });
   const catData = await catRes.json();
   const categories = catData.data || [];
@@ -181,8 +298,9 @@ export default async function handler(req, res) {
     return send(res, 403, { ok: false, error: 'Unauthorized' });
   }
 
-  if (!store || !['makro', 'korzinka'].includes(store)) {
-    return send(res, 400, { ok: false, error: 'Invalid store. Use "makro" or "korzinka".' });
+  const validStores = ['makro', 'korzinka', ...Object.keys(YANDEX_STORES).map(k => `yandex_${k}`)];
+  if (!store || !validStores.includes(store)) {
+    return send(res, 400, { ok: false, error: `Invalid store. Use one of: ${validStores.join(', ')}` });
   }
 
   try {
@@ -203,12 +321,27 @@ export default async function handler(req, res) {
     // 2. Scrape store
     let storeProducts;
     let stores;
+    const isYandex = store.startsWith('yandex_');
     if (store === 'makro') {
-      storeProducts = await scrapeMakro();
-      stores = MAKRO_STORES;
-    } else {
-      storeProducts = await scrapeKorzinka();
-      stores = KORZINKA_STORES;
+      [storeProducts, stores] = await Promise.all([scrapeMakro(), fetchMakroStores()]);
+    } else if (store === 'korzinka') {
+      [storeProducts, stores] = await Promise.all([scrapeKorzinka(), fetchKorzinkaStores()]);
+    } else if (isYandex) {
+      const yandexKey = store.replace('yandex_', '');
+      const storeConfig = YANDEX_STORES[yandexKey];
+      storeProducts = await scrapeYandexStore(yandexKey);
+      // Yandex prices are chain-wide; use the representative store location
+      stores = [{
+        name: storeConfig.name,
+        address: storeConfig.address,
+        lat: storeConfig.lat,
+        lng: storeConfig.lng,
+        city: storeConfig.city,
+      }];
+    }
+
+    if (!stores || stores.length === 0) {
+      return send(res, 200, { ok: true, inserted: 0, matched: 0, total: 0, message: 'Could not fetch store locations from API' });
     }
 
     if (!storeProducts || storeProducts.length === 0) {
@@ -217,7 +350,7 @@ export default async function handler(req, res) {
 
     // 3. Check which products already have receipt-based prices at this store chain
     // Only skip if a receipt price exists for the same product at the same store brand
-    const storeBrand = store === 'makro' ? 'Makro' : 'Korzinka';
+    const storeBrand = store === 'makro' ? 'Makro' : store === 'korzinka' ? 'Korzinka' : YANDEX_STORES[store.replace('yandex_', '')]?.name || store;
     const { data: existingPrices } = await supabase
       .from('prices')
       .select('product_id, source, place_name')
@@ -232,18 +365,18 @@ export default async function handler(req, res) {
     const sourceTag = `store_api_${store}`;
     const { data: existingApiPrices } = await supabase
       .from('pending_prices')
-      .select('product_name_raw, price')
+      .select('product_name_raw, price, place_address')
       .eq('source', sourceTag);
     const { data: existingApprovedApi } = await supabase
       .from('prices')
-      .select('product_name_raw, price')
+      .select('product_name_raw, price, place_address')
       .eq('source', sourceTag);
     const existingApiSet = new Set([
-      ...((existingApiPrices || []).map(p => `${p.product_name_raw}|${p.price}`)),
-      ...((existingApprovedApi || []).map(p => `${p.product_name_raw}|${p.price}`)),
+      ...((existingApiPrices || []).map(p => `${p.product_name_raw}|${p.price}|${p.place_address || ''}`)),
+      ...((existingApprovedApi || []).map(p => `${p.product_name_raw}|${p.price}|${p.place_address || ''}`)),
     ]);
 
-    // 4. Match and insert into pending_prices
+    // 4. Match and insert into pending_prices — one entry per product per branch
     let inserted = 0;
     let matched = 0;
     let skipped = 0;
@@ -251,8 +384,6 @@ export default async function handler(req, res) {
     let skippedDup = 0;
     const errors = [];
     const now = new Date().toISOString();
-    // Pick first store as representative (API prices are chain-wide, not branch-specific)
-    const storeInfo = stores[0];
 
     for (const sp of storeProducts) {
       const rawName = sp.nameUz || sp.name || '';
@@ -278,39 +409,43 @@ export default async function handler(req, res) {
         continue;
       }
 
-      // Skip if this exact product+price was already imported from this API source
-      const dedupKey = `${sp.name || rawName}|${sp.price}`;
-      if (existingApiSet.has(dedupKey)) {
-        skippedDup++;
-        continue;
-      }
+      // Insert for every branch — API prices are chain-wide
+      let insertedThisProduct = false;
+      for (const branch of stores) {
+        const dedupKey = `${sp.name || rawName}|${sp.price}|${branch.address}`;
+        if (existingApiSet.has(dedupKey)) {
+          skippedDup++;
+          continue;
+        }
 
-      const payload = {
-        product_name_raw: sp.name || rawName,
-        product_id: finalMatch?.id || null,
-        match_confidence: finalScore,
-        status: 'pending',
-        price: sp.price,
-        quantity: 1,
-        unit_price: sp.price,
-        city: 'Tashkent',
-        place_name: storeInfo.name,
-        place_address: storeInfo.address,
-        receipt_date: now,
-        source: `store_api_${store}`,
-        submitted_by: String(admin_id),
-        latitude: storeInfo.lat,
-        longitude: storeInfo.lng,
-      };
+        const payload = {
+          product_name_raw: sp.name || rawName,
+          product_id: finalMatch?.id || null,
+          match_confidence: finalScore,
+          status: 'pending',
+          price: sp.price,
+          quantity: 1,
+          unit_price: sp.price,
+          city: branch.city || 'Tashkent',
+          place_name: branch.name,
+          place_address: branch.address,
+          receipt_date: now,
+          source: `store_api_${store}`,
+          submitted_by: String(admin_id),
+          latitude: branch.lat,
+          longitude: branch.lng,
+        };
 
-      const { error } = await supabase.from('pending_prices').insert(payload);
-      if (error) {
-        errors.push({ name: rawName, error: error.message });
-      } else {
-        inserted++;
-        existingApiSet.add(dedupKey);
-        if (finalScore >= 60) matched++;
+        const { error } = await supabase.from('pending_prices').insert(payload);
+        if (error) {
+          errors.push({ name: rawName, branch: branch.address, error: error.message });
+        } else {
+          inserted++;
+          existingApiSet.add(dedupKey);
+          insertedThisProduct = true;
+        }
       }
+      if (insertedThisProduct && finalScore >= 60) matched++;
     }
 
     return send(res, 200, {
@@ -323,7 +458,7 @@ export default async function handler(req, res) {
       skippedReceipt,
       skippedDup,
       errors: errors.length > 0 ? errors.slice(0, 10) : undefined,
-      message: `Scraped ${storeProducts.length} from ${store}: ${inserted} inserted (${matched} matched), ${skippedReceipt} skipped (receipt exists), ${skippedDup} skipped (already imported).`,
+      message: `Scraped ${storeProducts.length} products × ${stores.length} branches from ${store}: ${inserted} inserted (${matched} matched), ${skippedReceipt} skipped (receipt exists), ${skippedDup} skipped (already imported).`,
     });
   } catch (err) {
     console.error('scrape-stores error:', err);
