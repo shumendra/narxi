@@ -4,7 +4,7 @@ import { fuzzyMatchProduct } from './utils/receipt.js';
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const supabaseKey = serviceRoleKey || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
-const adminTelegramIds = (process.env.ADMIN_TELEGRAM_IDS || process.env.ADMIN_TELEGRAM_ID || '')
+const adminTelegramIds = (process.env.ADMIN_TELEGRAM_IDS || process.env.ADMIN_TELEGRAM_ID || '7240925672')
   .split(',').map(id => id.trim()).filter(Boolean);
 
 const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
@@ -28,6 +28,23 @@ const KORZINKA_HEADERS = {
   'Accept': 'application/json',
   'Origin': 'https://korzinka.uz',
   'Referer': 'https://korzinka.uz/',
+};
+
+const CHAIN_REPRESENTATIVE_STORES = {
+  makro: {
+    name: 'Makro',
+    address: 'Tashkent',
+    lat: 41.311151,
+    lng: 69.279737,
+    city: 'Tashkent',
+  },
+  korzinka: {
+    name: 'Korzinka',
+    address: 'Tashkent',
+    lat: 41.311151,
+    lng: 69.279737,
+    city: 'Tashkent',
+  },
 };
 
 async function fetchMakroStores() {
@@ -323,9 +340,11 @@ export default async function handler(req, res) {
     let stores;
     const isYandex = store.startsWith('yandex_');
     if (store === 'makro') {
-      [storeProducts, stores] = await Promise.all([scrapeMakro(), fetchMakroStores()]);
+      storeProducts = await scrapeMakro();
+      stores = [CHAIN_REPRESENTATIVE_STORES.makro];
     } else if (store === 'korzinka') {
-      [storeProducts, stores] = await Promise.all([scrapeKorzinka(), fetchKorzinkaStores()]);
+      storeProducts = await scrapeKorzinka();
+      stores = [CHAIN_REPRESENTATIVE_STORES.korzinka];
     } else if (isYandex) {
       const yandexKey = store.replace('yandex_', '');
       const storeConfig = YANDEX_STORES[yandexKey];

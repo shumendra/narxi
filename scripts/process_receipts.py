@@ -392,10 +392,26 @@ def fuzzy_match(raw_name: str, products: list[dict]) -> tuple[dict | None, int]:
 def mark_queue_status(queue_id: str, status: str, error_message: str | None = None):
     payload = {
         'status': status,
-        'processed_at': now_iso(),
+        'processed_at': now_iso() if status == 'processed' else None,
     }
     if error_message:
-        payload['error_message'] = error_message[:500]
+        existing_error = ''
+        try:
+            existing = (
+                supabase.table('receipt_queue')
+                .select('error_message')
+                .eq('id', queue_id)
+                .limit(1)
+                .execute()
+            )
+            if existing.data:
+                existing_error = str(existing.data[0].get('error_message') or '').strip()
+        except Exception:
+            existing_error = ''
+
+        stamped_error = f"[{datetime.now(timezone.utc).isoformat()}] {str(error_message).strip()}"
+        merged = f"{existing_error}\n{stamped_error}".strip() if existing_error else stamped_error
+        payload['error_message'] = merged[-1000:]
 
     supabase.table('receipt_queue').update(payload).eq('id', queue_id).execute()
 
@@ -459,7 +475,7 @@ async def process_single_receipt(context, queue_item: dict, products: list[dict]
 
         items = receipt.get('items') or []
         if not items:
-            mark_queue_status(queue_id, 'failed', 'No items parsed from page')
+            mark_queue_status(queue_id, 'pending', 'No items parsed from page')
             print('  ✗ No items parsed')
             return False
 
@@ -516,7 +532,7 @@ async def process_single_receipt(context, queue_item: dict, products: list[dict]
         return True
 
     except Exception as error:
-        mark_queue_status(queue_id, 'failed', str(error))
+        mark_queue_status(queue_id, 'pending', str(error))
         print(f"  ✗ Error: {error}")
         return False
     finally:
@@ -567,7 +583,7 @@ async def main():
                     timeout=120,
                 )
             except asyncio.TimeoutError:
-                mark_queue_status(queue_item.get('id'), 'failed', 'Processing timeout (120s)')
+                mark_queue_status(queue_item.get('id'), 'pending', 'Processing timeout (120s)')
                 print(f"→ Processing {queue_item.get('receipt_url')}\n  ✗ Error: Processing timeout (120s)")
                 is_ok = False
 

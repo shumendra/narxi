@@ -226,6 +226,7 @@ function ReportMapPicker({ onPick }: { onPick: (lat: number, lng: number) => voi
 }
 
 export default function App() {
+  const SHOW_SHOPPING_PLAN_MENU = false;
   const [mode, setMode] = useState<'find' | 'report' | 'plan' | 'moderate'>('find');
   const [lang, setLang] = useState<'uz' | 'ru' | 'en'>('uz');
   const [searchQuery, setSearchQuery] = useState('');
@@ -1672,10 +1673,32 @@ export default function App() {
     if (selectedModerationIds.length === 0) return;
     setModerationSavingId('bulk-approve');
     try {
-      const result = await callModerationApi('approveMany', { ids: selectedModerationIds });
+      const CHUNK_SIZE = 50;
+      const PARALLEL_REQUESTS = 3;
+      const ids = [...selectedModerationIds];
+      let approvedCount = 0;
+      const failedSet = new Set<string>();
+
+      for (let i = 0; i < ids.length; i += CHUNK_SIZE * PARALLEL_REQUESTS) {
+        const batchEnd = Math.min(i + CHUNK_SIZE * PARALLEL_REQUESTS, ids.length);
+        const chunks: string[][] = [];
+        for (let j = i; j < batchEnd; j += CHUNK_SIZE) {
+          chunks.push(ids.slice(j, j + CHUNK_SIZE));
+        }
+
+        const results = await Promise.all(
+          chunks.map(chunkIds => callModerationApi('approveMany', { ids: chunkIds }))
+        );
+
+        for (const result of results) {
+          approvedCount += Number(result?.approvedCount) || 0;
+          for (const failedId of (result?.failedIds || [])) failedSet.add(String(failedId));
+        }
+      }
+
       await fetchModerationItems();
-      const approvedCount = Number(result?.approvedCount) || 0;
-      const failedCount = Array.isArray(result?.failedIds) ? result.failedIds.length : 0;
+      setSelectedModerationIds([]);
+      const failedCount = failedSet.size;
       if (failedCount > 0) {
         window.Telegram?.WebApp?.showAlert(`${approvedCount} approved, ${failedCount} failed`);
       } else {
@@ -3392,15 +3415,17 @@ export default function App() {
               >
                 {t.modeReport}
               </button>
-              <button 
-                onClick={() => setMode('plan')}
-                className={cn(
-                  "px-4 py-1.5 rounded-md text-sm font-medium transition-all",
-                  mode === 'plan' ? "bg-white shadow-sm text-emerald-600" : "text-stone-500"
-                )}
-              >
-                {t.modePlan}
-              </button>
+              {SHOW_SHOPPING_PLAN_MENU && (
+                <button 
+                  onClick={() => setMode('plan')}
+                  className={cn(
+                    "px-4 py-1.5 rounded-md text-sm font-medium transition-all",
+                    mode === 'plan' ? "bg-white shadow-sm text-emerald-600" : "text-stone-500"
+                  )}
+                >
+                  {t.modePlan}
+                </button>
+              )}
               {isAdminUser && (
                 <button 
                   onClick={() => setMode('moderate')}
@@ -5001,18 +5026,20 @@ export default function App() {
           <Plus className="w-6 h-6" />
           <span className="text-[10px] font-bold uppercase tracking-widest">{t.modeReport}</span>
         </button>
-        <button 
-          onClick={() => { setMode('plan'); setPlanStep('list'); }}
-          className={cn("flex flex-col items-center gap-1 relative", mode === 'plan' ? "text-emerald-600" : "text-stone-400")}
-        >
-          <ShoppingCart className="w-6 h-6" />
-          {shoppingList.length > 0 && (
-            <span className="absolute -top-1 -right-1 bg-emerald-600 text-white text-[9px] font-bold rounded-full h-4 min-w-[16px] flex items-center justify-center px-1">
-              {shoppingList.length}
-            </span>
-          )}
-          <span className="text-[10px] font-bold uppercase tracking-widest">{t.modePlan}</span>
-        </button>
+        {SHOW_SHOPPING_PLAN_MENU && (
+          <button 
+            onClick={() => { setMode('plan'); setPlanStep('list'); }}
+            className={cn("flex flex-col items-center gap-1 relative", mode === 'plan' ? "text-emerald-600" : "text-stone-400")}
+          >
+            <ShoppingCart className="w-6 h-6" />
+            {shoppingList.length > 0 && (
+              <span className="absolute -top-1 -right-1 bg-emerald-600 text-white text-[9px] font-bold rounded-full h-4 min-w-[16px] flex items-center justify-center px-1">
+                {shoppingList.length}
+              </span>
+            )}
+            <span className="text-[10px] font-bold uppercase tracking-widest">{t.modePlan}</span>
+          </button>
+        )}
         {isAdminUser && (
           <button 
             onClick={() => setMode('moderate')}

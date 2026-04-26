@@ -683,8 +683,10 @@ async function approvePending(id) {
     }
   }
 
-  await syncProductAvailableCities(productId, city);
-  await upsertProductAlias(productId, pending.product_name_raw, pending.place_name || null);
+  if (!isStoreApiSource) {
+    await syncProductAvailableCities(productId, city);
+    await upsertProductAlias(productId, pending.product_name_raw, pending.place_name || null);
+  }
 
   const { error: updateError } = await supabase
     .from('pending_prices')
@@ -701,7 +703,7 @@ async function approveMany(ids) {
   let approvedCount = 0;
   const failedIds = [];
 
-  const CONCURRENCY = 8;
+  const CONCURRENCY = 16;
 
   for (let i = 0; i < targetIds.length; i += CONCURRENCY) {
     const chunk = targetIds.slice(i, i + CONCURRENCY);
