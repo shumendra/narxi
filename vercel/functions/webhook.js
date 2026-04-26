@@ -509,7 +509,6 @@ async function sendMenu(chatId, lang, telegramId = null) {
     ],
     [
       { text: BOT_COPY[lang].btnMyStats, callback_data: 'menu_mystats' },
-      { text: BOT_COPY[lang].btnShopping, web_app: { url: `${miniAppUrl}?mode=plan&lang=${lang}` } },
     ],
   ];
 

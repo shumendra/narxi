@@ -1233,7 +1233,10 @@ export default function App() {
     const initialMode = params.get('mode') as 'find' | 'report' | 'plan' | 'moderate';
     const initialLang = params.get('lang') as 'uz' | 'ru' | 'en';
     const initialCity = params.get('city');
-    if (initialMode && (initialMode !== 'moderate' || isAdminUser)) setMode(initialMode);
+    const isAllowedMode = initialMode
+      && (initialMode !== 'moderate' || isAdminUser)
+      && (SHOW_SHOPPING_PLAN_MENU || initialMode !== 'plan');
+    if (isAllowedMode) setMode(initialMode);
     if (initialLang) setLang(initialLang);
     if (initialCity) {
       const normalizedCity = CITY_OPTIONS.find(city => city.value === initialCity)?.value;

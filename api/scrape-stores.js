@@ -47,6 +47,8 @@ const CHAIN_REPRESENTATIVE_STORES = {
   },
 };
 
+const STORE_API_MATCH_MIN_SCORE = 70;
+
 async function fetchMakroStores() {
   const stores = [];
   for (let region = 1; region <= 14; region++) {
@@ -419,8 +421,11 @@ export default async function handler(req, res) {
         }
       }
 
+      const isConfidentMatch = Boolean(finalMatch) && finalScore >= STORE_API_MATCH_MIN_SCORE;
+      const matchedProductId = isConfidentMatch ? finalMatch.id : null;
+
       // Skip if this product already has a receipt-based price (receipt > API)
-      if (finalMatch && receiptProductIds.has(finalMatch.id)) {
+      if (matchedProductId && receiptProductIds.has(matchedProductId)) {
         skippedReceipt++;
         continue;
       }
@@ -436,7 +441,7 @@ export default async function handler(req, res) {
 
         const payload = {
           product_name_raw: sp.name || rawName,
-          product_id: finalMatch?.id || null,
+          product_id: matchedProductId,
           match_confidence: finalScore,
           status: 'pending',
           price: sp.price,
@@ -461,7 +466,7 @@ export default async function handler(req, res) {
           insertedThisProduct = true;
         }
       }
-      if (insertedThisProduct && finalScore >= 60) matched++;
+      if (insertedThisProduct && isConfidentMatch) matched++;
     }
 
     return send(res, 200, {

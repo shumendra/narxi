@@ -12,6 +12,7 @@ const adminTelegramIds = (process.env.ADMIN_TELEGRAM_IDS || process.env.ADMIN_TE
 
 const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
 const PAGE_SIZE = 1000;
+const STORE_API_MATCH_MIN_SCORE = 70;
 
 function send(res, status, body) {
   res.status(status);
@@ -582,8 +583,16 @@ async function approvePending(id) {
     throw notFound;
   }
 
+  const source = String(pending.source || '');
+  const isStoreApiSource = source.startsWith('store_api_');
+  const matchConfidence = Number(pending.match_confidence || 0);
+
   let productId = pending.product_id;
   const city = normalizeCityName(pending.city || '') || extractCityFromAddress(pending.place_address || '');
+
+  if (isStoreApiSource && matchConfidence < STORE_API_MATCH_MIN_SCORE) {
+    productId = null;
+  }
 
   if (!productId) {
     const { data: existingProduct } = await supabase
@@ -626,11 +635,8 @@ async function approvePending(id) {
     longitude: pending.longitude,
     receipt_date: pending.receipt_date,
     submitted_by: pending.submitted_by,
-    source: pending.source,
+    source,
   };
-
-  const source = String(pending.source || '');
-  const isStoreApiSource = source.startsWith('store_api_');
 
   if (isStoreApiSource) {
     const normalizedPlaceName = normalizeMaybeText(pending.place_name);
