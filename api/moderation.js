@@ -11,6 +11,7 @@ const adminTelegramIds = (process.env.ADMIN_TELEGRAM_IDS || process.env.ADMIN_TE
   .filter(Boolean);
 
 const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
+const PAGE_SIZE = 1000;
 
 function send(res, status, body) {
   res.status(status);
@@ -59,6 +60,26 @@ function detectAliasLanguage(text) {
   if (/\p{Script=Cyrillic}/u.test(value)) return 'ru';
   if (/[A-Za-zʻ’'`]/.test(value)) return 'uz';
   return 'unknown';
+}
+
+function normalizeMaybeText(value) {
+  const normalized = String(value || '').trim();
+  return normalized || null;
+}
+
+async function fetchAllPages(buildQuery) {
+  const rows = [];
+  let from = 0;
+  while (true) {
+    const to = from + PAGE_SIZE - 1;
+    const { data, error } = await buildQuery(from, to);
+    if (error) throw error;
+    const page = data || [];
+    rows.push(...page);
+    if (page.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+  return rows;
 }
 
 function buildProductSearchText(productLike) {
@@ -177,23 +198,21 @@ async function ensureProductForName(rawName, city) {
 }
 
 async function listPending(city) {
-  let query = supabase
-    .from('pending_prices')
-    .select('*')
-    .or('status.eq.pending,status.is.null')
-    .order('created_at', { ascending: true })
-    .limit(100);
-
   const normalizedCity = normalizeCityName(city || '');
-  if (normalizedCity) {
-    query = query.eq('city', normalizedCity);
-  }
+  const items = await fetchAllPages((from, to) => {
+    let query = supabase
+      .from('pending_prices')
+      .select('*')
+      .or('status.eq.pending,status.is.null')
+      .order('created_at', { ascending: true })
+      .range(from, to);
 
-  const { data, error } = await query;
+    if (normalizedCity) {
+      query = query.eq('city', normalizedCity);
+    }
+    return query;
+  });
 
-  if (error) throw error;
-
-  const items = data || [];
   const healedItems = [];
 
   for (const item of items) {
@@ -236,21 +255,22 @@ async function listPending(city) {
 }
 
 async function listApproved(city) {
-  let query = supabase
-    .from('prices')
-    .select('*')
-    .order('receipt_date', { ascending: false })
-    .limit(1000);
-
   const normalizedCity = normalizeCityName(city || '');
-  if (normalizedCity) {
-    query = query.eq('city', normalizedCity);
-  }
+  const items = await fetchAllPages((from, to) => {
+    let query = supabase
+      .from('prices')
+      .select('*')
+      .not('source', 'like', 'history_%')
+      .order('receipt_date', { ascending: false })
+      .range(from, to);
 
-  const { data, error } = await query;
+    if (normalizedCity) {
+      query = query.eq('city', normalizedCity);
+    }
+    return query;
+  });
 
-  if (error) throw error;
-  return data || [];
+  return items;
 }
 
 async function createApproved(payload) {
@@ -358,6 +378,7 @@ async function listProducts() {
     supabase
       .from('prices')
       .select('id,product_id,product_name_raw,price,city,place_name,place_address,receipt_date,source')
+      .not('source', 'like', 'history_%')
       .in('product_id', productIds)
       .order('receipt_date', { ascending: false })
       .limit(5000),
@@ -608,23 +629,58 @@ async function approvePending(id) {
     source: pending.source,
   };
 
-  const { data: existingExactPrice, error: findExistingError } = await supabase
-    .from('prices')
-    .select('id')
-    .eq('product_id', productId)
-    .eq('city', city)
-    .eq('place_name', pending.place_name || null)
-    .eq('place_address', pending.place_address || null)
-    .eq('price', unitPrice)
-    .eq('receipt_date', pending.receipt_date || null)
-    .limit(1)
-    .maybeSingle();
+  const source = String(pending.source || '');
+  const isStoreApiSource = source.startsWith('store_api_');
 
-  if (findExistingError) throw findExistingError;
+  if (isStoreApiSource) {
+    const normalizedPlaceName = normalizeMaybeText(pending.place_name);
+    const normalizedPlaceAddress = normalizeMaybeText(pending.place_address);
+    const { data: currentStoreRows, error: currentStoreRowsError } = await supabase
+      .from('prices')
+      .select('id,place_name,place_address')
+      .eq('product_id', productId)
+      .eq('city', city)
+      .eq('source', source);
 
-  if (!existingExactPrice?.id) {
+    if (currentStoreRowsError) throw currentStoreRowsError;
+
+    const rowsToArchive = (currentStoreRows || [])
+      .filter(row => (
+        normalizeMaybeText(row.place_name) === normalizedPlaceName
+        && normalizeMaybeText(row.place_address) === normalizedPlaceAddress
+      ))
+      .map(row => row.id);
+
+    if (rowsToArchive.length > 0) {
+      const { error: archiveError } = await supabase
+        .from('prices')
+        .update({ source: `history_${source}` })
+        .in('id', rowsToArchive);
+
+      if (archiveError) throw archiveError;
+    }
+
     const { error: insertError } = await supabase.from('prices').insert(pricePayload);
     if (insertError) throw insertError;
+  } else {
+    const { data: existingExactPrice, error: findExistingError } = await supabase
+      .from('prices')
+      .select('id')
+      .eq('product_id', productId)
+      .eq('city', city)
+      .eq('place_name', pending.place_name || null)
+      .eq('place_address', pending.place_address || null)
+      .eq('price', unitPrice)
+      .eq('receipt_date', pending.receipt_date || null)
+      .limit(1)
+      .maybeSingle();
+
+    if (findExistingError) throw findExistingError;
+
+    if (!existingExactPrice?.id) {
+      const { error: insertError } = await supabase.from('prices').insert(pricePayload);
+      if (insertError) throw insertError;
+    }
   }
 
   await syncProductAvailableCities(productId, city);
@@ -645,12 +701,24 @@ async function approveMany(ids) {
   let approvedCount = 0;
   const failedIds = [];
 
-  for (const id of targetIds) {
-    try {
-      await approvePending(id);
-      approvedCount += 1;
-    } catch {
-      failedIds.push(id);
+  const CONCURRENCY = 8;
+
+  for (let i = 0; i < targetIds.length; i += CONCURRENCY) {
+    const chunk = targetIds.slice(i, i + CONCURRENCY);
+    const results = await Promise.all(
+      chunk.map(async (id) => {
+        try {
+          await approvePending(id);
+          return { ok: true, id };
+        } catch {
+          return { ok: false, id };
+        }
+      })
+    );
+
+    for (const result of results) {
+      if (result.ok) approvedCount += 1;
+      else failedIds.push(result.id);
     }
   }
 

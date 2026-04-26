@@ -1320,6 +1320,7 @@ export default function App() {
       .select('*')
       .eq('product_id', productId)
       .eq('city', selectedCity)
+      .not('source', 'like', 'history_%')
       .order('price', { ascending: true })
       .limit(100);
 
@@ -1671,9 +1672,15 @@ export default function App() {
     if (selectedModerationIds.length === 0) return;
     setModerationSavingId('bulk-approve');
     try {
-      await callModerationApi('approveMany', { ids: selectedModerationIds });
+      const result = await callModerationApi('approveMany', { ids: selectedModerationIds });
       await fetchModerationItems();
-      window.Telegram?.WebApp?.showAlert(t.moderationApproved);
+      const approvedCount = Number(result?.approvedCount) || 0;
+      const failedCount = Array.isArray(result?.failedIds) ? result.failedIds.length : 0;
+      if (failedCount > 0) {
+        window.Telegram?.WebApp?.showAlert(`${approvedCount} approved, ${failedCount} failed`);
+      } else {
+        window.Telegram?.WebApp?.showAlert(t.moderationApproved);
+      }
     } catch {
       window.Telegram?.WebApp?.showAlert(t.moderationError);
     } finally {
@@ -2338,6 +2345,7 @@ export default function App() {
         .from('prices')
         .select('product_id, product_name_raw, price, place_name, place_address, latitude, longitude, receipt_date')
         .eq('city', selectedCity)
+        .not('source', 'like', 'history_%')
         .in('product_id', batch);
       if (data) allPrices = [...allPrices, ...data];
     }

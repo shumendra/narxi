@@ -1446,19 +1446,38 @@ async function handleCallback(callbackQuery) {
     }
 
     const unitPrice = pending.unit_price || pending.price;
-    const { data: existingExactPrice } = await supabase
-      .from('prices')
-      .select('id')
-      .eq('product_id', productId)
-      .eq('city', city)
-      .eq('place_name', pending.place_name || null)
-      .eq('place_address', pending.place_address || null)
-      .eq('price', unitPrice)
-      .eq('receipt_date', pending.receipt_date || null)
-      .limit(1)
-      .maybeSingle();
+    const source = String(pending.source || '');
+    const isStoreApiSource = source.startsWith('store_api_');
 
-    if (!existingExactPrice?.id) {
+    if (isStoreApiSource) {
+      const normalizeMaybeText = (value) => {
+        const normalized = String(value || '').trim();
+        return normalized || null;
+      };
+      const normalizedPlaceName = normalizeMaybeText(pending.place_name);
+      const normalizedPlaceAddress = normalizeMaybeText(pending.place_address);
+
+      const { data: currentStoreRows } = await supabase
+        .from('prices')
+        .select('id,place_name,place_address')
+        .eq('product_id', productId)
+        .eq('city', city)
+        .eq('source', source);
+
+      const rowsToArchive = (currentStoreRows || [])
+        .filter(row => (
+          normalizeMaybeText(row.place_name) === normalizedPlaceName
+          && normalizeMaybeText(row.place_address) === normalizedPlaceAddress
+        ))
+        .map(row => row.id);
+
+      if (rowsToArchive.length > 0) {
+        await supabase
+          .from('prices')
+          .update({ source: `history_${source}` })
+          .in('id', rowsToArchive);
+      }
+
       await supabase.from('prices').insert({
         product_id: productId,
         product_name_raw: pending.product_name_raw,
@@ -1473,6 +1492,35 @@ async function handleCallback(callbackQuery) {
         submitted_by: pending.submitted_by,
         source: pending.source,
       });
+    } else {
+      const { data: existingExactPrice } = await supabase
+        .from('prices')
+        .select('id')
+        .eq('product_id', productId)
+        .eq('city', city)
+        .eq('place_name', pending.place_name || null)
+        .eq('place_address', pending.place_address || null)
+        .eq('price', unitPrice)
+        .eq('receipt_date', pending.receipt_date || null)
+        .limit(1)
+        .maybeSingle();
+
+      if (!existingExactPrice?.id) {
+        await supabase.from('prices').insert({
+          product_id: productId,
+          product_name_raw: pending.product_name_raw,
+          price: unitPrice,
+          quantity: pending.quantity,
+          city,
+          place_name: pending.place_name,
+          place_address: pending.place_address,
+          latitude: pending.latitude,
+          longitude: pending.longitude,
+          receipt_date: pending.receipt_date,
+          submitted_by: pending.submitted_by,
+          source: pending.source,
+        });
+      }
     }
 
     await syncProductAvailableCities(productId, city);

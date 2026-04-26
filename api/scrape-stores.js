@@ -357,24 +357,21 @@ export default async function handler(req, res) {
       .or(`place_name.ilike.%${storeBrand}%`);
     const receiptProductIds = new Set(
       (existingPrices || [])
-        .filter(p => !p.source || !p.source.startsWith('store_api_'))
+        .filter(p => !p.source || (!p.source.startsWith('store_api_') && !p.source.startsWith('history_store_api_')))
         .map(p => p.product_id)
     );
 
-    // Check for existing API-sourced entries to avoid duplicates on re-run
+    // Avoid duplicate queue rows only for still-pending imports.
+    // Approved imports must be allowed again on every re-run to refresh current prices.
     const sourceTag = `store_api_${store}`;
     const { data: existingApiPrices } = await supabase
       .from('pending_prices')
       .select('product_name_raw, price, place_address')
-      .eq('source', sourceTag);
-    const { data: existingApprovedApi } = await supabase
-      .from('prices')
-      .select('product_name_raw, price, place_address')
-      .eq('source', sourceTag);
-    const existingApiSet = new Set([
-      ...((existingApiPrices || []).map(p => `${p.product_name_raw}|${p.price}|${p.place_address || ''}`)),
-      ...((existingApprovedApi || []).map(p => `${p.product_name_raw}|${p.price}|${p.place_address || ''}`)),
-    ]);
+      .eq('source', sourceTag)
+      .or('status.eq.pending,status.is.null');
+    const existingApiSet = new Set(
+      (existingApiPrices || []).map(p => `${p.product_name_raw}|${p.price}|${p.place_address || ''}`)
+    );
 
     // 4. Match and insert into pending_prices — one entry per product per branch
     let inserted = 0;
