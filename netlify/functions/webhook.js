@@ -1429,6 +1429,14 @@ async function handleCallback(callbackQuery) {
 
     let productId = pending.product_id;
     const city = normalizeCityName(pending.city || '') || extractCityFromAddress(pending.place_address || '');
+    const source = String(pending.source || '');
+    const isStoreApiSource = source.startsWith('store_api_');
+    const fallbackStoreName = isStoreApiSource
+      ? source.replace('store_api_', '').replace(/_/g, ' ')
+      : 'Unknown Store';
+    const placeName = String(pending.place_name || '').trim() || fallbackStoreName;
+    const placeAddress = String(pending.place_address || '').trim() || placeName;
+
     if (!productId) {
       const { data: created } = await supabase
         .from('products')
@@ -1446,16 +1454,14 @@ async function handleCallback(callbackQuery) {
     }
 
     const unitPrice = pending.unit_price || pending.price;
-    const source = String(pending.source || '');
-    const isStoreApiSource = source.startsWith('store_api_');
 
     if (isStoreApiSource) {
       const normalizeMaybeText = (value) => {
         const normalized = String(value || '').trim();
         return normalized || null;
       };
-      const normalizedPlaceName = normalizeMaybeText(pending.place_name);
-      const normalizedPlaceAddress = normalizeMaybeText(pending.place_address);
+      const normalizedPlaceName = normalizeMaybeText(placeName);
+      const normalizedPlaceAddress = normalizeMaybeText(placeAddress);
 
       const { data: currentStoreRows } = await supabase
         .from('prices')
@@ -1484,8 +1490,8 @@ async function handleCallback(callbackQuery) {
         price: unitPrice,
         quantity: pending.quantity,
         city,
-        place_name: pending.place_name,
-        place_address: pending.place_address,
+        place_name: placeName,
+        place_address: placeAddress,
         latitude: pending.latitude,
         longitude: pending.longitude,
         receipt_date: pending.receipt_date,
@@ -1498,8 +1504,8 @@ async function handleCallback(callbackQuery) {
         .select('id')
         .eq('product_id', productId)
         .eq('city', city)
-        .eq('place_name', pending.place_name || null)
-        .eq('place_address', pending.place_address || null)
+        .eq('place_name', placeName)
+        .eq('place_address', placeAddress)
         .eq('price', unitPrice)
         .eq('receipt_date', pending.receipt_date || null)
         .limit(1)
@@ -1512,8 +1518,8 @@ async function handleCallback(callbackQuery) {
           price: unitPrice,
           quantity: pending.quantity,
           city,
-          place_name: pending.place_name,
-          place_address: pending.place_address,
+          place_name: placeName,
+          place_address: placeAddress,
           latitude: pending.latitude,
           longitude: pending.longitude,
           receipt_date: pending.receipt_date,

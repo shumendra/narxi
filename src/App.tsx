@@ -63,6 +63,23 @@ async function fetchKnownStores(): Promise<Array<{ name: string; lat: number; ln
       const lng = parseFloat(s.location?.lon);
       if (lat && lng) stores.push({ name: s.name || 'Korzinka', lat, lng });
     }
+
+    // Baraka Market branches
+    const bRes = await fetch('https://backend.barakamarket.uz/shop/', {
+      headers: { 'Accept': 'application/json', 'Origin': 'https://barakamarket.uz' },
+    });
+    const bData = await bRes.json();
+    const bItems = Array.isArray(bData) ? bData : (Array.isArray(bData?.results) ? bData.results : []);
+    for (const s of bItems) {
+      let lat = parseFloat(String(s.latitude ?? s.lat ?? '0'));
+      let lng = parseFloat(String(s.longitude ?? s.lng ?? s.lon ?? '0'));
+      if (Math.abs(lat) > 55 && Math.abs(lng) < 55) {
+        const tmp = lat;
+        lat = lng;
+        lng = tmp;
+      }
+      if (lat && lng) stores.push({ name: `Baraka Market ${s.title || ''}`.trim(), lat, lng });
+    }
   } catch { /* use whatever we got */ }
   // Deduplicate by coordinates
   const seen = new Set<string>();
@@ -257,6 +274,9 @@ export default function App() {
   const [selectedApprovedIds, setSelectedApprovedIds] = useState<string[]>([]);
   const [scrapeLoading, setScrapeLoading] = useState<string | null>(null);
   const [scrapeResult, setScrapeResult] = useState<string | null>(null);
+  const [normalizationRunning, setNormalizationRunning] = useState(false);
+  const [normalizationLogs, setNormalizationLogs] = useState<Array<{ ts: string; message: string }>>([]);
+  const [normalizationManualSql, setNormalizationManualSql] = useState('');
   const [newApprovedItem, setNewApprovedItem] = useState({
     product_name_raw: '',
     price: '',
@@ -460,6 +480,13 @@ export default function App() {
         scrapeKorzinka: 'Korzinka narxlari',
         scrapeYandexBaraka: 'Baraka (Yandex)',
         scrapeLoading: 'Yuklanmoqda...',
+        normalizeProducts: 'Mahsulotlarni normallashtirish',
+        normalizeRunning: 'Normallashtirilmoqda...',
+        normalizeStatusTitle: 'Normallashtirish logi',
+        normalizeStatusEmpty: 'Hozircha log yo\'q',
+        normalizeManualSqlTitle: 'exec_sql topilmadi. Quyidagi SQLni Supabase SQL Editor\'da ishga tushiring:',
+        normalizeCompleted: (successCount: number, errorCount: number) => `Normallashtirish tugadi: ${successCount} SQL, ${errorCount} xato`,
+        approvedThenNormalize: (approvedCount: number) => `✅ ${approvedCount} ta narx tasdiqlandi → 🔄 Normallashtirish boshlandi...`,
         messagesTitle: 'Foydalanuvchi xabarlari',
         messagesEmpty: 'Xabarlar yo‘q',
         contactReceivedAt: 'Qabul qilingan',
@@ -746,6 +773,13 @@ export default function App() {
         scrapeKorzinka: 'Цены Korzinka',
         scrapeYandexBaraka: 'Baraka (Yandex)',
         scrapeLoading: 'Загрузка...',
+        normalizeProducts: 'Нормализовать товары',
+        normalizeRunning: 'Нормализация...',
+        normalizeStatusTitle: 'Лог нормализации',
+        normalizeStatusEmpty: 'Пока нет логов',
+        normalizeManualSqlTitle: 'exec_sql недоступен. Выполните SQL ниже в Supabase SQL Editor:',
+        normalizeCompleted: (successCount: number, errorCount: number) => `Нормализация завершена: ${successCount} SQL, ошибок: ${errorCount}`,
+        approvedThenNormalize: (approvedCount: number) => `✅ Одобрено ${approvedCount} цен → 🔄 Нормализация запущена...`,
         messagesTitle: 'Сообщения от пользователей',
         messagesEmpty: 'Сообщений пока нет',
         contactReceivedAt: 'Получено',
@@ -1032,6 +1066,13 @@ export default function App() {
         scrapeKorzinka: 'Korzinka prices',
         scrapeYandexBaraka: 'Baraka (Yandex)',
         scrapeLoading: 'Loading...',
+        normalizeProducts: 'Normalize products',
+        normalizeRunning: 'Normalizing...',
+        normalizeStatusTitle: 'Normalization log',
+        normalizeStatusEmpty: 'No logs yet',
+        normalizeManualSqlTitle: 'exec_sql is unavailable. Run the SQL below in Supabase SQL Editor:',
+        normalizeCompleted: (successCount: number, errorCount: number) => `Normalization finished: ${successCount} SQL, errors: ${errorCount}`,
+        approvedThenNormalize: (approvedCount: number) => `✅ ${approvedCount} prices approved → 🔄 Normalization started...`,
         messagesTitle: 'User messages',
         messagesEmpty: 'No messages yet',
         contactReceivedAt: 'Received',
@@ -1226,6 +1267,7 @@ export default function App() {
   const [selectedProductWeeklyViews, setSelectedProductWeeklyViews] = useState<number>(0);
   const miniWindowIframeRef = useRef<HTMLIFrameElement | null>(null);
   const contactFormRef = useRef<HTMLElement | null>(null);
+  const normalizationLogRef = useRef<HTMLDivElement | null>(null);
 
 
   useEffect(() => {
@@ -1374,6 +1416,65 @@ export default function App() {
 
     return json;
   };
+
+  const appendNormalizationLog = (message: string, ts?: string) => {
+    setNormalizationLogs(prev => [...prev, { ts: ts || new Date().toISOString(), message }]);
+  };
+
+  const runNormalization = async (trigger: 'manual' | 'auto' = 'manual') => {
+    if (!isAdminUser || normalizationRunning) return null;
+
+    if (trigger === 'manual') {
+      setNormalizationLogs([]);
+      setNormalizationManualSql('');
+    }
+
+    setNormalizationRunning(true);
+    appendNormalizationLog('Data loading started...');
+
+    try {
+      const result = await callModerationApi('normalizeProducts', { trigger });
+      const serverLogs = Array.isArray(result.logs)
+        ? result.logs.map((entry: any) => ({
+            ts: String(entry?.ts || new Date().toISOString()),
+            message: String(entry?.message || ''),
+          }))
+        : [];
+
+      if (serverLogs.length > 0) {
+        if (trigger === 'manual') {
+          setNormalizationLogs(serverLogs);
+        } else {
+          setNormalizationLogs(prev => [...prev, ...serverLogs]);
+        }
+      }
+
+      const manualSql = String(result.manualSql || '');
+      setNormalizationManualSql(manualSql);
+
+      if (trigger === 'manual') {
+        window.Telegram?.WebApp?.showAlert(
+          t.normalizeCompleted(Number(result.sqlSuccessCount) || 0, Number(result.sqlErrorCount) || 0)
+        );
+      }
+
+      return result;
+    } catch (error: any) {
+      appendNormalizationLog(`Normalization failed: ${error?.message || 'unknown error'}`);
+      if (trigger === 'manual') {
+        window.Telegram?.WebApp?.showAlert(t.moderationError);
+      }
+      return null;
+    } finally {
+      setNormalizationRunning(false);
+    }
+  };
+
+  useEffect(() => {
+    if (normalizationLogRef.current) {
+      normalizationLogRef.current.scrollTop = normalizationLogRef.current.scrollHeight;
+    }
+  }, [normalizationLogs, normalizationManualSql]);
 
   const handleScrapeStore = async (store: 'makro' | 'korzinka' | 'yandex_baraka') => {
     if (!isAdminUser || scrapeLoading) return;
@@ -1702,8 +1803,14 @@ export default function App() {
       await fetchModerationItems();
       setSelectedModerationIds([]);
       const failedCount = failedSet.size;
-      if (failedCount > 0) {
-        window.Telegram?.WebApp?.showAlert(`${approvedCount} approved, ${failedCount} failed`);
+      if (approvedCount > 0) {
+        window.Telegram?.WebApp?.showAlert(t.approvedThenNormalize(approvedCount));
+        if (failedCount > 0) {
+          appendNormalizationLog(`Approve warnings: ${failedCount} item(s) failed in bulk approval`);
+        }
+        void runNormalization('auto');
+      } else if (failedCount > 0) {
+        window.Telegram?.WebApp?.showAlert(t.moderationError);
       } else {
         window.Telegram?.WebApp?.showAlert(t.moderationApproved);
       }
@@ -4474,33 +4581,66 @@ export default function App() {
 
             {/* Row 3: Tools (prices only) */}
             {moderationSection === 'prices' && (
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <button
-                  onClick={() => handleScrapeStore('makro')}
-                  disabled={!!scrapeLoading}
-                  className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
-                >
-                  {scrapeLoading === 'makro' ? t.scrapeLoading : t.scrapeMakro}
-                </button>
-                <button
-                  onClick={() => handleScrapeStore('korzinka')}
-                  disabled={!!scrapeLoading}
-                  className="rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
-                >
-                  {scrapeLoading === 'korzinka' ? t.scrapeLoading : t.scrapeKorzinka}
-                </button>
-                <button
-                  onClick={() => handleScrapeStore('yandex_baraka')}
-                  disabled={!!scrapeLoading}
-                  className="rounded-lg bg-purple-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
-                >
-                  {scrapeLoading === 'yandex_baraka' ? t.scrapeLoading : t.scrapeYandexBaraka}
-                </button>
-                {scrapeResult && (
-                  <span className="text-xs text-stone-500 bg-stone-100 rounded-lg px-2 py-1">
-                    {scrapeResult}
-                  </span>
-                )}
+              <div className="space-y-2">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <button
+                    onClick={() => handleScrapeStore('makro')}
+                    disabled={!!scrapeLoading}
+                    className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                  >
+                    {scrapeLoading === 'makro' ? t.scrapeLoading : t.scrapeMakro}
+                  </button>
+                  <button
+                    onClick={() => handleScrapeStore('korzinka')}
+                    disabled={!!scrapeLoading}
+                    className="rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                  >
+                    {scrapeLoading === 'korzinka' ? t.scrapeLoading : t.scrapeKorzinka}
+                  </button>
+                  <button
+                    onClick={() => handleScrapeStore('yandex_baraka')}
+                    disabled={!!scrapeLoading}
+                    className="rounded-lg bg-purple-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                  >
+                    {scrapeLoading === 'yandex_baraka' ? t.scrapeLoading : t.scrapeYandexBaraka}
+                  </button>
+                  <button
+                    onClick={() => runNormalization('manual')}
+                    disabled={normalizationRunning}
+                    className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                  >
+                    {normalizationRunning ? t.normalizeRunning : t.normalizeProducts}
+                  </button>
+                  {scrapeResult && (
+                    <span className="text-xs text-stone-500 bg-stone-100 rounded-lg px-2 py-1">
+                      {scrapeResult}
+                    </span>
+                  )}
+                </div>
+
+                <div className="rounded-xl border border-stone-200 bg-white p-3">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-stone-500">{t.normalizeStatusTitle}</div>
+                  <div ref={normalizationLogRef} className="mt-2 max-h-40 space-y-1 overflow-y-auto">
+                    {normalizationLogs.length === 0 ? (
+                      <div className="text-xs text-stone-400">{t.normalizeStatusEmpty}</div>
+                    ) : normalizationLogs.map((entry, index) => (
+                      <div key={`${entry.ts}-${index}`} className="text-xs text-stone-700 break-words">
+                        <span className="text-stone-400">[{new Date(entry.ts).toLocaleTimeString()}]</span> {entry.message}
+                      </div>
+                    ))}
+                  </div>
+
+                  {normalizationManualSql && (
+                    <div className="mt-3 space-y-2">
+                      <div className="text-xs text-amber-700 font-medium">{t.normalizeManualSqlTitle}</div>
+                      <textarea
+                        readOnly
+                        value={normalizationManualSql}
+                        className="h-40 w-full rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] text-stone-800"
+                      />
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 

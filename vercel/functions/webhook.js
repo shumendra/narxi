@@ -1656,6 +1656,14 @@ async function handleCallback(callbackQuery) {
 
     let productId = pending.product_id;
     const city = normalizeCityName(pending.city || '') || extractCityFromAddress(pending.place_address || '');
+    const source = String(pending.source || '');
+    const isStoreApiSource = source.startsWith('store_api_');
+    const fallbackStoreName = isStoreApiSource
+      ? source.replace('store_api_', '').replace(/_/g, ' ')
+      : 'Unknown Store';
+    const placeName = String(pending.place_name || '').trim() || fallbackStoreName;
+    const placeAddress = String(pending.place_address || '').trim() || placeName;
+
     if (!productId) {
       const { data: created } = await supabase
         .from('products')
@@ -1673,33 +1681,78 @@ async function handleCallback(callbackQuery) {
     }
 
     const unitPrice = pending.unit_price || pending.price;
-    const { data: existingExactPrice } = await supabase
-      .from('prices')
-      .select('id')
-      .eq('product_id', productId)
-      .eq('city', city)
-      .eq('place_name', pending.place_name || null)
-      .eq('place_address', pending.place_address || null)
-      .eq('price', unitPrice)
-      .eq('receipt_date', pending.receipt_date || null)
-      .limit(1)
-      .maybeSingle();
+    if (isStoreApiSource) {
+      const normalizeMaybeText = (value) => {
+        const normalized = String(value || '').trim();
+        return normalized || null;
+      };
+      const normalizedPlaceName = normalizeMaybeText(placeName);
+      const normalizedPlaceAddress = normalizeMaybeText(placeAddress);
 
-    if (!existingExactPrice?.id) {
+      const { data: currentStoreRows } = await supabase
+        .from('prices')
+        .select('id,place_name,place_address')
+        .eq('product_id', productId)
+        .eq('city', city)
+        .eq('source', source);
+
+      const rowsToArchive = (currentStoreRows || [])
+        .filter(row => (
+          normalizeMaybeText(row.place_name) === normalizedPlaceName
+          && normalizeMaybeText(row.place_address) === normalizedPlaceAddress
+        ))
+        .map(row => row.id);
+
+      if (rowsToArchive.length > 0) {
+        await supabase
+          .from('prices')
+          .update({ source: `history_${source}` })
+          .in('id', rowsToArchive);
+      }
+
       await supabase.from('prices').insert({
         product_id: productId,
         product_name_raw: pending.product_name_raw,
         price: unitPrice,
         quantity: pending.quantity,
         city,
-        place_name: pending.place_name,
-        place_address: pending.place_address,
+        place_name: placeName,
+        place_address: placeAddress,
         latitude: pending.latitude,
         longitude: pending.longitude,
         receipt_date: pending.receipt_date,
         submitted_by: pending.submitted_by,
-        source: pending.source,
+        source,
       });
+    } else {
+      const { data: existingExactPrice } = await supabase
+        .from('prices')
+        .select('id')
+        .eq('product_id', productId)
+        .eq('city', city)
+        .eq('place_name', placeName)
+        .eq('place_address', placeAddress)
+        .eq('price', unitPrice)
+        .eq('receipt_date', pending.receipt_date || null)
+        .limit(1)
+        .maybeSingle();
+
+      if (!existingExactPrice?.id) {
+        await supabase.from('prices').insert({
+          product_id: productId,
+          product_name_raw: pending.product_name_raw,
+          price: unitPrice,
+          quantity: pending.quantity,
+          city,
+          place_name: placeName,
+          place_address: placeAddress,
+          latitude: pending.latitude,
+          longitude: pending.longitude,
+          receipt_date: pending.receipt_date,
+          submitted_by: pending.submitted_by,
+          source,
+        });
+      }
     }
 
     await syncProductAvailableCities(productId, city);

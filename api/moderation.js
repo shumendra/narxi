@@ -13,6 +13,9 @@ const adminTelegramIds = (process.env.ADMIN_TELEGRAM_IDS || process.env.ADMIN_TE
 const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
 const PAGE_SIZE = 1000;
 const STORE_API_MATCH_MIN_SCORE = 70;
+const NORMALIZATION_BATCH_SIZE = 100;
+const NORMALIZATION_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 
 function send(res, status, body) {
   res.status(status);
@@ -81,6 +84,444 @@ async function fetchAllPages(buildQuery) {
     from += PAGE_SIZE;
   }
   return rows;
+}
+
+function chunkArray(values, size) {
+  const result = [];
+  for (let i = 0; i < values.length; i += size) {
+    result.push(values.slice(i, i + size));
+  }
+  return result;
+}
+
+function isMissingRelationError(errorLike) {
+  const message = String(errorLike?.message || '').toLowerCase();
+  return message.includes('does not exist') || message.includes('relation') || message.includes('schema cache');
+}
+
+function isExecSqlUnavailableError(errorLike) {
+  const message = String(errorLike?.message || '').toLowerCase();
+  return message.includes('exec_sql')
+    && (
+      message.includes('does not exist')
+      || message.includes('not found')
+      || message.includes('permission')
+      || message.includes('schema cache')
+    );
+}
+
+function cleanSqlResponse(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  return text
+    .replace(/^```sql\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/```$/i, '')
+    .trim();
+}
+
+function containsSqlDml(sql) {
+  return /\b(insert|update|delete)\b/i.test(String(sql || ''));
+}
+
+function splitSqlStatements(sqlText) {
+  const statements = [];
+  let current = '';
+  let inSingle = false;
+  let inDouble = false;
+
+  const sql = String(sqlText || '');
+  for (let i = 0; i < sql.length; i += 1) {
+    const char = sql[i];
+    const prev = i > 0 ? sql[i - 1] : '';
+
+    if (char === "'" && !inDouble && prev !== '\\') {
+      inSingle = !inSingle;
+      current += char;
+      continue;
+    }
+
+    if (char === '"' && !inSingle && prev !== '\\') {
+      inDouble = !inDouble;
+      current += char;
+      continue;
+    }
+
+    if (char === ';' && !inSingle && !inDouble) {
+      const trimmed = current.trim();
+      if (trimmed) statements.push(trimmed);
+      current = '';
+      continue;
+    }
+
+    current += char;
+  }
+
+  const trailing = current.trim();
+  if (trailing) statements.push(trailing);
+
+  return statements;
+}
+
+async function getLastNormalizationTimestamp() {
+  const { data, error } = await supabase
+    .from('normalization_runs')
+    .select('finished_at,started_at,created_at,status')
+    .eq('status', 'success')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingRelationError(error)) return null;
+    throw error;
+  }
+
+  return data?.finished_at || data?.started_at || data?.created_at || null;
+}
+
+async function recordNormalizationRun(payload) {
+  const { error } = await supabase.from('normalization_runs').insert(payload);
+  if (error && !isMissingRelationError(error)) {
+    throw error;
+  }
+}
+
+async function isExecSqlAvailable() {
+  const { error } = await supabase.rpc('exec_sql', { sql: 'SELECT 1;' });
+  if (!error) return true;
+  if (isExecSqlUnavailableError(error)) return false;
+  throw error;
+}
+
+function buildNormalizationPrompt({ products, aliases, rawNames, firstRun }) {
+  const productsContext = (products || []).length > 0
+    ? products.map(p => [
+      p.id,
+      String(p.name_uz || '').trim(),
+      String(p.name_ru || '').trim(),
+      String(p.name_en || '').trim(),
+      String(p.category || '').trim(),
+      String(p.unit || '').trim(),
+      String(p.search_text || '').trim(),
+    ].join('|')).join('\n')
+    : '(empty)';
+
+  const aliasesContext = (aliases || []).length > 0
+    ? aliases.map(a => `${a.product_id}|${String(a.alias_text || '').trim()}`).join('\n')
+    : '(empty)';
+
+  const rawNamesContext = (rawNames || []).join('\n');
+
+  return `You are normalizing grocery product data for an Uzbekistan price comparison app called Narxi.
+
+EXISTING CANONICAL PRODUCTS (id|name_uz|name_ru|name_en|category|unit|search_text):
+${productsContext}
+
+EXISTING ALIASES (product_id|alias_text):
+${aliasesContext}
+
+NEW RAW PRODUCT NAMES TO PROCESS:
+${rawNamesContext}
+
+FIRST RUN FLAG:
+${firstRun ? 'YES' : 'NO'}
+
+CATEGORIES (use exactly): Don mahsulotlari, Sut mahsulotlari, Gosht mahsulotlari, Sabzavotlar va mevalar, Ichimliklar, Choy va kofe, Shirinliklar va pechene, Moy va souslar, Non va xamirlar, Uy kimyosi, Shaxsiy gigiena, Boshqa
+
+UNITS (use exactly): kg, litre, dona, gramm
+
+RULES:
+1. For each raw name decide: MATCH to existing product, or CREATE new product.
+2. MATCH if raw name clearly maps to an existing canonical product despite language, spelling variant, size suffix, or brand qualifier.
+3. CREATE only if genuinely different from canonical list.
+4. Remove weight/size/grade suffixes from canonical names unless it changes the product identity.
+5. Keep brand names for branded products.
+6. Translate all three languages accurately.
+7. Never duplicate an existing canonical product.
+8. search_text must be: name_uz + space + name_ru + space + name_en.
+9. Only create aliases for raw names, not canonical names themselves.
+10. Output ONLY valid PostgreSQL SQL. No markdown. No prose.
+
+OUTPUT SQL SHAPE:
+-- ALIASES FOR MATCHED PRODUCTS
+INSERT INTO product_aliases (product_id, alias_text, language, times_seen)
+VALUES ('[existing_product_id]', '[raw_name]', 'unknown', 1)
+ON CONFLICT (product_id, alias_text) DO UPDATE SET times_seen = product_aliases.times_seen + 1;
+
+-- NEW CANONICAL PRODUCTS
+INSERT INTO products (name_uz, name_ru, name_en, category, unit, search_text)
+VALUES ('[name_uz]', '[name_ru]', '[name_en]', '[category]', '[unit]', '[search_text]')
+ON CONFLICT DO NOTHING;
+
+-- ALIASES FOR NEW PRODUCTS
+INSERT INTO product_aliases (product_id, alias_text, language, times_seen)
+SELECT id, '[raw_name]', 'unknown', 1
+FROM products WHERE name_uz = '[name_uz]'
+ON CONFLICT (product_id, alias_text) DO UPDATE SET times_seen = product_aliases.times_seen + 1;
+
+-- UPDATE MISSING TRANSLATIONS
+UPDATE products SET
+  name_ru = '[name_ru]',
+  name_en = '[name_en]',
+  search_text = '[search_text]'
+WHERE id = '[id]'
+AND (name_ru IS NULL OR name_ru = '' OR name_ru = name_uz OR name_en IS NULL OR name_en = '' OR name_en = name_uz);`;
+}
+
+async function runGeminiNormalizationBatch({ products, aliases, rawNames, firstRun }) {
+  if (!GEMINI_API_KEY) {
+    const missing = new Error('GEMINI_API_KEY is not configured');
+    missing.statusCode = 500;
+    throw missing;
+  }
+
+  const prompt = buildNormalizationPrompt({ products, aliases, rawNames, firstRun });
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(NORMALIZATION_MODEL)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.1,
+          maxOutputTokens: 8192,
+        },
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const bodyText = await response.text();
+    const error = new Error(`Gemini request failed: ${response.status} ${bodyText.slice(0, 240)}`);
+    error.statusCode = 502;
+    throw error;
+  }
+
+  const payload = await response.json();
+  const rawText = String(
+    payload?.candidates?.[0]?.content?.parts?.map(part => part?.text || '').join('\n')
+    || ''
+  ).trim();
+  const sqlText = cleanSqlResponse(rawText);
+
+  return { sqlText, rawText };
+}
+
+async function runNormalization({ trigger = 'manual' } = {}) {
+  const logs = [];
+  const appendLog = (message) => {
+    logs.push({ ts: new Date().toISOString(), message: String(message || '') });
+  };
+
+  const startedAt = new Date().toISOString();
+  appendLog("Data loading started");
+
+  const [lastNormalizedAt, productsResult, aliasesResult] = await Promise.all([
+    getLastNormalizationTimestamp(),
+    supabase
+      .from('products')
+      .select('id, name_uz, name_ru, name_en, category, unit, search_text')
+      .order('name_uz', { ascending: true }),
+    supabase
+      .from('product_aliases')
+      .select('alias_text, product_id'),
+  ]);
+
+  if (productsResult.error) throw productsResult.error;
+  if (aliasesResult.error) throw aliasesResult.error;
+
+  const products = productsResult.data || [];
+  const aliases = aliasesResult.data || [];
+  const firstRun = !lastNormalizedAt;
+
+  appendLog(`Loaded products: ${products.length}`);
+  appendLog(`Loaded aliases: ${aliases.length}`);
+  appendLog(firstRun ? 'First normalization run detected' : `Using prices approved since ${lastNormalizedAt}`);
+
+  const approvedRows = await fetchAllPages((from, to) => {
+    let query = supabase
+      .from('prices')
+      .select('product_name_raw, place_name, created_at')
+      .neq('source', 'website_scrape')
+      .not('product_name_raw', 'is', null)
+      .order('created_at', { ascending: false })
+      .range(from, to);
+
+    if (!firstRun && lastNormalizedAt) {
+      query = query.gte('created_at', lastNormalizedAt);
+    }
+
+    return query;
+  });
+
+  const rawNames = [];
+  const rawNameSet = new Set();
+  for (const row of approvedRows || []) {
+    const normalized = String(row?.product_name_raw || '').trim();
+    if (normalized.length < 2) continue;
+    const key = normalized.toLowerCase();
+    if (rawNameSet.has(key)) continue;
+    rawNameSet.add(key);
+    rawNames.push(normalized);
+  }
+
+  const aliasSet = new Set(
+    (aliases || [])
+      .map(item => String(item?.alias_text || '').trim().toLowerCase())
+      .filter(Boolean)
+  );
+
+  const newRawNames = rawNames.filter(name => !aliasSet.has(name.toLowerCase()));
+  appendLog(`Raw names found: ${rawNames.length}`);
+  appendLog(`Raw names after alias filter: ${newRawNames.length}`);
+
+  if (newRawNames.length === 0) {
+    await recordNormalizationRun({
+      trigger,
+      started_at: startedAt,
+      finished_at: new Date().toISOString(),
+      status: 'success',
+      raw_name_count: rawNames.length,
+      new_raw_name_count: 0,
+      sql_success_count: 0,
+      sql_error_count: 0,
+      notes: 'No new raw names after alias filtering',
+    });
+
+    appendLog('No new names to normalize');
+    return {
+      logs,
+      firstRun,
+      lastNormalizedAt,
+      rawNameCount: rawNames.length,
+      newRawNameCount: 0,
+      sqlSuccessCount: 0,
+      sqlErrorCount: 0,
+      rpcAvailable: true,
+      manualSql: '',
+    };
+  }
+
+  const batches = newRawNames.length > 150
+    ? chunkArray(newRawNames, NORMALIZATION_BATCH_SIZE)
+    : [newRawNames];
+
+  const generatedSqlBlocks = [];
+  let modelErrorCount = 0;
+  for (let index = 0; index < batches.length; index += 1) {
+    const batch = batches[index];
+    appendLog(`Sending batch ${index + 1}/${batches.length} to Gemini (${batch.length} names)`);
+    const { sqlText, rawText } = await runGeminiNormalizationBatch({
+      products,
+      aliases,
+      rawNames: batch,
+      firstRun,
+    });
+
+    if (!containsSqlDml(sqlText)) {
+      modelErrorCount += 1;
+      appendLog(`Gemini returned non-SQL content for batch ${index + 1}`);
+      appendLog(`Gemini raw response: ${rawText.slice(0, 1200)}`);
+      continue;
+    }
+
+    generatedSqlBlocks.push(sqlText);
+  }
+
+  if (generatedSqlBlocks.length === 0) {
+    const finishedAt = new Date().toISOString();
+    await recordNormalizationRun({
+      trigger,
+      started_at: startedAt,
+      finished_at: finishedAt,
+      status: 'partial',
+      raw_name_count: rawNames.length,
+      new_raw_name_count: newRawNames.length,
+      sql_success_count: 0,
+      sql_error_count: modelErrorCount || 1,
+      notes: 'Gemini did not produce executable SQL',
+    });
+
+    appendLog('Normalization stopped: no executable SQL returned');
+    return {
+      logs,
+      firstRun,
+      lastNormalizedAt,
+      rawNameCount: rawNames.length,
+      newRawNameCount: newRawNames.length,
+      sqlSuccessCount: 0,
+      sqlErrorCount: modelErrorCount || 1,
+      rpcAvailable: true,
+      manualSql: '',
+    };
+  }
+
+  const mergedSql = generatedSqlBlocks.join('\n\n');
+  const refreshSearchSql = "UPDATE products SET search_text = TRIM(CONCAT(COALESCE(name_uz,''), ' ', COALESCE(name_ru,''), ' ', COALESCE(name_en,''))) WHERE search_text IS NULL OR search_text = '' OR search_text != TRIM(CONCAT(COALESCE(name_uz,''), ' ', COALESCE(name_ru,''), ' ', COALESCE(name_en,'')));";
+
+  let rpcAvailable = true;
+  let sqlSuccessCount = 0;
+  let sqlErrorCount = modelErrorCount;
+  let manualSql = '';
+
+  appendLog('Executing generated SQL');
+
+  rpcAvailable = await isExecSqlAvailable();
+  if (!rpcAvailable) {
+    manualSql = `${mergedSql}\n\n${refreshSearchSql}`;
+    appendLog('exec_sql RPC is unavailable; SQL returned for manual execution');
+  } else {
+    const statements = splitSqlStatements(mergedSql);
+    for (const statement of statements) {
+      const sql = statement.endsWith(';') ? statement : `${statement};`;
+      const { error } = await supabase.rpc('exec_sql', { sql });
+      if (error) {
+        sqlErrorCount += 1;
+        appendLog(`SQL error: ${String(error.message || '').slice(0, 160)}`);
+      } else {
+        sqlSuccessCount += 1;
+      }
+    }
+
+    const { error: refreshError } = await supabase.rpc('exec_sql', { sql: refreshSearchSql });
+    if (refreshError) {
+      sqlErrorCount += 1;
+      appendLog(`search_text refresh failed: ${String(refreshError.message || '').slice(0, 160)}`);
+    } else {
+      sqlSuccessCount += 1;
+      appendLog('search_text refreshed');
+    }
+  }
+
+  const status = sqlErrorCount > 0 ? 'partial' : 'success';
+  const finishedAt = new Date().toISOString();
+  await recordNormalizationRun({
+    trigger,
+    started_at: startedAt,
+    finished_at: finishedAt,
+    status,
+    raw_name_count: rawNames.length,
+    new_raw_name_count: newRawNames.length,
+    sql_success_count: sqlSuccessCount,
+    sql_error_count: sqlErrorCount,
+    notes: rpcAvailable ? null : 'exec_sql unavailable; manual SQL generated',
+  });
+
+  appendLog(`Normalization completed: ${sqlSuccessCount} SQL ok, ${sqlErrorCount} SQL errors`);
+
+  return {
+    logs,
+    firstRun,
+    lastNormalizedAt,
+    rawNameCount: rawNames.length,
+    newRawNameCount: newRawNames.length,
+    sqlSuccessCount,
+    sqlErrorCount,
+    rpcAvailable,
+    manualSql,
+  };
 }
 
 function buildProductSearchText(productLike) {
@@ -364,36 +805,46 @@ async function updateApproved(id, changes) {
 }
 
 async function listProducts() {
-  const { data: products, error: productsError } = await supabase
-    .from('products')
-    .select('*')
-    .order('name_uz', { ascending: true })
-    .limit(1000);
-
-  if (productsError) throw productsError;
+  const products = await fetchAllPages((from, to) => (
+    supabase
+      .from('products')
+      .select('*')
+      .order('name_uz', { ascending: true })
+      .range(from, to)
+  ));
 
   const productIds = (products || []).map(item => item.id);
   if (productIds.length === 0) return [];
 
-  const [{ data: prices, error: pricesError }, { data: pending, error: pendingError }] = await Promise.all([
-    supabase
-      .from('prices')
-      .select('id,product_id,product_name_raw,price,city,place_name,place_address,receipt_date,source')
-      .not('source', 'like', 'history_%')
-      .in('product_id', productIds)
-      .order('receipt_date', { ascending: false })
-      .limit(5000),
-    supabase
-      .from('pending_prices')
-      .select('id,product_id,product_name_raw,status,city,created_at')
-      .in('product_id', productIds)
-      .or('status.eq.pending,status.is.null')
-      .order('created_at', { ascending: false })
-      .limit(3000),
-  ]);
+  const idChunks = chunkArray(productIds, 120);
+  const prices = [];
+  const pending = [];
 
-  if (pricesError) throw pricesError;
-  if (pendingError) throw pendingError;
+  for (const chunkIds of idChunks) {
+    const [chunkPrices, chunkPending] = await Promise.all([
+      fetchAllPages((from, to) => (
+        supabase
+          .from('prices')
+          .select('id,product_id,product_name_raw,price,city,place_name,place_address,receipt_date,source')
+          .not('source', 'like', 'history_%')
+          .in('product_id', chunkIds)
+          .order('receipt_date', { ascending: false })
+          .range(from, to)
+      )),
+      fetchAllPages((from, to) => (
+        supabase
+          .from('pending_prices')
+          .select('id,product_id,product_name_raw,status,city,created_at')
+          .in('product_id', chunkIds)
+          .or('status.eq.pending,status.is.null')
+          .order('created_at', { ascending: false })
+          .range(from, to)
+      )),
+    ]);
+
+    prices.push(...chunkPrices);
+    pending.push(...chunkPending);
+  }
 
   const pricesByProduct = new Map();
   for (const row of prices || []) {
@@ -586,6 +1037,11 @@ async function approvePending(id) {
   const source = String(pending.source || '');
   const isStoreApiSource = source.startsWith('store_api_');
   const matchConfidence = Number(pending.match_confidence || 0);
+  const fallbackStoreName = isStoreApiSource
+    ? source.replace('store_api_', '').replace(/_/g, ' ')
+    : 'Unknown Store';
+  const placeName = normalizeMaybeText(pending.place_name) || fallbackStoreName;
+  const placeAddress = normalizeMaybeText(pending.place_address) || placeName;
 
   let productId = pending.product_id;
   const city = normalizeCityName(pending.city || '') || extractCityFromAddress(pending.place_address || '');
@@ -629,8 +1085,8 @@ async function approvePending(id) {
     price: unitPrice,
     quantity: pending.quantity,
     city,
-    place_name: pending.place_name,
-    place_address: pending.place_address,
+    place_name: placeName,
+    place_address: placeAddress,
     latitude: pending.latitude,
     longitude: pending.longitude,
     receipt_date: pending.receipt_date,
@@ -639,8 +1095,8 @@ async function approvePending(id) {
   };
 
   if (isStoreApiSource) {
-    const normalizedPlaceName = normalizeMaybeText(pending.place_name);
-    const normalizedPlaceAddress = normalizeMaybeText(pending.place_address);
+    const normalizedPlaceName = normalizeMaybeText(placeName);
+    const normalizedPlaceAddress = normalizeMaybeText(placeAddress);
     const { data: currentStoreRows, error: currentStoreRowsError } = await supabase
       .from('prices')
       .select('id,place_name,place_address')
@@ -674,8 +1130,8 @@ async function approvePending(id) {
       .select('id')
       .eq('product_id', productId)
       .eq('city', city)
-      .eq('place_name', pending.place_name || null)
-      .eq('place_address', pending.place_address || null)
+      .eq('place_name', placeName)
+      .eq('place_address', placeAddress)
       .eq('price', unitPrice)
       .eq('receipt_date', pending.receipt_date || null)
       .limit(1)
@@ -797,6 +1253,11 @@ export default async function moderation(req, res) {
       }
       case 'approveMany': {
         const result = await approveMany(body.ids);
+        return send(res, 200, { ok: true, ...result });
+      }
+      case 'normalizeProducts': {
+        const trigger = body.trigger === 'auto' ? 'auto' : 'manual';
+        const result = await runNormalization({ trigger });
         return send(res, 200, { ok: true, ...result });
       }
       case 'reject': {

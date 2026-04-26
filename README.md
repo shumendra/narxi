@@ -15,5 +15,6 @@ View your app in AI Studio: https://ai.studio/apps/9553ce6d-53e7-41a6-a371-b3bb9
 1. Install dependencies:
    `npm install`
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
+3. (Admin normalization) Run [docs/supabase-normalization.sql](docs/supabase-normalization.sql) once in Supabase SQL Editor
+4. Run the app:
    `npm run dev`

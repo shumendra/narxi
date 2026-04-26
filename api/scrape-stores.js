@@ -30,6 +30,13 @@ const KORZINKA_HEADERS = {
   'Referer': 'https://korzinka.uz/',
 };
 
+const BARAKA_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
+  'Accept': 'application/json, text/plain, */*',
+  'Origin': 'https://barakamarket.uz',
+  'Referer': 'https://barakamarket.uz/',
+};
+
 const CHAIN_REPRESENTATIVE_STORES = {
   makro: {
     name: 'Makro',
@@ -102,6 +109,68 @@ async function fetchKorzinkaStores() {
     seen.add(key);
     return s.lat !== 0 && s.lng !== 0;
   });
+}
+
+function normalizeCoordinates(rawLatitude, rawLongitude) {
+  let latitude = Number(rawLatitude);
+  let longitude = Number(rawLongitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    return { latitude: 0, longitude: 0 };
+  }
+
+  // Baraka API may return latitude/longitude fields swapped for some rows.
+  if (Math.abs(latitude) > 55 && Math.abs(longitude) < 55) {
+    const tmp = latitude;
+    latitude = longitude;
+    longitude = tmp;
+  }
+
+  return { latitude, longitude };
+}
+
+async function fetchBarakaStores() {
+  const response = await fetch('https://backend.barakamarket.uz/shop/', {
+    headers: BARAKA_HEADERS,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Baraka locations request failed: ${response.status}`);
+  }
+
+  const payload = await response.json();
+  const rows = Array.isArray(payload)
+    ? payload
+    : (Array.isArray(payload?.results) ? payload.results : []);
+
+  const dedupe = new Set();
+  const stores = [];
+
+  for (const row of rows) {
+    const title = String(row?.title || row?.name || row?.title_uz || '').trim();
+    const address = String(row?.address || row?.address_uz || '').trim();
+    const { latitude, longitude } = normalizeCoordinates(
+      row?.latitude ?? row?.lat,
+      row?.longitude ?? row?.lng ?? row?.lon
+    );
+
+    if (!latitude || !longitude) continue;
+
+    const branchName = title ? `Baraka Market ${title}` : 'Baraka Market';
+    const branchAddress = address || 'Tashkent';
+    const key = `${latitude.toFixed(5)}|${longitude.toFixed(5)}|${branchAddress.toLowerCase()}`;
+    if (dedupe.has(key)) continue;
+    dedupe.add(key);
+
+    stores.push({
+      name: branchName,
+      address: branchAddress,
+      lat: latitude,
+      lng: longitude,
+      city: 'Tashkent',
+    });
+  }
+
+  return stores;
 }
 
 // ─── Yandex Eats config & scraper ──────────────────────────────────────────
@@ -351,14 +420,28 @@ export default async function handler(req, res) {
       const yandexKey = store.replace('yandex_', '');
       const storeConfig = YANDEX_STORES[yandexKey];
       storeProducts = await scrapeYandexStore(yandexKey);
-      // Yandex prices are chain-wide; use the representative store location
-      stores = [{
-        name: storeConfig.name,
-        address: storeConfig.address,
-        lat: storeConfig.lat,
-        lng: storeConfig.lng,
-        city: storeConfig.city,
-      }];
+
+      if (yandexKey === 'baraka') {
+        const barakaBranches = await fetchBarakaStores();
+        stores = barakaBranches.length > 0
+          ? barakaBranches
+          : [{
+              name: storeConfig.name,
+              address: storeConfig.address,
+              lat: storeConfig.lat,
+              lng: storeConfig.lng,
+              city: storeConfig.city,
+            }];
+      } else {
+        // Yandex prices are chain-wide; use the representative store location
+        stores = [{
+          name: storeConfig.name,
+          address: storeConfig.address,
+          lat: storeConfig.lat,
+          lng: storeConfig.lng,
+          city: storeConfig.city,
+        }];
+      }
     }
 
     if (!stores || stores.length === 0) {
