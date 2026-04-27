@@ -1409,9 +1409,16 @@ export default function App() {
       body: JSON.stringify({ action, initData: telegramInitData, ...payload }),
     });
 
-    const json = await response.json();
-    if (!response.ok || !json.ok) {
-      throw new Error(json.error || 'Moderation request failed');
+    const rawText = await response.text();
+    let json: any = null;
+    try {
+      json = rawText ? JSON.parse(rawText) : null;
+    } catch {
+      throw new Error(`Moderation API non-JSON response (${response.status}): ${String(rawText || '').slice(0, 220)}`);
+    }
+
+    if (!json || !response.ok || !json.ok) {
+      throw new Error((json && json.error) || 'Moderation request failed');
     }
 
     return json;
@@ -1433,32 +1440,54 @@ export default function App() {
     appendNormalizationLog('Data loading started...');
 
     try {
-      const result = await callModerationApi('normalizeProducts', { trigger });
-      const serverLogs = Array.isArray(result.logs)
-        ? result.logs.map((entry: any) => ({
-            ts: String(entry?.ts || new Date().toISOString()),
-            message: String(entry?.message || ''),
-          }))
-        : [];
+      let pass = 0;
+      let hasMore = true;
+      let latestResult: any = null;
 
-      if (serverLogs.length > 0) {
-        if (trigger === 'manual') {
-          setNormalizationLogs(serverLogs);
-        } else {
-          setNormalizationLogs(prev => [...prev, ...serverLogs]);
+      while (hasMore && pass < 8) {
+        const result = await callModerationApi('normalizeProducts', { trigger });
+        latestResult = result;
+
+        const serverLogs = Array.isArray(result.logs)
+          ? result.logs.map((entry: any) => ({
+              ts: String(entry?.ts || new Date().toISOString()),
+              message: String(entry?.message || ''),
+            }))
+          : [];
+
+        if (serverLogs.length > 0) {
+          if (trigger === 'manual' && pass === 0) {
+            setNormalizationLogs(serverLogs);
+          } else {
+            setNormalizationLogs(prev => [...prev, ...serverLogs]);
+          }
+        }
+
+        const manualSql = String(result.manualSql || '');
+        if (manualSql) {
+          setNormalizationManualSql(manualSql);
+        }
+
+        hasMore = Boolean(result?.hasMore) && !manualSql;
+        pass += 1;
+
+        if (hasMore) {
+          const remaining = Number(result?.remainingRawNameCount) || 0;
+          appendNormalizationLog(`Continuing normalization pass ${pass + 1}${remaining > 0 ? ` (${remaining} names left)` : ''}...`);
         }
       }
 
-      const manualSql = String(result.manualSql || '');
-      setNormalizationManualSql(manualSql);
+      if (hasMore) {
+        appendNormalizationLog('Normalization paused after maximum passes. Run again to continue.');
+      }
 
-      if (trigger === 'manual') {
+      if (trigger === 'manual' && latestResult) {
         window.Telegram?.WebApp?.showAlert(
-          t.normalizeCompleted(Number(result.sqlSuccessCount) || 0, Number(result.sqlErrorCount) || 0)
+          t.normalizeCompleted(Number(latestResult.sqlSuccessCount) || 0, Number(latestResult.sqlErrorCount) || 0)
         );
       }
 
-      return result;
+      return latestResult;
     } catch (error: any) {
       appendNormalizationLog(`Normalization failed: ${error?.message || 'unknown error'}`);
       if (trigger === 'manual') {

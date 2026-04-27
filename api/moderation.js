@@ -21,6 +21,10 @@ const NORMALIZATION_MODEL_CANDIDATES = Array.from(new Set([
   'gemini-2.5-flash-lite',
   'gemini-2.0-flash-lite',
 ]));
+const parsedNormalizationMaxNames = Number.parseInt(process.env.NORMALIZATION_MAX_NAMES_PER_RUN || '120', 10);
+const NORMALIZATION_MAX_NAMES_PER_RUN = Number.isFinite(parsedNormalizationMaxNames) && parsedNormalizationMaxNames > 0
+  ? parsedNormalizationMaxNames
+  : 120;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 
 function send(res, status, body) {
@@ -301,8 +305,9 @@ async function runGeminiNormalizationBatch({ products, aliases, rawNames, firstR
       }
     );
 
+    const bodyText = await response.text();
+
     if (!response.ok) {
-      const bodyText = await response.text();
       const isModelUnavailable = response.status === 404 && /no longer available|model|not found/i.test(bodyText);
       if (isModelUnavailable) {
         lastError = new Error(`Gemini model unavailable (${model}): ${bodyText.slice(0, 240)}`);
@@ -314,7 +319,15 @@ async function runGeminiNormalizationBatch({ products, aliases, rawNames, firstR
       throw error;
     }
 
-    const payload = await response.json();
+    let payload;
+    try {
+      payload = JSON.parse(bodyText || '{}');
+    } catch {
+      const error = new Error(`Gemini returned non-JSON response (${model}): ${String(bodyText || '').slice(0, 240)}`);
+      error.statusCode = 502;
+      throw error;
+    }
+
     const rawText = String(
       payload?.candidates?.[0]?.content?.parts?.map(part => part?.text || '').join('\n')
       || ''
@@ -417,6 +430,9 @@ async function runNormalization({ trigger = 'manual' } = {}) {
       lastNormalizedAt,
       rawNameCount: rawNames.length,
       newRawNameCount: 0,
+      processedRawNameCount: 0,
+      remainingRawNameCount: 0,
+      hasMore: false,
       sqlSuccessCount: 0,
       sqlErrorCount: 0,
       rpcAvailable: true,
@@ -424,9 +440,16 @@ async function runNormalization({ trigger = 'manual' } = {}) {
     };
   }
 
-  const batches = newRawNames.length > 150
-    ? chunkArray(newRawNames, NORMALIZATION_BATCH_SIZE)
-    : [newRawNames];
+  const namesForThisRun = newRawNames.slice(0, NORMALIZATION_MAX_NAMES_PER_RUN);
+  const remainingRawNameCount = Math.max(0, newRawNames.length - namesForThisRun.length);
+
+  if (remainingRawNameCount > 0) {
+    appendLog(`Large queue detected. Processing ${namesForThisRun.length} names now, ${remainingRawNameCount} left for next pass.`);
+  }
+
+  const batches = namesForThisRun.length > 150
+    ? chunkArray(namesForThisRun, NORMALIZATION_BATCH_SIZE)
+    : [namesForThisRun];
 
   const generatedSqlBlocks = [];
   let modelErrorCount = 0;
@@ -459,7 +482,7 @@ async function runNormalization({ trigger = 'manual' } = {}) {
       finished_at: finishedAt,
       status: 'partial',
       raw_name_count: rawNames.length,
-      new_raw_name_count: newRawNames.length,
+      new_raw_name_count: namesForThisRun.length,
       sql_success_count: 0,
       sql_error_count: modelErrorCount || 1,
       notes: 'Gemini did not produce executable SQL',
@@ -472,6 +495,9 @@ async function runNormalization({ trigger = 'manual' } = {}) {
       lastNormalizedAt,
       rawNameCount: rawNames.length,
       newRawNameCount: newRawNames.length,
+      processedRawNameCount: namesForThisRun.length,
+      remainingRawNameCount,
+      hasMore: remainingRawNameCount > 0,
       sqlSuccessCount: 0,
       sqlErrorCount: modelErrorCount || 1,
       rpcAvailable: true,
@@ -516,21 +542,28 @@ async function runNormalization({ trigger = 'manual' } = {}) {
     }
   }
 
-  const status = sqlErrorCount > 0 ? 'partial' : 'success';
+  const hasMore = remainingRawNameCount > 0;
+  const status = (sqlErrorCount > 0 || hasMore) ? 'partial' : 'success';
   const finishedAt = new Date().toISOString();
+  const notes = !rpcAvailable
+    ? 'exec_sql unavailable; manual SQL generated'
+    : (hasMore ? `Continuation required; ${remainingRawNameCount} names left` : null);
   await recordNormalizationRun({
     trigger,
     started_at: startedAt,
     finished_at: finishedAt,
     status,
     raw_name_count: rawNames.length,
-    new_raw_name_count: newRawNames.length,
+    new_raw_name_count: namesForThisRun.length,
     sql_success_count: sqlSuccessCount,
     sql_error_count: sqlErrorCount,
-    notes: rpcAvailable ? null : 'exec_sql unavailable; manual SQL generated',
+    notes,
   });
 
   appendLog(`Normalization completed: ${sqlSuccessCount} SQL ok, ${sqlErrorCount} SQL errors`);
+  if (hasMore) {
+    appendLog(`Continuation needed: ${remainingRawNameCount} names are still pending normalization`);
+  }
 
   return {
     logs,
@@ -538,6 +571,9 @@ async function runNormalization({ trigger = 'manual' } = {}) {
     lastNormalizedAt,
     rawNameCount: rawNames.length,
     newRawNameCount: newRawNames.length,
+    processedRawNameCount: namesForThisRun.length,
+    remainingRawNameCount,
+    hasMore,
     sqlSuccessCount,
     sqlErrorCount,
     rpcAvailable,
