@@ -14,7 +14,13 @@ const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabase
 const PAGE_SIZE = 1000;
 const STORE_API_MATCH_MIN_SCORE = 70;
 const NORMALIZATION_BATCH_SIZE = 100;
-const NORMALIZATION_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+const CONFIGURED_GEMINI_MODEL = String(process.env.GEMINI_MODEL || '').trim();
+const NORMALIZATION_MODEL_CANDIDATES = Array.from(new Set([
+  ...(CONFIGURED_GEMINI_MODEL ? [CONFIGURED_GEMINI_MODEL] : []),
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-2.0-flash-lite',
+]));
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 
 function send(res, status, body) {
@@ -277,36 +283,50 @@ async function runGeminiNormalizationBatch({ products, aliases, rawNames, firstR
   }
 
   const prompt = buildNormalizationPrompt({ products, aliases, rawNames, firstRun });
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(NORMALIZATION_MODEL)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.1,
-          maxOutputTokens: 8192,
-        },
-      }),
-    }
-  );
+  let lastError = null;
 
-  if (!response.ok) {
-    const bodyText = await response.text();
-    const error = new Error(`Gemini request failed: ${response.status} ${bodyText.slice(0, 240)}`);
-    error.statusCode = 502;
-    throw error;
+  for (const model of NORMALIZATION_MODEL_CANDIDATES) {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 8192,
+          },
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      const bodyText = await response.text();
+      const isModelUnavailable = response.status === 404 && /no longer available|model|not found/i.test(bodyText);
+      if (isModelUnavailable) {
+        lastError = new Error(`Gemini model unavailable (${model}): ${bodyText.slice(0, 240)}`);
+        continue;
+      }
+
+      const error = new Error(`Gemini request failed: ${response.status} ${bodyText.slice(0, 240)}`);
+      error.statusCode = 502;
+      throw error;
+    }
+
+    const payload = await response.json();
+    const rawText = String(
+      payload?.candidates?.[0]?.content?.parts?.map(part => part?.text || '').join('\n')
+      || ''
+    ).trim();
+    const sqlText = cleanSqlResponse(rawText);
+
+    return { sqlText, rawText, model };
   }
 
-  const payload = await response.json();
-  const rawText = String(
-    payload?.candidates?.[0]?.content?.parts?.map(part => part?.text || '').join('\n')
-    || ''
-  ).trim();
-  const sqlText = cleanSqlResponse(rawText);
-
-  return { sqlText, rawText };
+  const fallbackError = lastError || new Error('Gemini request failed: no usable models were available');
+  fallbackError.statusCode = 502;
+  throw fallbackError;
 }
 
 async function runNormalization({ trigger = 'manual' } = {}) {
@@ -413,12 +433,13 @@ async function runNormalization({ trigger = 'manual' } = {}) {
   for (let index = 0; index < batches.length; index += 1) {
     const batch = batches[index];
     appendLog(`Sending batch ${index + 1}/${batches.length} to Gemini (${batch.length} names)`);
-    const { sqlText, rawText } = await runGeminiNormalizationBatch({
+    const { sqlText, rawText, model } = await runGeminiNormalizationBatch({
       products,
       aliases,
       rawNames: batch,
       firstRun,
     });
+    appendLog(`Gemini model used: ${model}`);
 
     if (!containsSqlDml(sqlText)) {
       modelErrorCount += 1;
