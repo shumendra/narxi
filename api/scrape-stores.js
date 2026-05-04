@@ -20,6 +20,10 @@ function normalizeMaybeText(value) {
   return normalized || null;
 }
 
+function normalizeAliasKey(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
 function normalizeStoreCity(cityRaw, addressRaw) {
   return normalizeCityName(cityRaw || '')
     || normalizeCityName(extractCityFromAddress(addressRaw || ''))
