@@ -20,6 +20,15 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+function normalizeProductNameKey(value: string | null | undefined) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[\u2018\u2019\u201A\u201B\u2032\u02BC]/g, "'")
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 // Supabase Client
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
@@ -274,9 +283,8 @@ export default function App() {
   const [selectedApprovedIds, setSelectedApprovedIds] = useState<string[]>([]);
   const [scrapeLoading, setScrapeLoading] = useState<string | null>(null);
   const [scrapeResult, setScrapeResult] = useState<string | null>(null);
-  const [normalizationRunning, setNormalizationRunning] = useState(false);
-  const [normalizationLogs, setNormalizationLogs] = useState<Array<{ ts: string; message: string }>>([]);
-  const [normalizationManualSql, setNormalizationManualSql] = useState('');
+  const [queueSyncing, setQueueSyncing] = useState(false);
+  const [queueStatus, setQueueStatus] = useState<string | null>(null);
   const [newApprovedItem, setNewApprovedItem] = useState({
     product_name_raw: '',
     price: '',
@@ -487,6 +495,11 @@ export default function App() {
         normalizeManualSqlTitle: 'exec_sql topilmadi. Quyidagi SQLni Supabase SQL Editor\'da ishga tushiring:',
         normalizeCompleted: (successCount: number, errorCount: number) => `Normallashtirish tugadi: ${successCount} SQL, ${errorCount} xato`,
         approvedThenNormalize: (approvedCount: number) => `✅ ${approvedCount} ta narx tasdiqlandi → 🔄 Normallashtirish boshlandi...`,
+        queueDownload: 'Navbatni yuklab olish (JSON)',
+        queueUpload: 'Normallashtirilgan faylni yuklash',
+        queueUploading: 'Yuklanmoqda...',
+        approvedToQueue: (approvedCount: number) => `✅ ${approvedCount} ta narx normallashtirish navbatiga yuborildi`,
+        queueImportDone: (importedCount: number, remainingCount: number) => `Import yakunlandi: ${importedCount} ta narx bazaga qo\'shildi, navbatda ${remainingCount} qoldi`,
         messagesTitle: 'Foydalanuvchi xabarlari',
         messagesEmpty: 'Xabarlar yo‘q',
         contactReceivedAt: 'Qabul qilingan',
@@ -780,6 +793,11 @@ export default function App() {
         normalizeManualSqlTitle: 'exec_sql недоступен. Выполните SQL ниже в Supabase SQL Editor:',
         normalizeCompleted: (successCount: number, errorCount: number) => `Нормализация завершена: ${successCount} SQL, ошибок: ${errorCount}`,
         approvedThenNormalize: (approvedCount: number) => `✅ Одобрено ${approvedCount} цен → 🔄 Нормализация запущена...`,
+        queueDownload: 'Скачать очередь (JSON)',
+        queueUpload: 'Загрузить нормализованный файл',
+        queueUploading: 'Загрузка...',
+        approvedToQueue: (approvedCount: number) => `✅ ${approvedCount} цен отправлено в очередь нормализации`,
+        queueImportDone: (importedCount: number, remainingCount: number) => `Импорт завершен: ${importedCount} цен добавлено в базу, в очереди осталось ${remainingCount}`,
         messagesTitle: 'Сообщения от пользователей',
         messagesEmpty: 'Сообщений пока нет',
         contactReceivedAt: 'Получено',
@@ -1073,6 +1091,11 @@ export default function App() {
         normalizeManualSqlTitle: 'exec_sql is unavailable. Run the SQL below in Supabase SQL Editor:',
         normalizeCompleted: (successCount: number, errorCount: number) => `Normalization finished: ${successCount} SQL, errors: ${errorCount}`,
         approvedThenNormalize: (approvedCount: number) => `✅ ${approvedCount} prices approved → 🔄 Normalization started...`,
+        queueDownload: 'Download queue (JSON)',
+        queueUpload: 'Upload normalized file',
+        queueUploading: 'Uploading...',
+        approvedToQueue: (approvedCount: number) => `✅ ${approvedCount} prices sent to normalization queue`,
+        queueImportDone: (importedCount: number, remainingCount: number) => `Import complete: ${importedCount} prices added to database, ${remainingCount} still in queue`,
         messagesTitle: 'User messages',
         messagesEmpty: 'No messages yet',
         contactReceivedAt: 'Received',
@@ -1267,7 +1290,8 @@ export default function App() {
   const [selectedProductWeeklyViews, setSelectedProductWeeklyViews] = useState<number>(0);
   const miniWindowIframeRef = useRef<HTMLIFrameElement | null>(null);
   const contactFormRef = useRef<HTMLElement | null>(null);
-  const normalizationLogRef = useRef<HTMLDivElement | null>(null);
+  const findSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const findMapSectionRef = useRef<HTMLElement | null>(null);
 
 
   useEffect(() => {
@@ -1361,16 +1385,35 @@ export default function App() {
 
   const loadPricesForProduct = async (productId: string) => {
     setLoading(true);
-    const { data } = await supabase
-      .from('prices')
-      .select('*')
-      .eq('product_id', productId)
-      .eq('city', selectedCity)
-      .not('source', 'like', 'history_%')
-      .order('price', { ascending: true })
-      .limit(100);
+    const [pricesResult, aliasesResult] = await Promise.all([
+      supabase
+        .from('prices')
+        .select('*')
+        .eq('product_id', productId)
+        .eq('city', selectedCity)
+        .not('source', 'like', 'history_%')
+        .order('price', { ascending: true })
+        .limit(200),
+      supabase
+        .from('product_aliases')
+        .select('alias_text')
+        .eq('product_id', productId),
+    ]);
 
-    setPrices((data || []) as PriceRecord[]);
+    const product = products.find(item => item.id === productId) || null;
+    const knownNameKeys = new Set([
+      normalizeProductNameKey(product?.name_uz),
+      normalizeProductNameKey(product?.name_ru),
+      normalizeProductNameKey(product?.name_en || ''),
+      ...((aliasesResult.data || []).map(alias => normalizeProductNameKey(alias.alias_text))),
+    ].filter(Boolean));
+
+    const filtered = (pricesResult.data || []).filter(row => {
+      const rawName = normalizeProductNameKey(row?.product_name_raw || '');
+      return knownNameKeys.has(rawName);
+    });
+
+    setPrices(filtered as PriceRecord[]);
     setLoading(false);
   };
 
@@ -1424,86 +1467,74 @@ export default function App() {
     return json;
   };
 
-  const appendNormalizationLog = (message: string, ts?: string) => {
-    setNormalizationLogs(prev => [...prev, { ts: ts || new Date().toISOString(), message }]);
+  const downloadNormalizationQueueJson = async () => {
+    if (!isAdminUser || queueSyncing) return;
+    setQueueSyncing(true);
+    setQueueStatus(null);
+    try {
+      const result = await callModerationApi('downloadNormalizationQueue');
+      const payload = { products: Array.isArray(result?.products) ? result.products : [] };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `narxi-normalization-queue-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      const queueItems = Number(result?.limboItemCount) || 0;
+      const groupedProducts = Number(result?.groupedProductCount) || 0;
+      setQueueStatus(`${queueItems} queue items exported (${groupedProducts} grouped products)`);
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } finally {
+      setQueueSyncing(false);
+    }
   };
 
-  const runNormalization = async (trigger: 'manual' | 'auto' = 'manual') => {
-    if (!isAdminUser || normalizationRunning) return null;
-
-    if (trigger === 'manual') {
-      setNormalizationLogs([]);
-      setNormalizationManualSql('');
-    }
-
-    setNormalizationRunning(true);
-    appendNormalizationLog('Data loading started...');
+  const uploadNormalizationQueueJson = async (file: File) => {
+    if (!isAdminUser || queueSyncing) return;
+    setQueueSyncing(true);
+    setQueueStatus(null);
 
     try {
-      let pass = 0;
-      let hasMore = true;
-      let latestResult: any = null;
+      const text = await file.text();
+      const payload = JSON.parse(text || '{}');
+      const products = Array.isArray(payload)
+        ? payload
+        : (Array.isArray(payload?.products) ? payload.products : []);
 
-      while (hasMore && pass < 8) {
-        const result = await callModerationApi('normalizeProducts', { trigger });
-        latestResult = result;
-
-        const serverLogs = Array.isArray(result.logs)
-          ? result.logs.map((entry: any) => ({
-              ts: String(entry?.ts || new Date().toISOString()),
-              message: String(entry?.message || ''),
-            }))
-          : [];
-
-        if (serverLogs.length > 0) {
-          if (trigger === 'manual' && pass === 0) {
-            setNormalizationLogs(serverLogs);
-          } else {
-            setNormalizationLogs(prev => [...prev, ...serverLogs]);
-          }
-        }
-
-        const manualSql = String(result.manualSql || '');
-        if (manualSql) {
-          setNormalizationManualSql(manualSql);
-        }
-
-        hasMore = Boolean(result?.hasMore) && !manualSql;
-        pass += 1;
-
-        if (hasMore) {
-          const remaining = Number(result?.remainingRawNameCount) || 0;
-          appendNormalizationLog(`Continuing normalization pass ${pass + 1}${remaining > 0 ? ` (${remaining} names left)` : ''}...`);
-        }
+      if (products.length === 0) {
+        window.Telegram?.WebApp?.showAlert('Invalid format: expected JSON with products array');
+        return;
       }
 
-      if (hasMore) {
-        appendNormalizationLog('Normalization paused after maximum passes. Run again to continue.');
-      }
+      const result = await callModerationApi('importNormalizationQueue', { products });
+      await fetchModerationItems();
+      await fetchProducts();
+      if (moderationSection === 'products') await fetchModerationProducts();
 
-      if (trigger === 'manual' && latestResult) {
-        window.Telegram?.WebApp?.showAlert(
-          t.normalizeCompleted(Number(latestResult.sqlSuccessCount) || 0, Number(latestResult.sqlErrorCount) || 0)
-        );
-      }
+      const importedCount = Number(result?.importedCount) || 0;
+      const remainingCount = Number(result?.remainingLimboCount) || 0;
+      const unmatchedCount = Number(result?.unmatchedCount) || 0;
+      const failedCount = Number(result?.failedCount) || 0;
+      const ambiguousAliasCount = Number(result?.ambiguousAliasCount) || 0;
 
-      return latestResult;
+      const summary = t.queueImportDone(importedCount, remainingCount);
+      setQueueStatus(summary);
+
+      const details: string[] = [];
+      if (unmatchedCount > 0) details.push(`Unmatched: ${unmatchedCount}`);
+      if (failedCount > 0) details.push(`Failed: ${failedCount}`);
+      if (ambiguousAliasCount > 0) details.push(`Ambiguous aliases: ${ambiguousAliasCount}`);
+
+      window.Telegram?.WebApp?.showAlert(details.length > 0 ? `${summary}\n${details.join(' · ')}` : summary);
     } catch (error: any) {
-      appendNormalizationLog(`Normalization failed: ${error?.message || 'unknown error'}`);
-      if (trigger === 'manual') {
-        window.Telegram?.WebApp?.showAlert(t.moderationError);
-      }
-      return null;
+      window.Telegram?.WebApp?.showAlert(`Import error: ${error?.message || 'unknown'}`);
     } finally {
-      setNormalizationRunning(false);
+      setQueueSyncing(false);
     }
   };
-
-  useEffect(() => {
-    if (normalizationLogRef.current) {
-      normalizationLogRef.current.scrollTop = normalizationLogRef.current.scrollHeight;
-    }
-  }, [normalizationLogs, normalizationManualSql]);
 
   const handleScrapeStore = async (store: 'makro' | 'korzinka' | 'yandex_baraka') => {
     if (!isAdminUser || scrapeLoading) return;
@@ -1518,6 +1549,8 @@ export default function App() {
       const data = await res.json();
       if (data.ok) {
         const parts = [`${store}: +${data.inserted}`, `${data.matched} matched`, `${data.total} total`];
+        if (Number(data.unmatched) > 0) parts.push(`${data.unmatched} unmatched`);
+        if (Number(data.skippedDup) > 0) parts.push(`${data.skippedDup} unchanged`);
         if (data.skippedReceipt) parts.push(`${data.skippedReceipt} skipped (receipt)`);
         setScrapeResult(parts.join(' · '));
         fetchModerationItems();
@@ -1577,13 +1610,28 @@ export default function App() {
         if (!aliasMap[a.product_id]) aliasMap[a.product_id] = [];
         aliasMap[a.product_id].push({ alias_text: a.alias_text, language: a.language, store_name: a.store_name });
       }
-      const payload = (prods || []).map(p => ({
+      const dbProducts = (prods || []).map(p => ({
         product_id: p.id,
         canonical: { name_uz: p.name_uz, name_ru: p.name_ru, name_en: p.name_en },
         category: p.category,
         unit: p.unit,
         names: aliasMap[p.id] || [],
       }));
+
+      let queueProducts: any[] = [];
+      if (isAdminUser) {
+        try {
+          const queueResult = await callModerationApi('downloadNormalizationQueue');
+          queueProducts = Array.isArray(queueResult?.products) ? queueResult.products : [];
+          if (queueProducts.length > 0) {
+            setQueueStatus(`${queueProducts.length} queued product groups were appended to export`);
+          }
+        } catch {
+          queueProducts = [];
+        }
+      }
+
+      const payload = [...dbProducts, ...queueProducts];
       const blob = new Blob([JSON.stringify({ products: payload }, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -1625,10 +1673,24 @@ export default function App() {
         return;
       }
 
+      let queueImported = 0;
+      let queueRemaining = 0;
+      let queueAmbiguousAliases = 0;
+      try {
+        const queueResult = await callModerationApi('importNormalizationQueue', { products });
+        queueImported = Number(queueResult?.importedCount) || 0;
+        queueRemaining = Number(queueResult?.remainingLimboCount) || 0;
+        queueAmbiguousAliases = Number(queueResult?.ambiguousAliasCount) || 0;
+        setQueueStatus(t.queueImportDone(queueImported, queueRemaining));
+      } catch {
+        // Keep product import successful even if queue import fails.
+      }
+
       window.Telegram?.WebApp?.showAlert(
-        `Done: ${result.canonical_updated || 0} updated, ${result.aliases_inserted || 0} aliases, ${result.products_deleted || 0} deleted${result.errors?.length ? ` (${result.errors.length} errors)` : ''}`
+        `Done: ${result.canonical_updated || 0} updated, ${result.aliases_inserted || 0} aliases, ${result.products_deleted || 0} deleted${result.errors?.length ? ` (${result.errors.length} errors)` : ''}${queueImported > 0 || queueRemaining > 0 || queueAmbiguousAliases > 0 ? `\nQueue import: ${queueImported} added, ${queueRemaining} still queued${queueAmbiguousAliases > 0 ? `, ambiguous aliases: ${queueAmbiguousAliases}` : ''}` : ''}`
       );
       await fetchProducts();
+      await fetchModerationItems();
       if (moderationSection === 'products') await fetchModerationProducts();
     } catch (e) {
       window.Telegram?.WebApp?.showAlert(`Import error: ${e instanceof Error ? e.message : 'unknown'}`);
@@ -1737,7 +1799,7 @@ export default function App() {
   const approveModerationItem = async (item: PendingModerationItem) => {
     setModerationSavingId(item.id);
     try {
-      const updated = await callModerationApi('update', {
+      await callModerationApi('update', {
         id: item.id,
         changes: {
           product_name_raw: item.product_name_raw,
@@ -1747,25 +1809,11 @@ export default function App() {
         },
       });
       const result = await callModerationApi('approve', { id: item.id });
-      const refreshedProducts = await fetchProducts();
       await fetchModerationItems();
-
-      const approvedProduct = refreshedProducts.find(product => product.id === result.productId);
-      if (approvedProduct) {
-        setMode('find');
-        setSelectedProduct(approvedProduct);
-        setSearchQuery(getProductName(approvedProduct, lang));
-        setShowDropdown(false);
-        await loadPricesForProduct(approvedProduct.id);
-      } else if (selectedProduct) {
-        await loadPricesForProduct(selectedProduct.id);
-      }
-
-      if (updated?.item?.product_name_raw) {
-        setSearchQuery(updated.item.product_name_raw);
-      }
-
-      window.Telegram?.WebApp?.showAlert(t.moderationApproved);
+      const movedToQueue = Number(result?.approvedCount) || 0;
+      window.Telegram?.WebApp?.showAlert(
+        movedToQueue > 0 ? t.approvedToQueue(movedToQueue) : t.moderationApproved
+      );
     } catch {
       window.Telegram?.WebApp?.showAlert(t.moderationError);
     } finally {
@@ -1833,11 +1881,10 @@ export default function App() {
       setSelectedModerationIds([]);
       const failedCount = failedSet.size;
       if (approvedCount > 0) {
-        window.Telegram?.WebApp?.showAlert(t.approvedThenNormalize(approvedCount));
-        if (failedCount > 0) {
-          appendNormalizationLog(`Approve warnings: ${failedCount} item(s) failed in bulk approval`);
-        }
-        void runNormalization('auto');
+        const approvedMessage = t.approvedToQueue(approvedCount);
+        window.Telegram?.WebApp?.showAlert(
+          failedCount > 0 ? `${approvedMessage}\nFailed to approve: ${failedCount}` : approvedMessage
+        );
       } else if (failedCount > 0) {
         window.Telegram?.WebApp?.showAlert(t.moderationError);
       } else {
@@ -2290,6 +2337,16 @@ export default function App() {
     return product.name_ru;
   };
 
+  const clearSearchInput = () => {
+    setSearchQuery('');
+    setShowDropdown(false);
+    setSelectedProduct(null);
+    setPrices([]);
+    setFindMapFocus(null);
+    setSelectedProductWeeklyViews(0);
+    findSearchInputRef.current?.focus();
+  };
+
   const handleProductSelect = async (product: Product) => {
     setSelectedProduct(product);
     setSearchQuery(getProductName(product, lang));
@@ -2413,12 +2470,35 @@ export default function App() {
   const findMapZoom = findMapFocus?.zoom ?? (nearbyEnabled && userLocation ? 13 : selectedCityOption.zoom);
 
   const focusPriceOnMap = (price: PriceRecord) => {
-    if (price.latitude === null || price.longitude === null) return;
+    let targetLat = price.latitude;
+    let targetLng = price.longitude;
+
+    if (targetLat === null || targetLng === null) {
+      if (mapPrices.length === 0) return;
+
+      const nearest = userLocation
+        ? [...mapPrices].sort((left, right) => {
+            const leftDistance = haversineDistanceKm(userLocation, { lat: left.latitude!, lng: left.longitude! });
+            const rightDistance = haversineDistanceKm(userLocation, { lat: right.latitude!, lng: right.longitude! });
+            return leftDistance - rightDistance;
+          })[0]
+        : mapPrices[0];
+
+      targetLat = nearest.latitude;
+      targetLng = nearest.longitude;
+    }
+
+    if (targetLat === null || targetLng === null) return;
+
     setFindMapFocus({
-      lat: price.latitude,
-      lng: price.longitude,
+      lat: targetLat,
+      lng: targetLng,
       zoom: 16,
       trigger: Date.now(),
+    });
+
+    window.requestAnimationFrame(() => {
+      findMapSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
   };
 
@@ -3580,7 +3660,7 @@ export default function App() {
           </div>
         </div>
 
-        <div className="mb-4">
+        {mode !== 'find' && <div className="mb-4">
           <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-stone-500">{t.cityTitle}</div>
           <div className="flex gap-2 overflow-x-auto pb-1">
             {CITY_OPTIONS.map(city => (
@@ -3598,16 +3678,27 @@ export default function App() {
               </button>
             ))}
           </div>
-        </div>
+        </div>}
 
         {/* Search Bar */}
-        {mode === 'find' && <div className="relative">
+        {mode === 'find' && <div className="relative rounded-2xl border-2 border-emerald-200 bg-emerald-50 p-3">
+          <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-emerald-700">{t.emptyTitle}</div>
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 w-4 h-4" />
+            <button
+              title={t.searchPlaceholder}
+              onClick={() => {
+                setShowDropdown(true);
+                findSearchInputRef.current?.focus();
+              }}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-emerald-600"
+            >
+              <Search className="w-5 h-5" />
+            </button>
             <input 
+              ref={findSearchInputRef}
               type="text"
               placeholder={t.searchPlaceholder}
-              className="w-full bg-stone-100 border-none rounded-xl py-3 pl-10 pr-4 text-sm focus:ring-2 focus:ring-emerald-500 transition-all"
+              className="w-full bg-white border border-emerald-200 rounded-xl py-3.5 pl-11 pr-11 text-base font-medium focus:ring-2 focus:ring-emerald-500 transition-all"
               value={searchQuery}
               onChange={(e) => {
                 setSearchQuery(e.target.value);
@@ -3615,6 +3706,15 @@ export default function App() {
               }}
               onFocus={() => setShowDropdown(true)}
             />
+            {searchQuery.trim().length > 0 && (
+              <button
+                title="Clear"
+                onClick={clearSearchInput}
+                className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full bg-stone-100 p-1 text-stone-500 hover:bg-stone-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
           </div>
 
           {/* Dropdown */}
@@ -3641,11 +3741,19 @@ export default function App() {
       <main className="p-4">
         {mode === 'find' ? (
           <div className="space-y-6">
-            <section className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
+            <section className="rounded-xl border border-stone-200 bg-white p-3 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
+                <div className="min-w-[180px]">
                   <div className="text-xs font-semibold uppercase tracking-wider text-stone-500">{t.cityLabel}</div>
-                  <div className="text-base font-semibold text-stone-900">{selectedCityLabel}</div>
+                  <select
+                    value={selectedCity}
+                    onChange={(e) => setSelectedCity(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-stone-200 bg-stone-50 px-2 py-1.5 text-sm font-medium text-stone-700"
+                  >
+                    {CITY_OPTIONS.map(city => (
+                      <option key={city.value} value={city.value}>{city.labels[lang]}</option>
+                    ))}
+                  </select>
                 </div>
                 <button
                   onClick={toggleNearby}
@@ -3678,27 +3786,25 @@ export default function App() {
                   <span className="text-xs text-stone-400">{t.maxDistanceKmUnit}</span>
                 </div>
               </div>
-              <div className="mt-2 flex justify-end">
-                <button
-                  onClick={scrollToContactForm}
-                  className="inline-flex items-center gap-1 rounded-full border border-stone-200 bg-stone-50 px-3 py-1.5 text-xs font-semibold text-stone-700"
-                >
-                  {t.contactJump}
-                  <ChevronRight className="h-3.5 w-3.5" />
-                </button>
-              </div>
               {geoError && <div className="mt-2 text-xs font-medium text-rose-600">{geoError}</div>}
             </section>
 
             {!selectedProduct ? (
-              <div className="text-center py-20">
-                <div className="bg-emerald-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <Search className="text-emerald-500 w-8 h-8" />
-                </div>
-                <h2 className="text-lg font-semibold mb-2">{t.emptyTitle}</h2>
-                <p className="text-stone-500 text-sm px-10">
+              <div className="rounded-2xl border border-dashed border-emerald-300 bg-white px-5 py-10 text-center">
+                <h2 className="text-lg font-semibold text-stone-900 mb-2">{t.emptyTitle}</h2>
+                <p className="text-stone-500 text-sm px-2">
                   {t.emptyHint}
                 </p>
+                <button
+                  onClick={() => {
+                    setShowDropdown(true);
+                    findSearchInputRef.current?.focus();
+                  }}
+                  className="mt-4 inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white"
+                >
+                  <Search className="h-4 w-4" />
+                  {t.emptyTitle}
+                </button>
               </div>
             ) : (
               <>
@@ -3748,10 +3854,10 @@ export default function App() {
                             <button
                               title={t.mapTitle}
                               onClick={() => focusPriceOnMap(p)}
-                              disabled={p.latitude === null || p.longitude === null}
-                              className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-40"
+                              className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-emerald-700 transition-colors hover:bg-emerald-100"
                             >
-                              <Navigation className="w-5 h-5" />
+                              <Navigation className="w-4 h-4" />
+                              <span className="text-[11px] font-semibold">{t.mapTitle}</span>
                             </button>
                           </div>
                         </div>
@@ -3763,7 +3869,7 @@ export default function App() {
                 </section>
 
                 {/* Map */}
-                <section>
+                <section ref={findMapSectionRef}>
                   <h3 className="text-sm font-semibold text-stone-500 uppercase tracking-wider mb-3">{t.mapTitle}</h3>
                   <div className="h-75 rounded-2xl overflow-hidden border border-stone-200 shadow-inner relative z-0">
                     <MapContainer 
@@ -4405,7 +4511,7 @@ export default function App() {
                       <input
                         type="text"
                         placeholder={t.reportProductNamePlaceholder}
-                        className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-3 text-sm text-stone-900 outline-none focus:ring-2 focus:ring-emerald-500"
+                        className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-3 pr-10 text-sm text-stone-900 outline-none focus:ring-2 focus:ring-emerald-500"
                         value={searchQuery}
                         onChange={(e) => {
                           setSearchQuery(e.target.value);
@@ -4414,6 +4520,19 @@ export default function App() {
                         }}
                         onFocus={() => setShowDropdown(true)}
                       />
+                      {searchQuery.trim().length > 0 && (
+                        <button
+                          title="Clear"
+                          onClick={() => {
+                            setSearchQuery('');
+                            setSelectedProduct(null);
+                            setShowDropdown(false);
+                          }}
+                          className="absolute right-3 top-[43px] -translate-y-1/2 rounded-full bg-stone-100 p-1 text-stone-500 hover:bg-stone-200"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      )}
 
                       {showDropdown && filteredProducts.length > 0 && (
                         <div className="absolute top-full left-0 right-0 mt-2 max-h-56 overflow-y-auto rounded-xl border border-stone-200 bg-white shadow-xl z-50">
@@ -4634,40 +4753,34 @@ export default function App() {
                     {scrapeLoading === 'yandex_baraka' ? t.scrapeLoading : t.scrapeYandexBaraka}
                   </button>
                   <button
-                    onClick={() => runNormalization('manual')}
-                    disabled={normalizationRunning}
-                    className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                    onClick={downloadNormalizationQueueJson}
+                    disabled={queueSyncing}
+                    className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 disabled:opacity-50"
                   >
-                    {normalizationRunning ? t.normalizeRunning : t.normalizeProducts}
+                    <span className="inline-flex items-center gap-1"><Download className="h-3.5 w-3.5" /> {t.queueDownload}</span>
                   </button>
+                  <label className={cn("rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 cursor-pointer", queueSyncing && "opacity-50 pointer-events-none")}>
+                    <span className="inline-flex items-center gap-1"><Upload className="h-3.5 w-3.5" /> {queueSyncing ? t.queueUploading : t.queueUpload}</span>
+                    <input
+                      type="file"
+                      accept=".json"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) uploadNormalizationQueueJson(file);
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
                   {scrapeResult && (
                     <span className="text-xs text-stone-500 bg-stone-100 rounded-lg px-2 py-1">
                       {scrapeResult}
                     </span>
                   )}
-                </div>
-
-                <div className="rounded-xl border border-stone-200 bg-white p-3">
-                  <div className="text-xs font-semibold uppercase tracking-wider text-stone-500">{t.normalizeStatusTitle}</div>
-                  <div ref={normalizationLogRef} className="mt-2 max-h-40 space-y-1 overflow-y-auto">
-                    {normalizationLogs.length === 0 ? (
-                      <div className="text-xs text-stone-400">{t.normalizeStatusEmpty}</div>
-                    ) : normalizationLogs.map((entry, index) => (
-                      <div key={`${entry.ts}-${index}`} className="text-xs text-stone-700 break-words">
-                        <span className="text-stone-400">[{new Date(entry.ts).toLocaleTimeString()}]</span> {entry.message}
-                      </div>
-                    ))}
-                  </div>
-
-                  {normalizationManualSql && (
-                    <div className="mt-3 space-y-2">
-                      <div className="text-xs text-amber-700 font-medium">{t.normalizeManualSqlTitle}</div>
-                      <textarea
-                        readOnly
-                        value={normalizationManualSql}
-                        className="h-40 w-full rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] text-stone-800"
-                      />
-                    </div>
+                  {queueStatus && (
+                    <span className="text-xs text-blue-700 bg-blue-100 rounded-lg px-2 py-1">
+                      {queueStatus}
+                    </span>
                   )}
                 </div>
               </div>

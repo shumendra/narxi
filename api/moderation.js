@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import { extractCityFromAddress, normalizeCityName } from '../src/constants/cities.js';
+import { normalizeSoliqUrl, scrapesoliqReceipt } from './utils/receipt.js';
 
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
@@ -28,6 +29,9 @@ const NORMALIZATION_MAX_NAMES_PER_RUN = Number.isFinite(parsedNormalizationMaxNa
   ? parsedNormalizationMaxNames
   : 120;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+const LIMBO_APPROVED_STATUS = 'approved_limbo';
+const LIMBO_IMPORTED_STATUS = 'imported';
+const LIMBO_EXPORT_PREFIX = 'limbo:';
 
 function send(res, status, body) {
   res.status(status);
@@ -81,6 +85,123 @@ function detectAliasLanguage(text) {
 function normalizeMaybeText(value) {
   const normalized = String(value || '').trim();
   return normalized || null;
+}
+
+function toTitleCaseWords(value) {
+  return String(value || '')
+    .split(/\s+/)
+    .map(part => part ? `${part[0].toUpperCase()}${part.slice(1).toLowerCase()}` : '')
+    .join(' ')
+    .trim();
+}
+
+function inferStoreNameFromSource(sourceValue) {
+  const source = String(sourceValue || '');
+  if (!source.startsWith('store_api_')) return null;
+  const raw = source.replace('store_api_', '').replace(/_/g, ' ').trim();
+  return raw ? toTitleCaseWords(raw) : null;
+}
+
+function buildLimboProductId(rawName) {
+  const hash = crypto.createHash('sha1').update(String(rawName || '').toLowerCase()).digest('hex').slice(0, 16);
+  return `${LIMBO_EXPORT_PREFIX}${hash}`;
+}
+
+async function fetchReceiptMetadata(receiptUrl, receiptCache) {
+  const normalized = normalizeSoliqUrl(receiptUrl || '') || String(receiptUrl || '').trim();
+  if (!normalized) return null;
+
+  if (receiptCache?.has(normalized)) {
+    return receiptCache.get(normalized);
+  }
+
+  let parsed = null;
+  try {
+    parsed = await scrapesoliqReceipt(normalized);
+  } catch {
+    parsed = null;
+  }
+
+  const data = (parsed && !parsed._generating) ? parsed : null;
+  if (receiptCache) receiptCache.set(normalized, data);
+  return data;
+}
+
+async function resolvePendingStoreContext(pending, receiptCache = null) {
+  const source = String(pending?.source || '');
+  const isStoreApiSource = source.startsWith('store_api_');
+  const sourceStoreName = inferStoreNameFromSource(source);
+
+  let placeName = normalizeMaybeText(pending?.place_name);
+  let placeAddress = normalizeMaybeText(pending?.place_address);
+  let city = normalizeCityName(pending?.city || '') || normalizeCityName(extractCityFromAddress(placeAddress || ''));
+  let latitude = Number.isFinite(Number(pending?.latitude)) ? Number(pending.latitude) : null;
+  let longitude = Number.isFinite(Number(pending?.longitude)) ? Number(pending.longitude) : null;
+  let receiptDate = normalizeMaybeText(pending?.receipt_date) || null;
+
+  const receiptUrl = normalizeMaybeText(pending?.receipt_url);
+  const needsReceiptLookup = Boolean(receiptUrl) && (
+    !placeName
+    || !placeAddress
+    || !city
+    || latitude == null
+    || longitude == null
+    || !receiptDate
+  );
+
+  if (needsReceiptLookup) {
+    const receiptData = await fetchReceiptMetadata(receiptUrl, receiptCache);
+    if (receiptData) {
+      placeName = placeName || normalizeMaybeText(receiptData.storeName);
+      placeAddress = placeAddress || normalizeMaybeText(receiptData.storeAddress);
+
+      const receiptCity = normalizeCityName(
+        receiptData.city
+        || receiptData.detectedCity
+        || extractCityFromAddress(receiptData.storeAddress || '')
+      );
+      city = city || receiptCity;
+
+      if (latitude == null && Number.isFinite(Number(receiptData.latitude))) {
+        latitude = Number(receiptData.latitude);
+      }
+      if (longitude == null && Number.isFinite(Number(receiptData.longitude))) {
+        longitude = Number(receiptData.longitude);
+      }
+
+      receiptDate = receiptDate || normalizeMaybeText(receiptData.receiptDate) || null;
+    }
+  }
+
+  if (!placeName) {
+    placeName = sourceStoreName || 'Unknown Store';
+  }
+  if (!placeAddress) {
+    placeAddress = sourceStoreName || placeName;
+  }
+
+  city = city
+    || normalizeCityName(extractCityFromAddress(placeAddress || ''))
+    || 'Tashkent';
+
+  if (isStoreApiSource && !placeName) {
+    placeName = sourceStoreName || 'Unknown Store';
+  }
+
+  if (isStoreApiSource && !placeAddress) {
+    placeAddress = sourceStoreName || placeName || 'Unknown Store';
+  }
+
+  return {
+    source,
+    isStoreApiSource,
+    placeName,
+    placeAddress,
+    city,
+    latitude,
+    longitude,
+    receiptDate,
+  };
 }
 
 async function fetchAllPages(buildQuery) {
@@ -772,6 +893,389 @@ async function ensureProductForName(rawName, city) {
   return created?.id || null;
 }
 
+function normalizeAliasKey(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function normalizeProductNameKey(value) {
+  return normalizeAliasKey(value)
+    .replace(/[\u2018\u2019\u201A\u201B\u2032\u02BC]/g, "'")
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function buildNormalizationQueueProducts(items) {
+  const grouped = new Map();
+
+  for (const item of items || []) {
+    const rawName = String(item?.product_name_raw || '').trim();
+    if (!rawName) continue;
+
+    const key = normalizeAliasKey(rawName);
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        product_id: buildLimboProductId(rawName),
+        canonical: {
+          name_uz: rawName,
+          name_ru: rawName,
+          name_en: rawName,
+        },
+        category: 'Boshqa',
+        unit: 'dona',
+        names: [],
+      });
+    }
+
+    const row = grouped.get(key);
+    const storeName = normalizeMaybeText(item?.place_name);
+    const aliasExists = row.names.some(alias => (
+      normalizeAliasKey(alias.alias_text) === key
+      && normalizeAliasKey(alias.store_name || '') === normalizeAliasKey(storeName || '')
+    ));
+
+    if (!aliasExists) {
+      row.names.push({
+        alias_text: rawName,
+        language: detectAliasLanguage(rawName),
+        store_name: storeName,
+      });
+    }
+  }
+
+  return [...grouped.values()].sort((left, right) => String(left?.canonical?.name_uz || '').localeCompare(String(right?.canonical?.name_uz || '')));
+}
+
+async function resolveNormalizedEntryProduct(entry) {
+  const canonical = entry?.canonical && typeof entry.canonical === 'object'
+    ? entry.canonical
+    : {};
+
+  const firstAlias = Array.isArray(entry?.names)
+    ? entry.names.find(alias => String(alias?.alias_text || '').trim())
+    : null;
+
+  const nameUz = normalizeMaybeText(canonical.name_uz)
+    || normalizeMaybeText(canonical.name_ru)
+    || normalizeMaybeText(canonical.name_en)
+    || normalizeMaybeText(firstAlias?.alias_text)
+    || 'UNKNOWN_PRODUCT';
+  const nameRu = normalizeMaybeText(canonical.name_ru) || nameUz;
+  const nameEn = normalizeMaybeText(canonical.name_en) || nameUz;
+  const category = normalizeMaybeText(entry?.category) || 'Boshqa';
+  const unit = normalizeMaybeText(entry?.unit) || 'dona';
+  const searchText = `${nameUz} ${nameRu} ${nameEn}`.trim();
+
+  const requestedProductId = String(entry?.product_id || '').trim();
+  const updates = {
+    name_uz: nameUz,
+    name_ru: nameRu,
+    name_en: nameEn,
+    category,
+    unit,
+    search_text: searchText,
+  };
+
+  if (requestedProductId && !requestedProductId.startsWith(LIMBO_EXPORT_PREFIX)) {
+    const { data: existingById, error: existingByIdError } = await supabase
+      .from('products')
+      .select('id')
+      .eq('id', requestedProductId)
+      .maybeSingle();
+
+    if (existingByIdError) throw existingByIdError;
+
+    if (existingById?.id) {
+      const { error: updateError } = await supabase
+        .from('products')
+        .update(updates)
+        .eq('id', existingById.id);
+      if (updateError) throw updateError;
+      return { productId: existingById.id, created: false, updated: true, canonical: updates };
+    }
+  }
+
+  const { data: existingByName, error: existingByNameError } = await supabase
+    .from('products')
+    .select('id')
+    .ilike('name_uz', nameUz)
+    .limit(1)
+    .maybeSingle();
+  if (existingByNameError) throw existingByNameError;
+
+  if (existingByName?.id) {
+    const { error: updateError } = await supabase
+      .from('products')
+      .update(updates)
+      .eq('id', existingByName.id);
+    if (updateError) throw updateError;
+    return { productId: existingByName.id, created: false, updated: true, canonical: updates };
+  }
+
+  const { data: created, error: createError } = await supabase
+    .from('products')
+    .insert({
+      ...updates,
+      available_cities: [],
+    })
+    .select('id')
+    .single();
+  if (createError) throw createError;
+
+  return { productId: created?.id || null, created: true, updated: false, canonical: updates };
+}
+
+async function insertApprovedPriceRow({ pending, productId, context }) {
+  const source = String(context?.source || pending?.source || '');
+  const isStoreApiSource = Boolean(context?.isStoreApiSource) || source.startsWith('store_api_');
+  const unitPrice = Number(pending?.unit_price) > 0
+    ? Math.round(Number(pending.unit_price))
+    : Math.round(Number(pending?.price || 0));
+  const quantity = Number(pending?.quantity) > 0 ? Number(pending.quantity) : 1;
+
+  const placeName = normalizeMaybeText(context?.placeName);
+  const placeAddress = normalizeMaybeText(context?.placeAddress) || placeName;
+  const city = normalizeCityName(context?.city || '') || 'Tashkent';
+
+  const pricePayload = {
+    product_id: productId,
+    product_name_raw: pending?.product_name_raw,
+    price: unitPrice,
+    quantity,
+    city,
+    place_name: placeName,
+    place_address: placeAddress,
+    latitude: context?.latitude ?? null,
+    longitude: context?.longitude ?? null,
+    receipt_date: context?.receiptDate || pending?.receipt_date || new Date().toISOString(),
+    submitted_by: pending?.submitted_by || 'admin',
+    source,
+  };
+
+  if (isStoreApiSource) {
+    const normalizedPlaceName = normalizeMaybeText(placeName);
+    const normalizedPlaceAddress = normalizeMaybeText(placeAddress);
+
+    const { data: currentStoreRows, error: currentStoreRowsError } = await supabase
+      .from('prices')
+      .select('id,place_name,place_address')
+      .eq('product_id', productId)
+      .eq('city', city)
+      .eq('source', source);
+    if (currentStoreRowsError) throw currentStoreRowsError;
+
+    const rowsToArchive = (currentStoreRows || [])
+      .filter(row => (
+        normalizeMaybeText(row.place_name) === normalizedPlaceName
+        && normalizeMaybeText(row.place_address) === normalizedPlaceAddress
+      ))
+      .map(row => row.id);
+
+    if (rowsToArchive.length > 0) {
+      const { error: archiveError } = await supabase
+        .from('prices')
+        .update({ source: `history_${source}` })
+        .in('id', rowsToArchive);
+      if (archiveError) throw archiveError;
+    }
+
+    const { error: insertError } = await supabase.from('prices').insert(pricePayload);
+    if (insertError) throw insertError;
+    return;
+  }
+
+  const { data: existingExactPrice, error: findExistingError } = await supabase
+    .from('prices')
+    .select('id')
+    .eq('product_id', productId)
+    .eq('city', city)
+    .eq('place_name', placeName)
+    .eq('place_address', placeAddress)
+    .eq('price', unitPrice)
+    .eq('receipt_date', pending?.receipt_date || null)
+    .limit(1)
+    .maybeSingle();
+
+  if (findExistingError) throw findExistingError;
+
+  if (!existingExactPrice?.id) {
+    const { error: insertError } = await supabase.from('prices').insert(pricePayload);
+    if (insertError) throw insertError;
+  }
+
+  await syncProductAvailableCities(productId, city);
+  await upsertProductAlias(productId, pending?.product_name_raw, placeName || null);
+}
+
+async function exportNormalizationQueue() {
+  const limboItems = await fetchAllPages((from, to) => (
+    supabase
+      .from('pending_prices')
+      .select('id,product_name_raw,place_name,status,created_at')
+      .eq('status', LIMBO_APPROVED_STATUS)
+      .order('created_at', { ascending: true })
+      .range(from, to)
+  ));
+
+  const products = buildNormalizationQueueProducts(limboItems);
+  return {
+    products,
+    limboItemCount: limboItems.length,
+    groupedProductCount: products.length,
+  };
+}
+
+async function importNormalizationQueue(productsInput) {
+  const normalizedProducts = Array.isArray(productsInput) ? productsInput : [];
+  if (normalizedProducts.length === 0) {
+    const invalid = new Error('products array is required');
+    invalid.statusCode = 400;
+    throw invalid;
+  }
+
+  const limboItems = await fetchAllPages((from, to) => (
+    supabase
+      .from('pending_prices')
+      .select('*')
+      .eq('status', LIMBO_APPROVED_STATUS)
+      .order('created_at', { ascending: true })
+      .range(from, to)
+  ));
+
+  if (limboItems.length === 0) {
+    return {
+      importedCount: 0,
+      remainingLimboCount: 0,
+      createdProducts: 0,
+      updatedProducts: 0,
+      aliasesProcessed: 0,
+      unmatchedCount: 0,
+      failedCount: 0,
+      unmatchedSamples: [],
+      failedSamples: [],
+    };
+  }
+
+  const aliasToProductId = new Map();
+  const ambiguousAliasKeys = new Set();
+  const assignAliasToProduct = (rawKey, productId) => {
+    const key = normalizeAliasKey(rawKey);
+    if (!key || !productId || ambiguousAliasKeys.has(key)) return;
+
+    const existing = aliasToProductId.get(key);
+    if (!existing) {
+      aliasToProductId.set(key, productId);
+      return;
+    }
+
+    if (existing !== productId) {
+      aliasToProductId.delete(key);
+      ambiguousAliasKeys.add(key);
+    }
+  };
+  let createdProducts = 0;
+  let updatedProducts = 0;
+  let aliasesProcessed = 0;
+
+  for (const entry of normalizedProducts) {
+    const resolved = await resolveNormalizedEntryProduct(entry);
+    if (!resolved?.productId) continue;
+
+    if (resolved.created) createdProducts += 1;
+    if (resolved.updated) updatedProducts += 1;
+
+    const canonicalCandidates = [
+      resolved.canonical?.name_uz,
+      resolved.canonical?.name_ru,
+      resolved.canonical?.name_en,
+    ];
+
+    for (const canonicalName of canonicalCandidates) {
+      assignAliasToProduct(canonicalName, resolved.productId);
+    }
+
+    const names = Array.isArray(entry?.names) ? entry.names : [];
+    const seenAliasRows = new Set();
+
+    for (const alias of names) {
+      const aliasText = String(alias?.alias_text || '').trim();
+      if (!aliasText) continue;
+      const storeName = normalizeMaybeText(alias?.store_name);
+      const dedupeKey = `${normalizeAliasKey(aliasText)}|${normalizeAliasKey(storeName || '')}`;
+      if (seenAliasRows.has(dedupeKey)) continue;
+      seenAliasRows.add(dedupeKey);
+
+      await upsertProductAlias(resolved.productId, aliasText, storeName);
+      aliasesProcessed += 1;
+
+      assignAliasToProduct(aliasText, resolved.productId);
+    }
+  }
+
+  const receiptCache = new Map();
+  const unmatchedSamples = [];
+  const failedSamples = [];
+  let unmatchedCount = 0;
+  let failedCount = 0;
+  let importedCount = 0;
+
+  for (const pending of limboItems) {
+    const rawNameKey = normalizeAliasKey(pending?.product_name_raw);
+    const productId = aliasToProductId.get(rawNameKey);
+
+    if (!productId) {
+      unmatchedCount += 1;
+      if (unmatchedSamples.length < 20) {
+        unmatchedSamples.push(String(pending?.product_name_raw || pending?.id || 'UNKNOWN'));
+      }
+      continue;
+    }
+
+    try {
+      const context = await resolvePendingStoreContext(pending, receiptCache);
+      await insertApprovedPriceRow({ pending, productId, context });
+
+      const { error: updateError } = await supabase
+        .from('pending_prices')
+        .update({
+          status: LIMBO_IMPORTED_STATUS,
+          product_id: productId,
+          city: context.city,
+          place_name: context.placeName,
+          place_address: context.placeAddress,
+          latitude: context.latitude,
+          longitude: context.longitude,
+          receipt_date: context.receiptDate || pending?.receipt_date || null,
+        })
+        .eq('id', pending.id);
+
+      if (updateError) throw updateError;
+      importedCount += 1;
+    } catch (error) {
+      failedCount += 1;
+      if (failedSamples.length < 20) {
+        failedSamples.push({
+          id: pending?.id,
+          error: String(error?.message || 'UNKNOWN_IMPORT_ERROR').slice(0, 160),
+        });
+      }
+    }
+  }
+
+  return {
+    importedCount,
+    remainingLimboCount: limboItems.length - importedCount,
+    createdProducts,
+    updatedProducts,
+    aliasesProcessed,
+    ambiguousAliasCount: ambiguousAliasKeys.size,
+    unmatchedCount,
+    failedCount,
+    unmatchedSamples,
+    failedSamples,
+  };
+}
+
 async function listPending(city) {
   const normalizedCity = normalizeCityName(city || '');
   const items = await fetchAllPages((from, to) => {
@@ -796,23 +1300,31 @@ async function listPending(city) {
     const safePrice = Number(item?.price) > 0 ? Math.round(Number(item.price)) : (isUnparsed ? 1 : 0);
     const safeQty = Number(item?.quantity) > 0 ? Number(item.quantity) : 1;
     const safeUnit = Number(item?.unit_price) > 0 ? Math.round(Number(item.unit_price)) : (safePrice > 0 ? safePrice : Math.round(safePrice / safeQty));
+    const confidence = Number(item?.match_confidence || 0);
+    const shouldDetachLowConfidence = Boolean(item?.product_id) && confidence < STORE_API_MATCH_MIN_SCORE;
 
     const needsHeal = (
       safeName !== String(item?.product_name_raw || '')
       || safePrice !== Number(item?.price || 0)
       || safeQty !== Number(item?.quantity || 0)
       || safeUnit !== Number(item?.unit_price || 0)
+      || shouldDetachLowConfidence
     );
 
     if (needsHeal && item?.id) {
+      const patch = {
+        product_name_raw: safeName,
+        price: safePrice,
+        quantity: safeQty,
+        unit_price: safeUnit,
+      };
+      if (shouldDetachLowConfidence) {
+        patch.product_id = null;
+      }
+
       const { error: healError } = await supabase
         .from('pending_prices')
-        .update({
-          product_name_raw: safeName,
-          price: safePrice,
-          quantity: safeQty,
-          unit_price: safeUnit,
-        })
+        .update(patch)
         .eq('id', item.id);
       if (healError) throw healError;
     }
@@ -823,6 +1335,7 @@ async function listPending(city) {
       price: safePrice,
       quantity: safeQty,
       unit_price: safeUnit,
+      product_id: shouldDetachLowConfidence ? null : item?.product_id,
     });
   }
 
@@ -952,9 +1465,10 @@ async function listProducts() {
   const idChunks = chunkArray(productIds, 120);
   const prices = [];
   const pending = [];
+  const aliases = [];
 
   for (const chunkIds of idChunks) {
-    const [chunkPrices, chunkPending] = await Promise.all([
+    const [chunkPrices, chunkPending, chunkAliases] = await Promise.all([
       fetchAllPages((from, to) => (
         supabase
           .from('prices')
@@ -967,16 +1481,24 @@ async function listProducts() {
       fetchAllPages((from, to) => (
         supabase
           .from('pending_prices')
-          .select('id,product_id,product_name_raw,status,city,created_at')
+          .select('id,product_id,product_name_raw,status,city,created_at,match_confidence')
           .in('product_id', chunkIds)
           .or('status.eq.pending,status.is.null')
           .order('created_at', { ascending: false })
+          .range(from, to)
+      )),
+      fetchAllPages((from, to) => (
+        supabase
+          .from('product_aliases')
+          .select('product_id,alias_text')
+          .in('product_id', chunkIds)
           .range(from, to)
       )),
     ]);
 
     prices.push(...chunkPrices);
     pending.push(...chunkPending);
+    aliases.push(...chunkAliases);
   }
 
   const pricesByProduct = new Map();
@@ -993,9 +1515,32 @@ async function listProducts() {
     pendingByProduct.set(row.product_id, list);
   }
 
+  const aliasTextsByProduct = new Map();
+  for (const row of aliases || []) {
+    const list = aliasTextsByProduct.get(row.product_id) || [];
+    list.push(row.alias_text);
+    aliasTextsByProduct.set(row.product_id, list);
+  }
+
   return (products || []).map(product => {
-    const productPrices = pricesByProduct.get(product.id) || [];
-    const productPending = pendingByProduct.get(product.id) || [];
+    const knownNameKeys = new Set([
+      normalizeProductNameKey(product?.name_uz),
+      normalizeProductNameKey(product?.name_ru),
+      normalizeProductNameKey(product?.name_en),
+      ...(aliasTextsByProduct.get(product.id) || []).map(alias => normalizeProductNameKey(alias)),
+    ].filter(Boolean));
+
+    const productPrices = (pricesByProduct.get(product.id) || []).filter(row => (
+      knownNameKeys.has(normalizeProductNameKey(row?.product_name_raw))
+    ));
+
+    const productPending = (pendingByProduct.get(product.id) || []).filter(row => {
+      const normalizedRaw = normalizeProductNameKey(row?.product_name_raw);
+      if (knownNameKeys.has(normalizedRaw)) return true;
+      const confidence = Number(row?.match_confidence || 0);
+      return confidence >= STORE_API_MATCH_MIN_SCORE;
+    });
+
     return {
       ...product,
       prices: productPrices,
@@ -1167,130 +1712,58 @@ async function approvePending(id) {
     throw notFound;
   }
 
-  const source = String(pending.source || '');
-  const isStoreApiSource = source.startsWith('store_api_');
-  const matchConfidence = Number(pending.match_confidence || 0);
-  const fallbackStoreName = isStoreApiSource
-    ? source.replace('store_api_', '').replace(/_/g, ' ')
-    : 'Unknown Store';
-  const placeName = normalizeMaybeText(pending.place_name) || fallbackStoreName;
-  const placeAddress = normalizeMaybeText(pending.place_address) || placeName;
-
-  let productId = pending.product_id;
-  const city = normalizeCityName(pending.city || '') || extractCityFromAddress(pending.place_address || '');
-
-  if (isStoreApiSource && matchConfidence < STORE_API_MATCH_MIN_SCORE) {
-    productId = null;
+  const pendingStatus = normalizeAliasKey(pending.status || 'pending');
+  if (pendingStatus && pendingStatus !== 'pending') {
+    return { approvedCount: 0, receiptScope: 0 };
   }
 
-  if (!productId) {
-    const { data: existingProduct } = await supabase
-      .from('products')
-      .select('id')
-      .eq('name_uz', pending.product_name_raw)
-      .maybeSingle();
+  const receiptUrl = normalizeMaybeText(pending.receipt_url);
+  let targets = [pending];
 
-    if (existingProduct?.id) {
-      productId = existingProduct.id;
-    } else {
-      const { data: created, error: createError } = await supabase
-        .from('products')
-        .insert({
-          name_uz: pending.product_name_raw,
-          name_ru: pending.product_name_raw,
-          name_en: pending.product_name_raw,
-          category: 'Boshqa',
-          unit: 'dona',
-          available_cities: city ? [city] : [],
-        })
-        .select('id')
-        .single();
+  if (receiptUrl) {
+    const { data: receiptPendingRows, error: receiptPendingRowsError } = await supabase
+      .from('pending_prices')
+      .select('*')
+      .eq('receipt_url', receiptUrl)
+      .or('status.eq.pending,status.is.null');
 
-      if (createError) throw createError;
-      productId = created?.id || null;
+    if (receiptPendingRowsError) throw receiptPendingRowsError;
+    if ((receiptPendingRows || []).length > 0) {
+      targets = receiptPendingRows;
     }
   }
 
-  const unitPrice = pending.unit_price || pending.price;
-  const pricePayload = {
-    product_id: productId,
-    product_name_raw: pending.product_name_raw,
-    price: unitPrice,
-    quantity: pending.quantity,
-    city,
-    place_name: placeName,
-    place_address: placeAddress,
-    latitude: pending.latitude,
-    longitude: pending.longitude,
-    receipt_date: pending.receipt_date,
-    submitted_by: pending.submitted_by,
-    source,
+  const receiptCache = new Map();
+  let approvedCount = 0;
+
+  for (const target of targets) {
+    const status = normalizeAliasKey(target?.status || 'pending');
+    if (status && status !== 'pending') continue;
+
+    const context = await resolvePendingStoreContext(target, receiptCache);
+    const { error: updateError } = await supabase
+      .from('pending_prices')
+      .update({
+        status: LIMBO_APPROVED_STATUS,
+        product_id: null,
+        city: context.city,
+        place_name: context.placeName,
+        place_address: context.placeAddress,
+        latitude: context.latitude,
+        longitude: context.longitude,
+        receipt_date: context.receiptDate || target?.receipt_date || null,
+      })
+      .eq('id', target.id);
+
+    if (updateError) throw updateError;
+    approvedCount += 1;
+  }
+
+  return {
+    approvedCount,
+    receiptScope: targets.length,
+    movedToLimbo: approvedCount,
   };
-
-  if (isStoreApiSource) {
-    const normalizedPlaceName = normalizeMaybeText(placeName);
-    const normalizedPlaceAddress = normalizeMaybeText(placeAddress);
-    const { data: currentStoreRows, error: currentStoreRowsError } = await supabase
-      .from('prices')
-      .select('id,place_name,place_address')
-      .eq('product_id', productId)
-      .eq('city', city)
-      .eq('source', source);
-
-    if (currentStoreRowsError) throw currentStoreRowsError;
-
-    const rowsToArchive = (currentStoreRows || [])
-      .filter(row => (
-        normalizeMaybeText(row.place_name) === normalizedPlaceName
-        && normalizeMaybeText(row.place_address) === normalizedPlaceAddress
-      ))
-      .map(row => row.id);
-
-    if (rowsToArchive.length > 0) {
-      const { error: archiveError } = await supabase
-        .from('prices')
-        .update({ source: `history_${source}` })
-        .in('id', rowsToArchive);
-
-      if (archiveError) throw archiveError;
-    }
-
-    const { error: insertError } = await supabase.from('prices').insert(pricePayload);
-    if (insertError) throw insertError;
-  } else {
-    const { data: existingExactPrice, error: findExistingError } = await supabase
-      .from('prices')
-      .select('id')
-      .eq('product_id', productId)
-      .eq('city', city)
-      .eq('place_name', placeName)
-      .eq('place_address', placeAddress)
-      .eq('price', unitPrice)
-      .eq('receipt_date', pending.receipt_date || null)
-      .limit(1)
-      .maybeSingle();
-
-    if (findExistingError) throw findExistingError;
-
-    if (!existingExactPrice?.id) {
-      const { error: insertError } = await supabase.from('prices').insert(pricePayload);
-      if (insertError) throw insertError;
-    }
-  }
-
-  if (!isStoreApiSource) {
-    await syncProductAvailableCities(productId, city);
-    await upsertProductAlias(productId, pending.product_name_raw, pending.place_name || null);
-  }
-
-  const { error: updateError } = await supabase
-    .from('pending_prices')
-    .update({ status: 'approved', product_id: productId, city })
-    .eq('id', id);
-
-  if (updateError) throw updateError;
-
-  return { productId };
 }
 
 async function approveMany(ids) {
@@ -1305,8 +1778,8 @@ async function approveMany(ids) {
     const results = await Promise.all(
       chunk.map(async (id) => {
         try {
-          await approvePending(id);
-          return { ok: true, id };
+          const result = await approvePending(id);
+          return { ok: true, id, approvedCount: Number(result?.approvedCount) || 0 };
         } catch {
           return { ok: false, id };
         }
@@ -1314,7 +1787,7 @@ async function approveMany(ids) {
     );
 
     for (const result of results) {
-      if (result.ok) approvedCount += 1;
+      if (result.ok) approvedCount += Number(result.approvedCount) || 0;
       else failedIds.push(result.id);
     }
   }
@@ -1389,8 +1862,20 @@ export default async function moderation(req, res) {
         return send(res, 200, { ok: true, ...result });
       }
       case 'normalizeProducts': {
-        const trigger = body.trigger === 'auto' ? 'auto' : 'manual';
-        const result = await runNormalization({ trigger });
+        return send(res, 400, {
+          ok: false,
+          error: 'NORMALIZATION_DISABLED_USE_EXPORT_IMPORT',
+        });
+      }
+      case 'downloadNormalizationQueue': {
+        const result = await exportNormalizationQueue();
+        return send(res, 200, { ok: true, ...result });
+      }
+      case 'importNormalizationQueue': {
+        const products = Array.isArray(body.products)
+          ? body.products
+          : (Array.isArray(body?.payload?.products) ? body.payload.products : []);
+        const result = await importNormalizationQueue(products);
         return send(res, 200, { ok: true, ...result });
       }
       case 'reject': {

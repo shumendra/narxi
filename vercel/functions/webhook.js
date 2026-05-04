@@ -1654,110 +1654,41 @@ async function handleCallback(callbackQuery) {
 
     if (!pending) return;
 
-    let productId = pending.product_id;
-    const city = normalizeCityName(pending.city || '') || extractCityFromAddress(pending.place_address || '');
-    const source = String(pending.source || '');
-    const isStoreApiSource = source.startsWith('store_api_');
-    const fallbackStoreName = isStoreApiSource
-      ? source.replace('store_api_', '').replace(/_/g, ' ')
-      : 'Unknown Store';
-    const placeName = String(pending.place_name || '').trim() || fallbackStoreName;
-    const placeAddress = String(pending.place_address || '').trim() || placeName;
+    const receiptUrl = String(pending.receipt_url || '').trim();
+    let targets = [pending];
 
-    if (!productId) {
-      const { data: created } = await supabase
-        .from('products')
-        .insert({
-          name_uz: pending.product_name_raw,
-          name_ru: '',
-          name_en: '',
-          category: 'Boshqa',
-          unit: 'dona',
-          available_cities: city ? [city] : [],
-        })
-        .select('id')
-        .single();
-      productId = created?.id || null;
+    if (receiptUrl) {
+      const { data: receiptRows } = await supabase
+        .from('pending_prices')
+        .select('*')
+        .eq('receipt_url', receiptUrl)
+        .or('status.eq.pending,status.is.null');
+      if ((receiptRows || []).length > 0) {
+        targets = receiptRows;
+      }
     }
 
-    const unitPrice = pending.unit_price || pending.price;
-    if (isStoreApiSource) {
-      const normalizeMaybeText = (value) => {
-        const normalized = String(value || '').trim();
-        return normalized || null;
-      };
-      const normalizedPlaceName = normalizeMaybeText(placeName);
-      const normalizedPlaceAddress = normalizeMaybeText(placeAddress);
+    for (const target of targets) {
+      const source = String(target.source || '');
+      const isStoreApiSource = source.startsWith('store_api_');
+      const fallbackStoreName = isStoreApiSource
+        ? source.replace('store_api_', '').replace(/_/g, ' ')
+        : 'Unknown Store';
+      const placeName = String(target.place_name || '').trim() || fallbackStoreName;
+      const placeAddress = String(target.place_address || '').trim() || placeName;
+      const city = normalizeCityName(target.city || '') || extractCityFromAddress(placeAddress || '') || 'Tashkent';
 
-      const { data: currentStoreRows } = await supabase
-        .from('prices')
-        .select('id,place_name,place_address')
-        .eq('product_id', productId)
-        .eq('city', city)
-        .eq('source', source);
-
-      const rowsToArchive = (currentStoreRows || [])
-        .filter(row => (
-          normalizeMaybeText(row.place_name) === normalizedPlaceName
-          && normalizeMaybeText(row.place_address) === normalizedPlaceAddress
-        ))
-        .map(row => row.id);
-
-      if (rowsToArchive.length > 0) {
-        await supabase
-          .from('prices')
-          .update({ source: `history_${source}` })
-          .in('id', rowsToArchive);
-      }
-
-      await supabase.from('prices').insert({
-        product_id: productId,
-        product_name_raw: pending.product_name_raw,
-        price: unitPrice,
-        quantity: pending.quantity,
-        city,
-        place_name: placeName,
-        place_address: placeAddress,
-        latitude: pending.latitude,
-        longitude: pending.longitude,
-        receipt_date: pending.receipt_date,
-        submitted_by: pending.submitted_by,
-        source,
-      });
-    } else {
-      const { data: existingExactPrice } = await supabase
-        .from('prices')
-        .select('id')
-        .eq('product_id', productId)
-        .eq('city', city)
-        .eq('place_name', placeName)
-        .eq('place_address', placeAddress)
-        .eq('price', unitPrice)
-        .eq('receipt_date', pending.receipt_date || null)
-        .limit(1)
-        .maybeSingle();
-
-      if (!existingExactPrice?.id) {
-        await supabase.from('prices').insert({
-          product_id: productId,
-          product_name_raw: pending.product_name_raw,
-          price: unitPrice,
-          quantity: pending.quantity,
+      await supabase
+        .from('pending_prices')
+        .update({
+          status: 'approved_limbo',
+          product_id: null,
           city,
           place_name: placeName,
           place_address: placeAddress,
-          latitude: pending.latitude,
-          longitude: pending.longitude,
-          receipt_date: pending.receipt_date,
-          submitted_by: pending.submitted_by,
-          source,
-        });
-      }
+        })
+        .eq('id', target.id);
     }
-
-    await syncProductAvailableCities(productId, city);
-
-    await supabase.from('pending_prices').update({ status: 'approved', product_id: productId, city }).eq('id', id);
 
     const adminLang = getUserLang(callbackQuery?.from?.language_code);
     await axios.post(`${TELEGRAM_API}/editMessageText`, {

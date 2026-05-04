@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { fuzzyMatchProduct } from './utils/receipt.js';
+import { extractCityFromAddress, normalizeCityName } from '../src/constants/cities.js';
 
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
@@ -12,6 +13,77 @@ const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabase
 function send(res, status, body) {
   res.setHeader('Content-Type', 'application/json');
   res.status(status).send(JSON.stringify(body));
+}
+
+function normalizeMaybeText(value) {
+  const normalized = String(value || '').trim();
+  return normalized || null;
+}
+
+function normalizeStoreCity(cityRaw, addressRaw) {
+  return normalizeCityName(cityRaw || '')
+    || normalizeCityName(extractCityFromAddress(addressRaw || ''))
+    || 'Tashkent';
+}
+
+function buildStoreExactKey({ productId, price, city, placeName, placeAddress }) {
+  return [
+    String(productId || ''),
+    Number(price) || 0,
+    String(city || '').trim().toLowerCase(),
+    String(placeName || '').trim().toLowerCase(),
+    String(placeAddress || '').trim().toLowerCase(),
+  ].join('|');
+}
+
+function buildStoreBranchKey({ productId, city, placeName, placeAddress }) {
+  return [
+    String(productId || ''),
+    String(city || '').trim().toLowerCase(),
+    String(placeName || '').trim().toLowerCase(),
+    String(placeAddress || '').trim().toLowerCase(),
+  ].join('|');
+}
+
+function detectAliasLanguage(text) {
+  const value = String(text || '');
+  if (/\p{Script=Cyrillic}/u.test(value)) return 'ru';
+  if (/[A-Za-zʻ’'`]/.test(value)) return 'uz';
+  return 'unknown';
+}
+
+async function upsertProductAlias(productId, aliasText, storeName = null) {
+  const normalizedAlias = String(aliasText || '').trim();
+  if (!productId || !normalizedAlias) return;
+
+  const normalizedStore = normalizeMaybeText(storeName);
+  const language = detectAliasLanguage(normalizedAlias);
+
+  const { data: existing, error: existingError } = await supabase
+    .from('product_aliases')
+    .select('id,times_seen')
+    .eq('product_id', productId)
+    .ilike('alias_text', normalizedAlias)
+    .is('store_name', normalizedStore)
+    .maybeSingle();
+
+  if (existingError) return;
+
+  if (existing?.id) {
+    await supabase
+      .from('product_aliases')
+      .update({ times_seen: (Number(existing.times_seen) || 1) + 1, language })
+      .eq('id', existing.id);
+    return;
+  }
+
+  await supabase.from('product_aliases').insert({
+    product_id: productId,
+    alias_text: normalizedAlias,
+    language,
+    store_name: normalizedStore,
+    times_seen: 1,
+  });
 }
 
 // ─── Dynamic store location fetching ───────────────────────────────────────
@@ -67,12 +139,14 @@ async function fetchMakroStores() {
       const data = await res.json();
       if (Array.isArray(data)) {
         for (const s of data) {
+          const address = String(s.address || '').trim();
+          const cityGuess = (address || '').split(',')[0].replace(/^г\.\s*/, '').trim();
           stores.push({
             name: s.title || 'Makro',
-            address: s.address || '',
+            address,
             lat: parseFloat(s.latitude) || 0,
             lng: parseFloat(s.longitude) || 0,
-            city: (s.address || '').split(',')[0].replace(/^г\.\s*/, '').trim() || 'Tashkent',
+            city: normalizeStoreCity(cityGuess, address),
           });
         }
       }
@@ -92,12 +166,14 @@ async function fetchKorzinkaStores() {
     const items = data?.data?.items?.ru || data?.data?.items?.uz || [];
     for (const s of items) {
       const loc = s.location || {};
+      const address = String(s.address || '').trim();
+      const cityGuess = (address || '').split(',')[0].replace(/^г\.\s*/, '').trim();
       stores.push({
         name: s.name || 'Korzinka',
-        address: s.address || '',
+        address,
         lat: parseFloat(loc.lat) || 0,
         lng: parseFloat(loc.lon) || 0,
-        city: (s.address || '').split(',')[0].replace(/^г\.\s*/, '').trim() || 'Tashkent',
+        city: normalizeStoreCity(cityGuess, address),
       });
     }
   } catch { /* skip on failure */ }
@@ -166,7 +242,7 @@ async function fetchBarakaStores() {
       address: branchAddress,
       lat: latitude,
       lng: longitude,
-      city: 'Tashkent',
+      city: normalizeStoreCity('Tashkent', branchAddress),
     });
   }
 
@@ -412,10 +488,12 @@ export default async function handler(req, res) {
     const isYandex = store.startsWith('yandex_');
     if (store === 'makro') {
       storeProducts = await scrapeMakro();
-      stores = [CHAIN_REPRESENTATIVE_STORES.makro];
+      const makroStores = await fetchMakroStores();
+      stores = makroStores.length > 0 ? makroStores : [CHAIN_REPRESENTATIVE_STORES.makro];
     } else if (store === 'korzinka') {
       storeProducts = await scrapeKorzinka();
-      stores = [CHAIN_REPRESENTATIVE_STORES.korzinka];
+      const korzinkaStores = await fetchKorzinkaStores();
+      stores = korzinkaStores.length > 0 ? korzinkaStores : [CHAIN_REPRESENTATIVE_STORES.korzinka];
     } else if (isYandex) {
       const yandexKey = store.replace('yandex_', '');
       const storeConfig = YANDEX_STORES[yandexKey];
@@ -439,7 +517,7 @@ export default async function handler(req, res) {
           address: storeConfig.address,
           lat: storeConfig.lat,
           lng: storeConfig.lng,
-          city: storeConfig.city,
+          city: normalizeStoreCity(storeConfig.city, storeConfig.address),
         }];
       }
     }
@@ -452,39 +530,48 @@ export default async function handler(req, res) {
       return send(res, 200, { ok: true, inserted: 0, matched: 0, total: 0, message: 'No products found from store API' });
     }
 
-    // 3. Check which products already have receipt-based prices at this store chain
-    // Only skip if a receipt price exists for the same product at the same store brand
     const storeBrand = store === 'makro' ? 'Makro' : store === 'korzinka' ? 'Korzinka' : YANDEX_STORES[store.replace('yandex_', '')]?.name || store;
-    const { data: existingPrices } = await supabase
-      .from('prices')
-      .select('product_id, source, place_name')
-      .or(`place_name.ilike.%${storeBrand}%`);
-    const receiptProductIds = new Set(
-      (existingPrices || [])
-        .filter(p => !p.source || (!p.source.startsWith('store_api_') && !p.source.startsWith('history_store_api_')))
-        .map(p => p.product_id)
-    );
 
-    // Avoid duplicate queue rows only for still-pending imports.
-    // Approved imports must be allowed again on every re-run to refresh current prices.
+    // Preload current store_api rows for this source so we can refresh branch rows atomically.
     const sourceTag = `store_api_${store}`;
-    const { data: existingApiPrices } = await supabase
-      .from('pending_prices')
-      .select('product_name_raw, price, place_address')
-      .eq('source', sourceTag)
-      .or('status.eq.pending,status.is.null');
-    const existingApiSet = new Set(
-      (existingApiPrices || []).map(p => `${p.product_name_raw}|${p.price}|${p.place_address || ''}`)
-    );
+    const { data: currentApiRows } = await supabase
+      .from('prices')
+      .select('id,product_id,price,city,place_name,place_address')
+      .eq('source', sourceTag);
 
-    // 4. Match and insert into pending_prices — one entry per product per branch
+    const currentExactSet = new Set();
+    const currentByBranchKey = new Map();
+    for (const row of currentApiRows || []) {
+      const exactKey = buildStoreExactKey({
+        productId: row.product_id,
+        price: row.price,
+        city: row.city,
+        placeName: row.place_name,
+        placeAddress: row.place_address,
+      });
+      currentExactSet.add(exactKey);
+
+      const branchKey = buildStoreBranchKey({
+        productId: row.product_id,
+        city: row.city,
+        placeName: row.place_name,
+        placeAddress: row.place_address,
+      });
+      const list = currentByBranchKey.get(branchKey) || [];
+      list.push(row.id);
+      currentByBranchKey.set(branchKey, list);
+    }
+
+    // 4. Match and write current prices directly into prices table.
     let inserted = 0;
     let matched = 0;
+    let unmatched = 0;
     let skipped = 0;
     let skippedReceipt = 0;
     let skippedDup = 0;
     const errors = [];
     const now = new Date().toISOString();
+    const processedBranchKeys = new Set();
 
     for (const sp of storeProducts) {
       const rawName = sp.nameUz || sp.name || '';
@@ -507,49 +594,85 @@ export default async function handler(req, res) {
       const isConfidentMatch = Boolean(finalMatch) && finalScore >= STORE_API_MATCH_MIN_SCORE;
       const matchedProductId = isConfidentMatch ? finalMatch.id : null;
 
-      // Skip if this product already has a receipt-based price (receipt > API)
-      if (matchedProductId && receiptProductIds.has(matchedProductId)) {
-        skippedReceipt++;
+      if (!matchedProductId) {
+        unmatched += 1;
         continue;
       }
 
-      // Insert for every branch — API prices are chain-wide
+      // Insert for every branch — API prices are chain-wide.
       let insertedThisProduct = false;
       for (const branch of stores) {
-        const dedupKey = `${sp.name || rawName}|${sp.price}|${branch.address}`;
-        if (existingApiSet.has(dedupKey)) {
+        const placeName = normalizeMaybeText(branch.name) || storeBrand;
+        const placeAddress = normalizeMaybeText(branch.address) || placeName;
+        const city = normalizeStoreCity(branch.city, placeAddress || '');
+
+        const branchKey = buildStoreBranchKey({
+          productId: matchedProductId,
+          city,
+          placeName,
+          placeAddress,
+        });
+        if (processedBranchKeys.has(branchKey)) {
+          skippedDup++;
+          continue;
+        }
+        processedBranchKeys.add(branchKey);
+
+        const exactKey = buildStoreExactKey({
+          productId: matchedProductId,
+          price: sp.price,
+          city,
+          placeName,
+          placeAddress,
+        });
+        if (currentExactSet.has(exactKey)) {
           skippedDup++;
           continue;
         }
 
+        const rowsToArchive = currentByBranchKey.get(branchKey) || [];
+        if (rowsToArchive.length > 0) {
+          const { error: archiveError } = await supabase
+            .from('prices')
+            .update({ source: `history_${sourceTag}` })
+            .in('id', rowsToArchive);
+          if (archiveError) {
+            errors.push({ name: rawName, branch: placeAddress, error: archiveError.message });
+            continue;
+          }
+          currentByBranchKey.set(branchKey, []);
+        }
+
         const payload = {
-          product_name_raw: sp.name || rawName,
+          product_name_raw: rawName,
           product_id: matchedProductId,
-          match_confidence: finalScore,
-          status: 'pending',
           price: sp.price,
           quantity: 1,
           unit_price: sp.price,
-          city: branch.city || 'Tashkent',
-          place_name: branch.name,
-          place_address: branch.address,
+          city,
+          place_name: placeName,
+          place_address: placeAddress,
           receipt_date: now,
-          source: `store_api_${store}`,
+          source: sourceTag,
           submitted_by: String(admin_id),
-          latitude: branch.lat,
-          longitude: branch.lng,
+          latitude: Number.isFinite(Number(branch.lat)) ? Number(branch.lat) : null,
+          longitude: Number.isFinite(Number(branch.lng)) ? Number(branch.lng) : null,
         };
 
-        const { error } = await supabase.from('pending_prices').insert(payload);
+        const { error } = await supabase.from('prices').insert(payload);
         if (error) {
-          errors.push({ name: rawName, branch: branch.address, error: error.message });
+          errors.push({ name: rawName, branch: placeAddress, error: error.message });
         } else {
           inserted++;
-          existingApiSet.add(dedupKey);
+          currentExactSet.add(exactKey);
           insertedThisProduct = true;
         }
       }
-      if (insertedThisProduct && isConfidentMatch) matched++;
+
+      if (insertedThisProduct) {
+        matched++;
+        await upsertProductAlias(matchedProductId, rawName, storeBrand);
+      }
     }
 
     return send(res, 200, {
@@ -558,11 +681,12 @@ export default async function handler(req, res) {
       total: storeProducts.length,
       inserted,
       matched,
+      unmatched,
       skipped,
       skippedReceipt,
       skippedDup,
       errors: errors.length > 0 ? errors.slice(0, 10) : undefined,
-      message: `Scraped ${storeProducts.length} products × ${stores.length} branches from ${store}: ${inserted} inserted (${matched} matched), ${skippedReceipt} skipped (receipt exists), ${skippedDup} skipped (already imported).`,
+      message: `Scraped ${storeProducts.length} products × ${stores.length} branches from ${store}: ${inserted} prices written (${matched} matched products, ${unmatched} unmatched), ${skippedDup} unchanged duplicates skipped.`,
     });
   } catch (err) {
     console.error('scrape-stores error:', err);

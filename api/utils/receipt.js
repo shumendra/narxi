@@ -3,6 +3,8 @@ import * as cheerio from 'cheerio';
 import * as fuzzball from 'fuzzball';
 import { extractCityFromAddress as extractCityFromAddressBase, normalizeCityName } from '../../src/constants/cities.js';
 
+const RECEIPT_AUTO_MATCH_MIN_SCORE = 70;
+
 export function isSoliqUrl(url) {
   try {
     const parsed = new URL(String(url || ''));
@@ -822,6 +824,7 @@ export async function insertPendingPrice({
 }) {
   const productPool = products || (await fetchProductsIndex(supabase));
   const { product: bestMatch, score: highestScore } = fuzzyMatchProduct(item.name, productPool);
+  const matchedProductId = (bestMatch?.id && highestScore >= RECEIPT_AUTO_MATCH_MIN_SCORE) ? bestMatch.id : null;
 
   const selectedCity = normalizeCityName(city || '');
   const detectedCity = normalizeCityName(receiptData?.city || receiptData?.detectedCity || extractCityFromAddress(receiptData?.storeAddress || ''));
@@ -829,7 +832,7 @@ export async function insertPendingPrice({
 
   const payload = {
     product_name_raw: item.name,
-    product_id: bestMatch?.id || null,
+    product_id: matchedProductId,
     match_confidence: highestScore,
     status: 'pending',
     price: item.totalPrice,
@@ -856,7 +859,7 @@ export async function insertPendingPrice({
 
   return {
     item: data,
-    matchedProductId: bestMatch?.id || null,
+    matchedProductId,
     matchConfidence: highestScore,
     selectedCity,
     detectedCity,
