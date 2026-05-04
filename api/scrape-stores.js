@@ -127,31 +127,66 @@ const CHAIN_REPRESENTATIVE_STORES = {
 };
 
 const STORE_API_MATCH_MIN_SCORE = 70;
+const HTTP_CONCURRENCY = 8;
+const DB_CHUNK_SIZE = 250;
+
+function chunkArray(values, size) {
+  const chunks = [];
+  for (let i = 0; i < values.length; i += size) {
+    chunks.push(values.slice(i, i + size));
+  }
+  return chunks;
+}
+
+async function runWithConcurrency(values, concurrency, worker) {
+  const list = Array.isArray(values) ? values : [];
+  if (list.length === 0) return [];
+
+  const limit = Math.max(1, Math.min(concurrency || 1, list.length));
+  const results = new Array(list.length);
+  let nextIndex = 0;
+
+  const runWorker = async () => {
+    while (true) {
+      const index = nextIndex;
+      if (index >= list.length) break;
+      nextIndex += 1;
+      try {
+        results[index] = await worker(list[index], index);
+      } catch {
+        results[index] = null;
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: limit }, () => runWorker()));
+  return results;
+}
 
 async function fetchMakroStores() {
-  const stores = [];
-  for (let region = 1; region <= 14; region++) {
-    try {
-      const res = await fetch(
-        `https://api.makromarket.uz/api/location-list/?region=${region}`,
-        { headers: MAKRO_HEADERS }
-      );
-      const data = await res.json();
-      if (Array.isArray(data)) {
-        for (const s of data) {
-          const address = String(s.address || '').trim();
-          const cityGuess = (address || '').split(',')[0].replace(/^г\.\s*/, '').trim();
-          stores.push({
-            name: s.title || 'Makro',
-            address,
-            lat: parseFloat(s.latitude) || 0,
-            lng: parseFloat(s.longitude) || 0,
-            city: normalizeStoreCity(cityGuess, address),
-          });
-        }
-      }
-    } catch { /* skip failed region */ }
-  }
+  const regions = Array.from({ length: 14 }, (_, idx) => idx + 1);
+  const regionStores = await runWithConcurrency(regions, 6, async (region) => {
+    const res = await fetch(
+      `https://api.makromarket.uz/api/location-list/?region=${region}`,
+      { headers: MAKRO_HEADERS }
+    );
+    const data = await res.json();
+    if (!Array.isArray(data)) return [];
+
+    return data.map((s) => {
+      const address = String(s.address || '').trim();
+      const cityGuess = (address || '').split(',')[0].replace(/^г\.\s*/, '').trim();
+      return {
+        name: s.title || 'Makro',
+        address,
+        lat: parseFloat(s.latitude) || 0,
+        lng: parseFloat(s.longitude) || 0,
+        city: normalizeStoreCity(cityGuess, address),
+      };
+    });
+  });
+
+  const stores = regionStores.flat().filter(Boolean);
   return stores;
 }
 
@@ -292,40 +327,42 @@ async function scrapeYandexStore(storeKey) {
   if (topCategories.length === 0) throw new Error('No categories returned from Yandex Eats');
 
   // Step 2: Fetch items per category (items only populate with specific category + maxDepth)
-  const allProducts = [];
-  for (const cat of topCategories) {
-    try {
-      const res = await fetch('https://eats.yandex.com/api/v2/menu/goods?auto_translate=false', {
-        method: 'POST',
-        headers: YANDEX_HEADERS,
-        body: JSON.stringify({ slug, category: cat.id, maxDepth: 100 }),
-      });
-      const data = await res.json();
-      const categories = data?.payload?.categories || [];
+  const categoryRows = await runWithConcurrency(topCategories, HTTP_CONCURRENCY, async (cat) => {
+    const allProducts = [];
 
-      // Recursively collect items from all nested categories
-      const collectItems = (cats) => {
-        for (const c of cats) {
-          if (c.items && Array.isArray(c.items)) {
-            for (const item of c.items) {
-              if (item.price > 0 && item.available !== false) {
-                allProducts.push({
-                  name: item.name || '',
-                  price: item.price, // already in UZS
-                  promoPrice: item.promoPrice || null,
-                  weight: item.weight || '',
-                  uid: item.uid || item.id,
-                  category: cat.name || '',
-                });
-              }
+    const res = await fetch('https://eats.yandex.com/api/v2/menu/goods?auto_translate=false', {
+      method: 'POST',
+      headers: YANDEX_HEADERS,
+      body: JSON.stringify({ slug, category: cat.id, maxDepth: 100 }),
+    });
+    const data = await res.json();
+    const categories = data?.payload?.categories || [];
+
+    // Recursively collect items from all nested categories
+    const collectItems = (cats) => {
+      for (const c of cats) {
+        if (c.items && Array.isArray(c.items)) {
+          for (const item of c.items) {
+            if (item.price > 0 && item.available !== false) {
+              allProducts.push({
+                name: item.name || '',
+                price: item.price, // already in UZS
+                promoPrice: item.promoPrice || null,
+                weight: item.weight || '',
+                uid: item.uid || item.id,
+                category: cat.name || '',
+              });
             }
           }
-          if (c.categories) collectItems(c.categories);
         }
-      };
-      collectItems(categories);
-    } catch { /* skip failed category */ }
-  }
+        if (c.categories) collectItems(c.categories);
+      }
+    };
+    collectItems(categories);
+    return allProducts;
+  });
+
+  const allProducts = categoryRows.flat().filter(Boolean);
 
   // Deduplicate by uid
   const seen = new Set();
@@ -338,31 +375,28 @@ async function scrapeYandexStore(storeKey) {
 
 // ─── Makro scraper ─────────────────────────────────────────────────────────
 async function scrapeMakro() {
-  const allProducts = [];
-
   // Fetch categories first
   const catRes = await fetch('https://api.makromarket.uz/api/category-list/', {
     headers: MAKRO_HEADERS,
   });
   const categories = await catRes.json();
 
-  // Fetch products from each category
-  for (const cat of categories) {
+  const categoryRows = await runWithConcurrency(categories || [], HTTP_CONCURRENCY, async (cat) => {
     const url = `https://api.makromarket.uz/api/product-list/?category=${cat.id}&region=3&limit=500&p=true`;
     const res = await fetch(url, { headers: MAKRO_HEADERS });
     const data = await res.json();
-    if (data.results) {
-      for (const item of data.results) {
-        allProducts.push({
-          name: item.title,
-          price: Math.round(item.newPrice), // current promo price
-          oldPrice: Math.round(item.oldPrice),
-          code: item.code,
-          category: cat.title,
-        });
-      }
-    }
-  }
+    if (!Array.isArray(data?.results)) return [];
+
+    return data.results.map((item) => ({
+      name: item.title,
+      price: Math.round(item.newPrice), // current promo price
+      oldPrice: Math.round(item.oldPrice),
+      code: item.code,
+      category: cat.title,
+    }));
+  });
+
+  const allProducts = categoryRows.flat().filter(Boolean);
 
   // Deduplicate by code (same product may appear in multiple categories)
   const seen = new Set();
@@ -408,39 +442,38 @@ async function scrapeKorzinka() {
 
   // Also fetch via mobile endpoint for each category that has products
   const categoryIds = [...new Set(categories.map(c => c.id).filter(Boolean))];
-  for (const catId of categoryIds) {
-    try {
-      const res = await fetch('https://catalog.korzinka.uz/api/mobile/catalogs/category/products', {
-        method: 'POST',
-        headers: {
-          'User-Agent': 'Mozilla/5.0',
-          'Content-Type': 'application/json',
-          'Origin': 'https://korzinka.uz',
-          'Referer': 'https://korzinka.uz/',
-        },
-        body: JSON.stringify({ get_products: catId }),
-      });
-      const data = await res.json();
-      if (data.data && Array.isArray(data.data)) {
-        for (const item of data.data) {
-          const priceStr = item.prices?.actual_price || '0';
-          const price = parseInt(String(priceStr).replace(/\s/g, ''), 10) || 0;
-          const oldPriceStr = item.prices?.old_price || '0';
-          const oldPrice = parseInt(String(oldPriceStr).replace(/\s/g, ''), 10) || 0;
-          allProducts.push({
-            name: item.title_ru || item.title || '',
-            nameUz: item.title_uz || '',
-            price,
-            oldPrice,
-            id: item.id,
-            categoryId: item.catalog_category_id,
-            category: '',
-            weight: item.weight_param || '',
-          });
-        }
-      }
-    } catch { /* skip failed category */ }
-  }
+  const mobileRows = await runWithConcurrency(categoryIds, HTTP_CONCURRENCY, async (catId) => {
+    const res = await fetch('https://catalog.korzinka.uz/api/mobile/catalogs/category/products', {
+      method: 'POST',
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        'Content-Type': 'application/json',
+        'Origin': 'https://korzinka.uz',
+        'Referer': 'https://korzinka.uz/',
+      },
+      body: JSON.stringify({ get_products: catId }),
+    });
+    const data = await res.json();
+    if (!Array.isArray(data?.data)) return [];
+
+    return data.data.map((item) => {
+      const priceStr = item.prices?.actual_price || '0';
+      const price = parseInt(String(priceStr).replace(/\s/g, ''), 10) || 0;
+      const oldPriceStr = item.prices?.old_price || '0';
+      const oldPrice = parseInt(String(oldPriceStr).replace(/\s/g, ''), 10) || 0;
+      return {
+        name: item.title_ru || item.title || '',
+        nameUz: item.title_uz || '',
+        price,
+        oldPrice,
+        id: item.id,
+        categoryId: item.catalog_category_id,
+        category: '',
+        weight: item.weight_param || '',
+      };
+    });
+  });
+  allProducts.push(...mobileRows.flat().filter(Boolean));
 
   // Deduplicate by id
   const seen = new Set();
@@ -449,6 +482,70 @@ async function scrapeKorzinka() {
     seen.add(p.id);
     return p.price > 0;
   });
+}
+
+async function archiveStoreRows(sourceTag, rowIds, errors) {
+  const ids = Array.from(rowIds || []).filter(Boolean);
+  if (ids.length === 0) return 0;
+
+  let archived = 0;
+  for (const chunk of chunkArray(ids, DB_CHUNK_SIZE)) {
+    const { data, error } = await supabase
+      .from('prices')
+      .update({ source: `history_${sourceTag}` })
+      .in('id', chunk)
+      .select('id');
+
+    if (error) {
+      errors.push({
+        phase: 'archive',
+        source: sourceTag,
+        error: error.message,
+      });
+      continue;
+    }
+    archived += Array.isArray(data) ? data.length : 0;
+  }
+
+  return archived;
+}
+
+async function insertPriceRows(rows, errors) {
+  const payload = Array.isArray(rows) ? rows : [];
+  if (payload.length === 0) {
+    return { inserted: 0, successfulProductIds: new Set() };
+  }
+
+  let inserted = 0;
+  const successfulProductIds = new Set();
+
+  for (const chunk of chunkArray(payload, DB_CHUNK_SIZE)) {
+    const { error } = await supabase.from('prices').insert(chunk);
+    if (!error) {
+      inserted += chunk.length;
+      for (const row of chunk) {
+        if (row?.product_id) successfulProductIds.add(row.product_id);
+      }
+      continue;
+    }
+
+    for (const row of chunk) {
+      const { error: rowError } = await supabase.from('prices').insert(row);
+      if (rowError) {
+        errors.push({
+          phase: 'insert',
+          raw: row?.product_name_raw,
+          branch: row?.place_address,
+          error: rowError.message,
+        });
+      } else {
+        inserted += 1;
+        if (row?.product_id) successfulProductIds.add(row.product_id);
+      }
+    }
+  }
+
+  return { inserted, successfulProductIds };
 }
 
 // ─── Main handler ──────────────────────────────────────────────────────────
@@ -468,8 +565,13 @@ export default async function handler(req, res) {
   }
 
   try {
+    const startedAt = Date.now();
+
     // 1. Fetch our products for matching
-    const { data: products } = await supabase.from('products').select('*');
+    const { data: products } = await supabase
+      .from('products')
+      .select('id,name_uz,name_ru,name_en,search_text');
+
     // Also get aliases for enriched matching
     const { data: aliases } = await supabase.from('product_aliases').select('product_id, alias_text');
     const aliasMap = {};
@@ -562,16 +664,17 @@ export default async function handler(req, res) {
       currentByBranchKey.set(branchKey, list);
     }
 
-    // 4. Match and write current prices directly into prices table.
-    let inserted = 0;
+    // 4. Match in-memory first and batch DB writes later.
     let matched = 0;
     let unmatched = 0;
     let skipped = 0;
-    let skippedReceipt = 0;
     let skippedDup = 0;
     const errors = [];
     const now = new Date().toISOString();
     const processedBranchKeys = new Set();
+    const archiveIds = new Set();
+    const rowsToInsert = [];
+    const aliasRowsByKey = new Map();
 
     for (const sp of storeProducts) {
       const rawName = sp.nameUz || sp.name || '';
@@ -599,8 +702,8 @@ export default async function handler(req, res) {
         continue;
       }
 
-      // Insert for every branch — API prices are chain-wide.
-      let insertedThisProduct = false;
+      // Queue inserts for every branch — API prices are chain-wide.
+      let queuedThisProduct = false;
       for (const branch of stores) {
         const placeName = normalizeMaybeText(branch.name) || storeBrand;
         const placeAddress = normalizeMaybeText(branch.address) || placeName;
@@ -630,20 +733,11 @@ export default async function handler(req, res) {
           continue;
         }
 
-        const rowsToArchive = currentByBranchKey.get(branchKey) || [];
-        if (rowsToArchive.length > 0) {
-          const { error: archiveError } = await supabase
-            .from('prices')
-            .update({ source: `history_${sourceTag}` })
-            .in('id', rowsToArchive);
-          if (archiveError) {
-            errors.push({ name: rawName, branch: placeAddress, error: archiveError.message });
-            continue;
-          }
-          currentByBranchKey.set(branchKey, []);
-        }
+        const rowsForBranch = currentByBranchKey.get(branchKey) || [];
+        for (const rowId of rowsForBranch) archiveIds.add(rowId);
+        currentByBranchKey.set(branchKey, []);
 
-        const payload = {
+        rowsToInsert.push({
           product_name_raw: rawName,
           product_id: matchedProductId,
           price: sp.price,
@@ -657,23 +751,37 @@ export default async function handler(req, res) {
           submitted_by: String(admin_id),
           latitude: Number.isFinite(Number(branch.lat)) ? Number(branch.lat) : null,
           longitude: Number.isFinite(Number(branch.lng)) ? Number(branch.lng) : null,
-        };
+        });
 
-        const { error } = await supabase.from('prices').insert(payload);
-        if (error) {
-          errors.push({ name: rawName, branch: placeAddress, error: error.message });
-        } else {
-          inserted++;
-          currentExactSet.add(exactKey);
-          insertedThisProduct = true;
+        currentExactSet.add(exactKey);
+        queuedThisProduct = true;
+      }
+
+      if (queuedThisProduct) {
+        const aliasKey = `${matchedProductId}|${normalizeAliasKey(rawName)}|${normalizeAliasKey(storeBrand)}`;
+        if (!aliasRowsByKey.has(aliasKey)) {
+          aliasRowsByKey.set(aliasKey, {
+            productId: matchedProductId,
+            aliasText: rawName,
+            storeName: storeBrand,
+          });
         }
       }
-
-      if (insertedThisProduct) {
-        matched++;
-        await upsertProductAlias(matchedProductId, rawName, storeBrand);
-      }
     }
+
+    const archived = await archiveStoreRows(sourceTag, archiveIds, errors);
+    const insertResult = await insertPriceRows(rowsToInsert, errors);
+    const inserted = insertResult.inserted;
+    matched = insertResult.successfulProductIds.size;
+
+    const aliasRows = Array.from(aliasRowsByKey.values())
+      .filter(row => insertResult.successfulProductIds.has(row.productId));
+    await runWithConcurrency(aliasRows, 10, async (row) => {
+      await upsertProductAlias(row.productId, row.aliasText, row.storeName);
+      return true;
+    });
+
+    const durationMs = Date.now() - startedAt;
 
     return send(res, 200, {
       ok: true,
@@ -683,10 +791,12 @@ export default async function handler(req, res) {
       matched,
       unmatched,
       skipped,
-      skippedReceipt,
       skippedDup,
+      archived,
+      queued: rowsToInsert.length,
+      durationMs,
       errors: errors.length > 0 ? errors.slice(0, 10) : undefined,
-      message: `Scraped ${storeProducts.length} products × ${stores.length} branches from ${store}: ${inserted} prices written (${matched} matched products, ${unmatched} unmatched), ${skippedDup} unchanged duplicates skipped.`,
+      message: `Scraped ${storeProducts.length} products × ${stores.length} branches from ${store}: ${inserted} prices written (${matched} matched products, ${unmatched} unmatched), ${skippedDup} unchanged duplicates skipped in ${Math.round(durationMs / 1000)}s.`,
     });
   } catch (err) {
     console.error('scrape-stores error:', err);

@@ -251,6 +251,9 @@ function ReportMapPicker({ onPick }: { onPick: (lat: number, lng: number) => voi
   return null;
 }
 
+type ScrapeStoreKey = 'makro' | 'korzinka' | 'yandex_baraka';
+const SCRAPE_STORES: ScrapeStoreKey[] = ['makro', 'korzinka', 'yandex_baraka'];
+
 export default function App() {
   const SHOW_SHOPPING_PLAN_MENU = false;
   const [mode, setMode] = useState<'find' | 'report' | 'plan' | 'moderate'>('find');
@@ -281,7 +284,7 @@ export default function App() {
   const [contactMessages, setContactMessages] = useState<ContactMessageItem[]>([]);
   const [selectedModerationIds, setSelectedModerationIds] = useState<string[]>([]);
   const [selectedApprovedIds, setSelectedApprovedIds] = useState<string[]>([]);
-  const [scrapeLoading, setScrapeLoading] = useState<string | null>(null);
+  const [scrapeLoadingStores, setScrapeLoadingStores] = useState<ScrapeStoreKey[]>([]);
   const [scrapeResult, setScrapeResult] = useState<string | null>(null);
   const [queueSyncing, setQueueSyncing] = useState(false);
   const [queueStatus, setQueueStatus] = useState<string | null>(null);
@@ -487,6 +490,8 @@ export default function App() {
         scrapeMakro: 'Makro narxlari',
         scrapeKorzinka: 'Korzinka narxlari',
         scrapeYandexBaraka: 'Baraka (Yandex)',
+        scrapeAll: 'Barcha API narxlari',
+        scrapeAllRunning: 'Barcha APIlar yuklanmoqda...',
         scrapeLoading: 'Yuklanmoqda...',
         normalizeProducts: 'Mahsulotlarni normallashtirish',
         normalizeRunning: 'Normallashtirilmoqda...',
@@ -785,6 +790,8 @@ export default function App() {
         scrapeMakro: 'Цены Makro',
         scrapeKorzinka: 'Цены Korzinka',
         scrapeYandexBaraka: 'Baraka (Yandex)',
+        scrapeAll: 'Цены всех API',
+        scrapeAllRunning: 'Загрузка всех API...',
         scrapeLoading: 'Загрузка...',
         normalizeProducts: 'Нормализовать товары',
         normalizeRunning: 'Нормализация...',
@@ -1083,6 +1090,8 @@ export default function App() {
         scrapeMakro: 'Makro prices',
         scrapeKorzinka: 'Korzinka prices',
         scrapeYandexBaraka: 'Baraka (Yandex)',
+        scrapeAll: 'Fetch all APIs',
+        scrapeAllRunning: 'Fetching all APIs...',
         scrapeLoading: 'Loading...',
         normalizeProducts: 'Normalize products',
         normalizeRunning: 'Normalizing...',
@@ -1536,31 +1545,80 @@ export default function App() {
     }
   };
 
-  const handleScrapeStore = async (store: 'makro' | 'korzinka' | 'yandex_baraka') => {
-    if (!isAdminUser || scrapeLoading) return;
-    setScrapeLoading(store);
+  const formatScrapeSummary = (store: ScrapeStoreKey, data: any) => {
+    const parts = [`${store}: +${Number(data?.inserted) || 0}`, `${Number(data?.matched) || 0} matched`, `${Number(data?.total) || 0} total`];
+    if (Number(data?.unmatched) > 0) parts.push(`${Number(data.unmatched)} unmatched`);
+    if (Number(data?.skippedDup) > 0) parts.push(`${Number(data.skippedDup)} unchanged`);
+    if (Number(data?.archived) > 0) parts.push(`${Number(data.archived)} archived`);
+    if (Number(data?.durationMs) > 0) parts.push(`${Math.round(Number(data.durationMs) / 1000)}s`);
+    return parts.join(' · ');
+  };
+
+  const runScrapeStoreRequest = async (store: ScrapeStoreKey) => {
+    const res = await fetch('/api/scrape-stores', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ admin_id: telegramUserId, store }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data?.ok) {
+      throw new Error(String(data?.error || `Request failed for ${store}`));
+    }
+    return data;
+  };
+
+  const handleScrapeStore = async (store: ScrapeStoreKey) => {
+    if (!isAdminUser || scrapeLoadingStores.length > 0) return;
+    setScrapeLoadingStores([store]);
     setScrapeResult(null);
     try {
-      const res = await fetch('/api/scrape-stores', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ admin_id: telegramUserId, store }),
-      });
-      const data = await res.json();
-      if (data.ok) {
-        const parts = [`${store}: +${data.inserted}`, `${data.matched} matched`, `${data.total} total`];
-        if (Number(data.unmatched) > 0) parts.push(`${data.unmatched} unmatched`);
-        if (Number(data.skippedDup) > 0) parts.push(`${data.skippedDup} unchanged`);
-        if (data.skippedReceipt) parts.push(`${data.skippedReceipt} skipped (receipt)`);
-        setScrapeResult(parts.join(' · '));
-        fetchModerationItems();
-      } else {
-        setScrapeResult(`Error: ${data.error || 'Unknown'}`);
+      const data = await runScrapeStoreRequest(store);
+      setScrapeResult(formatScrapeSummary(store, data));
+      await fetchModerationItems();
+    } catch (err: any) {
+      setScrapeResult(`${store}: Error: ${err?.message || 'Network error'}`);
+    } finally {
+      setScrapeLoadingStores([]);
+    }
+  };
+
+  const handleScrapeAllStores = async () => {
+    if (!isAdminUser || scrapeLoadingStores.length > 0) return;
+    setScrapeLoadingStores([...SCRAPE_STORES]);
+    setScrapeResult(null);
+
+    try {
+      const settled = await Promise.all(
+        SCRAPE_STORES.map(async (store) => {
+          try {
+            const data = await runScrapeStoreRequest(store);
+            return { store, ok: true as const, data };
+          } catch (error: any) {
+            return { store, ok: false as const, error: error?.message || 'unknown' };
+          }
+        })
+      );
+
+      const summaryParts: string[] = [];
+      let okCount = 0;
+
+      for (const result of settled) {
+        if (result.ok) {
+          okCount += 1;
+          summaryParts.push(formatScrapeSummary(result.store, result.data));
+        } else {
+          summaryParts.push(`${result.store}: Error: ${result.error}`);
+        }
+      }
+
+      setScrapeResult(summaryParts.join(' || '));
+      if (okCount > 0) {
+        await fetchModerationItems();
       }
     } catch (err: any) {
-      setScrapeResult(`Error: ${err.message || 'Network error'}`);
+      setScrapeResult(`Error: ${err?.message || 'Network error'}`);
     } finally {
-      setScrapeLoading(null);
+      setScrapeLoadingStores([]);
     }
   };
 
@@ -4732,25 +4790,32 @@ export default function App() {
               <div className="space-y-2">
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <button
+                    onClick={handleScrapeAllStores}
+                    disabled={scrapeLoadingStores.length > 0}
+                    className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                  >
+                    {scrapeLoadingStores.length === SCRAPE_STORES.length ? t.scrapeAllRunning : t.scrapeAll}
+                  </button>
+                  <button
                     onClick={() => handleScrapeStore('makro')}
-                    disabled={!!scrapeLoading}
+                    disabled={scrapeLoadingStores.length > 0}
                     className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
                   >
-                    {scrapeLoading === 'makro' ? t.scrapeLoading : t.scrapeMakro}
+                    {scrapeLoadingStores.includes('makro') ? t.scrapeLoading : t.scrapeMakro}
                   </button>
                   <button
                     onClick={() => handleScrapeStore('korzinka')}
-                    disabled={!!scrapeLoading}
+                    disabled={scrapeLoadingStores.length > 0}
                     className="rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
                   >
-                    {scrapeLoading === 'korzinka' ? t.scrapeLoading : t.scrapeKorzinka}
+                    {scrapeLoadingStores.includes('korzinka') ? t.scrapeLoading : t.scrapeKorzinka}
                   </button>
                   <button
                     onClick={() => handleScrapeStore('yandex_baraka')}
-                    disabled={!!scrapeLoading}
+                    disabled={scrapeLoadingStores.length > 0}
                     className="rounded-lg bg-purple-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
                   >
-                    {scrapeLoading === 'yandex_baraka' ? t.scrapeLoading : t.scrapeYandexBaraka}
+                    {scrapeLoadingStores.includes('yandex_baraka') ? t.scrapeLoading : t.scrapeYandexBaraka}
                   </button>
                   <button
                     onClick={downloadNormalizationQueueJson}
