@@ -15,11 +15,13 @@ const PAGE_SIZE = 1000;
 const STORE_API_MATCH_MIN_SCORE = 70;
 const NORMALIZATION_BATCH_SIZE = 100;
 const CONFIGURED_GEMINI_MODEL = String(process.env.GEMINI_MODEL || '').trim();
+// Models ordered by RPM limit (high → low): 2.5-flash-lite & 2.0-flash-lite = 4K RPM;
+// gemini-2.5-flash = 1 RPM (kept as last-resort fallback for quality).
 const NORMALIZATION_MODEL_CANDIDATES = Array.from(new Set([
   ...(CONFIGURED_GEMINI_MODEL ? [CONFIGURED_GEMINI_MODEL] : []),
-  'gemini-2.5-flash',
   'gemini-2.5-flash-lite',
   'gemini-2.0-flash-lite',
+  'gemini-2.5-flash',
 ]));
 const parsedNormalizationMaxNames = Number.parseInt(process.env.NORMALIZATION_MAX_NAMES_PER_RUN || '120', 10);
 const NORMALIZATION_MAX_NAMES_PER_RUN = Number.isFinite(parsedNormalizationMaxNames) && parsedNormalizationMaxNames > 0
@@ -252,6 +254,7 @@ RULES:
 8. search_text must be: name_uz + space + name_ru + space + name_en.
 9. Only create aliases for raw names, not canonical names themselves.
 10. Output ONLY valid PostgreSQL SQL. No markdown. No prose.
+11. CRITICAL: The alias frequency column is named exactly "times_seen" (never "times"). Every ON CONFLICT clause must use times_seen = product_aliases.times_seen + 1.
 
 OUTPUT SQL SHAPE:
 -- ALIASES FOR MATCHED PRODUCTS
@@ -309,8 +312,10 @@ async function runGeminiNormalizationBatch({ products, aliases, rawNames, firstR
 
     if (!response.ok) {
       const isModelUnavailable = response.status === 404 && /no longer available|model|not found/i.test(bodyText);
-      if (isModelUnavailable) {
-        lastError = new Error(`Gemini model unavailable (${model}): ${bodyText.slice(0, 240)}`);
+      const isRateLimited = response.status === 429;
+      if (isModelUnavailable || isRateLimited) {
+        const reason = isRateLimited ? 'rate-limited' : 'unavailable';
+        lastError = new Error(`Gemini model ${reason} (${model}): ${bodyText.slice(0, 240)}`);
         continue;
       }
 
