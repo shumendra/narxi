@@ -1548,8 +1548,10 @@ export default function App() {
   const formatScrapeSummary = (store: ScrapeStoreKey, data: any) => {
     const parts = [`${store}: +${Number(data?.inserted) || 0}`, `${Number(data?.matched) || 0} matched`, `${Number(data?.total) || 0} total`];
     if (Number(data?.unmatched) > 0) parts.push(`${Number(data.unmatched)} unmatched`);
+    if (Number(data?.autoCreatedProducts) > 0) parts.push(`${Number(data.autoCreatedProducts)} auto-created`);
     if (Number(data?.skippedDup) > 0) parts.push(`${Number(data.skippedDup)} unchanged`);
     if (Number(data?.archived) > 0) parts.push(`${Number(data.archived)} archived`);
+    if (Array.isArray(data?.errors) && data.errors.length > 0) parts.push(`${data.errors.length} errors`);
     if (Number(data?.durationMs) > 0) parts.push(`${Math.round(Number(data.durationMs) / 1000)}s`);
     return parts.join(' · ');
   };
@@ -1584,26 +1586,30 @@ export default function App() {
 
   const handleScrapeAllStores = async () => {
     if (!isAdminUser || scrapeLoadingStores.length > 0) return;
-    setScrapeLoadingStores([...SCRAPE_STORES]);
+    setScrapeLoadingStores([SCRAPE_STORES[0]]);
     setScrapeResult(null);
 
     try {
-      const settled = await Promise.all(
-        SCRAPE_STORES.map(async (store) => {
-          try {
-            const data = await runScrapeStoreRequest(store);
-            return { store, ok: true as const, data };
-          } catch (error: any) {
-            return { store, ok: false as const, error: error?.message || 'unknown' };
-          }
-        })
-      );
+      const settled: Array<
+        { store: ScrapeStoreKey; ok: true; data: any }
+        | { store: ScrapeStoreKey; ok: false; error: string }
+      > = [];
+
+      for (const store of SCRAPE_STORES) {
+        setScrapeLoadingStores([store]);
+        try {
+          const data = await runScrapeStoreRequest(store);
+          settled.push({ store, ok: true, data });
+        } catch (error: any) {
+          settled.push({ store, ok: false, error: error?.message || 'unknown' });
+        }
+      }
 
       const summaryParts: string[] = [];
       let okCount = 0;
 
       for (const result of settled) {
-        if (result.ok) {
+        if (result.ok === true) {
           okCount += 1;
           summaryParts.push(formatScrapeSummary(result.store, result.data));
         } else {
