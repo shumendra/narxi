@@ -136,6 +136,71 @@ function containsSqlDml(sql) {
   return /\b(insert|update|delete)\b/i.test(String(sql || ''));
 }
 
+/**
+ * Normalize Unicode apostrophe variants and escape any unescaped single-quotes
+ * inside SQL string literals. Uzbek words like go'sht, o'rik, qo'zi contain
+ * the apostrophe character which breaks string literals unless doubled ('').
+ */
+function sanitizeSqlApostrophes(sql) {
+  // Step 1: normalize curly/Unicode apostrophe variants to plain ASCII '
+  const s = String(sql || '')
+    .replace(/[\u2018\u2019\u201A\u201B\u2032\u02BC]/g, "'");
+
+  let result = '';
+  let i = 0;
+
+  while (i < s.length) {
+    // SQL line comment: copy to end-of-line unchanged
+    if (s[i] === '-' && s[i + 1] === '-') {
+      const eol = s.indexOf('\n', i);
+      if (eol === -1) { result += s.slice(i); break; }
+      result += s.slice(i, eol + 1);
+      i = eol + 1;
+      continue;
+    }
+
+    // Start of a string literal
+    if (s[i] === "'") {
+      result += "'";
+      i++;
+      while (i < s.length) {
+        if (s[i] === "'") {
+          if (i + 1 < s.length && s[i + 1] === "'") {
+            // Already-escaped pair: keep as-is
+            result += "''";
+            i += 2;
+          } else {
+            // Lookahead: if the next meaningful character is a SQL delimiter,
+            // this quote closes the string; otherwise it's an unescaped
+            // apostrophe inside the value (e.g. go'sht) that must be doubled.
+            let j = i + 1;
+            while (j < s.length && (s[j] === ' ' || s[j] === '\t')) j++;
+            const next = j < s.length ? s[j] : '';
+            const isDelimiter = next === '' || next === ',' || next === ')' ||
+              next === ';' || next === '\n' || next === '\r';
+            if (isDelimiter) {
+              result += "'";
+              i++;
+              break; // close string literal
+            } else {
+              result += "''";
+              i++;
+            }
+          }
+        } else {
+          result += s[i];
+          i++;
+        }
+      }
+    } else {
+      result += s[i];
+      i++;
+    }
+  }
+
+  return result;
+}
+
 function splitSqlStatements(sqlText) {
   const statements = [];
   let current = '';
@@ -185,11 +250,12 @@ async function getLastNormalizationTimestamp() {
     .maybeSingle();
 
   if (error) {
-    if (isMissingRelationError(error)) return null;
+    if (isMissingRelationError(error)) return { timestamp: null, tableExists: false };
     throw error;
   }
 
-  return data?.finished_at || data?.started_at || data?.created_at || null;
+  const timestamp = data?.finished_at || data?.started_at || data?.created_at || null;
+  return { timestamp, tableExists: true };
 }
 
 async function recordNormalizationRun(payload) {
@@ -255,6 +321,7 @@ RULES:
 9. Only create aliases for raw names, not canonical names themselves.
 10. Output ONLY valid PostgreSQL SQL. No markdown. No prose.
 11. CRITICAL: The alias frequency column is named exactly "times_seen" (never "times"). Every ON CONFLICT clause must use times_seen = product_aliases.times_seen + 1.
+12. CRITICAL APOSTROPHE ESCAPING: Product names in Uzbek often contain apostrophes (go'sht, o'rik, qo'zi, ko'k, etc.). In SQL string literals you MUST escape every apostrophe by doubling it: go''sht, o''rik. Never emit a bare single-quote inside a string value.
 
 OUTPUT SQL SHAPE:
 -- ALIASES FOR MATCHED PRODUCTS
@@ -356,7 +423,7 @@ async function runNormalization({ trigger = 'manual' } = {}) {
   const startedAt = new Date().toISOString();
   appendLog("Data loading started");
 
-  const [lastNormalizedAt, productsResult, aliasesResult] = await Promise.all([
+  const [normTimestampResult, productsResult, aliasesResult] = await Promise.all([
     getLastNormalizationTimestamp(),
     supabase
       .from('products')
@@ -370,12 +437,16 @@ async function runNormalization({ trigger = 'manual' } = {}) {
   if (productsResult.error) throw productsResult.error;
   if (aliasesResult.error) throw aliasesResult.error;
 
+  const { timestamp: lastNormalizedAt, tableExists: normRunsTableExists } = normTimestampResult;
   const products = productsResult.data || [];
   const aliases = aliasesResult.data || [];
   const firstRun = !lastNormalizedAt;
 
   appendLog(`Loaded products: ${products.length}`);
   appendLog(`Loaded aliases: ${aliases.length}`);
+  if (!normRunsTableExists) {
+    appendLog('SETUP NEEDED: normalization_runs table is missing. Run docs/supabase-normalization.sql in Supabase SQL Editor to enable run history and incremental mode.');
+  }
   appendLog(firstRun ? 'First normalization run detected' : `Using prices approved since ${lastNormalizedAt}`);
 
   const approvedRows = await fetchAllPages((from, to) => {
@@ -510,7 +581,7 @@ async function runNormalization({ trigger = 'manual' } = {}) {
     };
   }
 
-  const mergedSql = generatedSqlBlocks.join('\n\n');
+  const mergedSql = sanitizeSqlApostrophes(generatedSqlBlocks.join('\n\n'));
   const refreshSearchSql = "UPDATE products SET search_text = TRIM(CONCAT(COALESCE(name_uz,''), ' ', COALESCE(name_ru,''), ' ', COALESCE(name_en,''))) WHERE search_text IS NULL OR search_text = '' OR search_text != TRIM(CONCAT(COALESCE(name_uz,''), ' ', COALESCE(name_ru,''), ' ', COALESCE(name_en,'')));";
 
   let rpcAvailable = true;
