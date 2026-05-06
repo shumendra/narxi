@@ -393,6 +393,7 @@ def mark_queue_status(queue_id: str, status: str, error_message: str | None = No
     payload = {
         'status': status,
         'processed_at': now_iso() if status == 'processed' else None,
+        'error_message': None,
     }
     if error_message:
         existing_error = ''
@@ -475,7 +476,7 @@ async def process_single_receipt(context, queue_item: dict, products: list[dict]
 
         items = receipt.get('items') or []
         if not items:
-            mark_queue_status(queue_id, 'pending', 'No items parsed from page')
+            mark_queue_status(queue_id, 'failed', 'No items parsed from page')
             print('  ✗ No items parsed')
             return False
 
@@ -527,12 +528,12 @@ async def process_single_receipt(context, queue_item: dict, products: list[dict]
                 if payload.get('product_id'):
                     upsert_product_alias(payload.get('product_id'), item['name'], receipt.get('store_name'))
 
-        supabase.table('receipt_queue').delete().eq('id', queue_id).execute()
+        mark_queue_status(queue_id, 'processed')
         print(f"  ✓ Saved {inserted}/{len(items)} items")
         return True
 
     except Exception as error:
-        mark_queue_status(queue_id, 'pending', str(error))
+        mark_queue_status(queue_id, 'failed', str(error))
         print(f"  ✗ Error: {error}")
         return False
     finally:
@@ -583,7 +584,7 @@ async def main():
                     timeout=120,
                 )
             except asyncio.TimeoutError:
-                mark_queue_status(queue_item.get('id'), 'pending', 'Processing timeout (120s)')
+                mark_queue_status(queue_item.get('id'), 'failed', 'Processing timeout (120s)')
                 print(f"→ Processing {queue_item.get('receipt_url')}\n  ✗ Error: Processing timeout (120s)")
                 is_ok = False
 

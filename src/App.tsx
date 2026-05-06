@@ -219,6 +219,18 @@ interface ContactMessageItem {
   created_at: string;
 }
 
+interface ReceiptLinkItem {
+  id: string;
+  receipt_url: string;
+  telegram_id?: string | null;
+  city?: string | null;
+  status?: string | null;
+  error_message?: string | null;
+  created_at?: string | null;
+  processed_at?: string | null;
+  pipeline_status: 'scanned' | 'failed' | 'unscanned';
+}
+
 function getWeekNumber(date: Date) {
   const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
   const dayNum = d.getUTCDay() || 7;
@@ -265,7 +277,7 @@ export default function App() {
   const [moderationItems, setModerationItems] = useState<PendingModerationItem[]>([]);
   const [approvedItems, setApprovedItems] = useState<ApprovedModerationItem[]>([]);
   const [productAdminItems, setProductAdminItems] = useState<ProductAdminItem[]>([]);
-  const [moderationSection, setModerationSection] = useState<'prices' | 'products' | 'messages'>('prices');
+  const [moderationSection, setModerationSection] = useState<'prices' | 'products' | 'links' | 'messages'>('prices');
   const [activeProductId, setActiveProductId] = useState<string | null>(null);
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
   const [productTablePage, setProductTablePage] = useState(0);
@@ -282,6 +294,11 @@ export default function App() {
   const [productAdminLoading, setProductAdminLoading] = useState(false);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [contactMessages, setContactMessages] = useState<ContactMessageItem[]>([]);
+  const [linksLoading, setLinksLoading] = useState(false);
+  const [receiptLinks, setReceiptLinks] = useState<ReceiptLinkItem[]>([]);
+  const [selectedReceiptLinkIds, setSelectedReceiptLinkIds] = useState<string[]>([]);
+  const [receiptLinkStatusFilter, setReceiptLinkStatusFilter] = useState<'all' | 'scanned' | 'failed' | 'unscanned'>('all');
+  const [receiptLinkSearch, setReceiptLinkSearch] = useState('');
   const [selectedModerationIds, setSelectedModerationIds] = useState<string[]>([]);
   const [selectedApprovedIds, setSelectedApprovedIds] = useState<string[]>([]);
   const [scrapeLoadingStores, setScrapeLoadingStores] = useState<ScrapeStoreKey[]>([]);
@@ -486,6 +503,7 @@ export default function App() {
         productsTab: 'Mahsulotlar',
         pricesTab: 'Narxlar',
         messagesTab: 'Xabarlar',
+        linksTab: 'Havolalar',
         scrapeImport: 'Import qilish',
         scrapeMakro: 'Makro narxlari',
         scrapeKorzinka: 'Korzinka narxlari',
@@ -501,12 +519,26 @@ export default function App() {
         normalizeCompleted: (successCount: number, errorCount: number) => `Normallashtirish tugadi: ${successCount} SQL, ${errorCount} xato`,
         approvedThenNormalize: (approvedCount: number) => `✅ ${approvedCount} ta narx tasdiqlandi → 🔄 Normallashtirish boshlandi...`,
         queueDownload: 'Navbatni yuklab olish (JSON)',
+        queueDownloadNonNormalized: 'Normallanmaganlarni yuklab olish',
         queueUpload: 'Normallashtirilgan faylni yuklash',
         queueUploading: 'Yuklanmoqda...',
         approvedToQueue: (approvedCount: number) => `✅ ${approvedCount} ta narx normallashtirish navbatiga yuborildi`,
         queueImportDone: (importedCount: number, remainingCount: number) => `Import yakunlandi: ${importedCount} ta narx bazaga qo\'shildi, navbatda ${remainingCount} qoldi`,
         messagesTitle: 'Foydalanuvchi xabarlari',
         messagesEmpty: 'Xabarlar yo‘q',
+        linksTitle: 'Chek havolalari navbati',
+        linksEmpty: 'Havolalar topilmadi',
+        linksFilterSearch: 'Havola yoki Telegram ID bo‘yicha qidirish',
+        linksFilterStatus: 'Status filtri',
+        linksStatusScanned: 'Scanned',
+        linksStatusFailed: 'Failed',
+        linksStatusUnscanned: 'Unscanned',
+        linksSetScanned: 'Scanned qilib belgilash',
+        linksSetFailed: 'Failed qilib belgilash',
+        linksSetUnscanned: 'Pipeline ga qaytarish',
+        linksDeleteSelected: 'Tanlangan havolalarni o‘chirish',
+        linksUpdated: 'Havola statuslari yangilandi ✅',
+        linksDeleted: 'Tanlangan havolalar o‘chirildi ✅',
         contactReceivedAt: 'Qabul qilingan',
         contactNameLabel: 'Ism',
         contactChannelLabel: 'Aloqa',
@@ -786,6 +818,7 @@ export default function App() {
         productsTab: 'Товары',
         pricesTab: 'Цены',
         messagesTab: 'Сообщения',
+        linksTab: 'Ссылки',
         scrapeImport: 'Импорт',
         scrapeMakro: 'Цены Makro',
         scrapeKorzinka: 'Цены Korzinka',
@@ -801,12 +834,26 @@ export default function App() {
         normalizeCompleted: (successCount: number, errorCount: number) => `Нормализация завершена: ${successCount} SQL, ошибок: ${errorCount}`,
         approvedThenNormalize: (approvedCount: number) => `✅ Одобрено ${approvedCount} цен → 🔄 Нормализация запущена...`,
         queueDownload: 'Скачать очередь (JSON)',
+        queueDownloadNonNormalized: 'Скачать ненормализованные',
         queueUpload: 'Загрузить нормализованный файл',
         queueUploading: 'Загрузка...',
         approvedToQueue: (approvedCount: number) => `✅ ${approvedCount} цен отправлено в очередь нормализации`,
         queueImportDone: (importedCount: number, remainingCount: number) => `Импорт завершен: ${importedCount} цен добавлено в базу, в очереди осталось ${remainingCount}`,
         messagesTitle: 'Сообщения от пользователей',
         messagesEmpty: 'Сообщений пока нет',
+        linksTitle: 'Очередь ссылок чеков',
+        linksEmpty: 'Ссылки не найдены',
+        linksFilterSearch: 'Поиск по ссылке или Telegram ID',
+        linksFilterStatus: 'Фильтр статуса',
+        linksStatusScanned: 'Scanned',
+        linksStatusFailed: 'Failed',
+        linksStatusUnscanned: 'Unscanned',
+        linksSetScanned: 'Пометить как scanned',
+        linksSetFailed: 'Пометить как failed',
+        linksSetUnscanned: 'Вернуть в pipeline',
+        linksDeleteSelected: 'Удалить выбранные ссылки',
+        linksUpdated: 'Статусы ссылок обновлены ✅',
+        linksDeleted: 'Выбранные ссылки удалены ✅',
         contactReceivedAt: 'Получено',
         contactNameLabel: 'Имя',
         contactChannelLabel: 'Контакт',
@@ -1086,6 +1133,7 @@ export default function App() {
         productsTab: 'Products',
         pricesTab: 'Prices',
         messagesTab: 'Messages',
+        linksTab: 'Links',
         scrapeImport: 'Import',
         scrapeMakro: 'Makro prices',
         scrapeKorzinka: 'Korzinka prices',
@@ -1101,12 +1149,26 @@ export default function App() {
         normalizeCompleted: (successCount: number, errorCount: number) => `Normalization finished: ${successCount} SQL, errors: ${errorCount}`,
         approvedThenNormalize: (approvedCount: number) => `✅ ${approvedCount} prices approved → 🔄 Normalization started...`,
         queueDownload: 'Download queue (JSON)',
+        queueDownloadNonNormalized: 'Download non-normalized',
         queueUpload: 'Upload normalized file',
         queueUploading: 'Uploading...',
         approvedToQueue: (approvedCount: number) => `✅ ${approvedCount} prices sent to normalization queue`,
         queueImportDone: (importedCount: number, remainingCount: number) => `Import complete: ${importedCount} prices added to database, ${remainingCount} still in queue`,
         messagesTitle: 'User messages',
         messagesEmpty: 'No messages yet',
+        linksTitle: 'Receipt links queue',
+        linksEmpty: 'No links found',
+        linksFilterSearch: 'Search by URL or Telegram ID',
+        linksFilterStatus: 'Status filter',
+        linksStatusScanned: 'Scanned',
+        linksStatusFailed: 'Failed',
+        linksStatusUnscanned: 'Unscanned',
+        linksSetScanned: 'Set scanned',
+        linksSetFailed: 'Set failed',
+        linksSetUnscanned: 'Requeue to pipeline',
+        linksDeleteSelected: 'Delete selected links',
+        linksUpdated: 'Link statuses updated ✅',
+        linksDeleted: 'Selected links deleted ✅',
         contactReceivedAt: 'Received',
         contactNameLabel: 'Name',
         contactChannelLabel: 'Contact',
@@ -1454,6 +1516,19 @@ export default function App() {
     pending_count: Number(item.pending_count) || 0,
   });
 
+  const normalizeReceiptLinkItem = (item: any): ReceiptLinkItem => {
+    const normalizedStatus = String(item?.pipeline_status || '').trim().toLowerCase();
+    const pipelineStatus = normalizedStatus === 'scanned'
+      ? 'scanned'
+      : (normalizedStatus === 'failed' ? 'failed' : 'unscanned');
+
+    return {
+      ...item,
+      receipt_url: String(item?.receipt_url || '').trim(),
+      pipeline_status: pipelineStatus,
+    };
+  };
+
   const callModerationApi = async (action: string, payload: Record<string, unknown> = {}) => {
     const response = await fetch('/api/moderation', {
       method: 'POST',
@@ -1493,7 +1568,35 @@ export default function App() {
 
       const queueItems = Number(result?.limboItemCount) || 0;
       const groupedProducts = Number(result?.groupedProductCount) || 0;
-      setQueueStatus(`${queueItems} queue items exported (${groupedProducts} grouped products)`);
+      const normalizedInDbCount = Number(result?.normalizedInDbCount) || 0;
+      const nonNormalizedCount = Number(result?.nonNormalizedCount) || 0;
+      const exportedProductCount = Number(result?.exportedProductCount) || groupedProducts;
+      setQueueStatus(`${queueItems} queue items checked · exported ${exportedProductCount}/${groupedProducts} groups (${nonNormalizedCount} non-normalized, ${normalizedInDbCount} already normalized)`);
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } finally {
+      setQueueSyncing(false);
+    }
+  };
+
+  const downloadNonNormalizedQueueJson = async () => {
+    if (!isAdminUser || queueSyncing) return;
+    setQueueSyncing(true);
+    setQueueStatus(null);
+    try {
+      const result = await callModerationApi('downloadNormalizationQueue', { onlyNonNormalized: true });
+      const payload = { products: Array.isArray(result?.products) ? result.products : [] };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `narxi-normalization-non-normalized-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      const groupedProducts = Number(result?.groupedProductCount) || 0;
+      const exportedProductCount = Number(result?.exportedProductCount) || 0;
+      setQueueStatus(`Non-normalized export: ${exportedProductCount} of ${groupedProducts} groups`);
     } catch {
       window.Telegram?.WebApp?.showAlert(t.moderationError);
     } finally {
@@ -1773,6 +1876,75 @@ export default function App() {
       window.Telegram?.WebApp?.showAlert(t.moderationError);
     } finally {
       setMessagesLoading(false);
+    }
+  };
+
+  const fetchReceiptLinks = async () => {
+    if (!isAdminUser || !telegramInitData) return;
+    setLinksLoading(true);
+    try {
+      const result = await callModerationApi('listReceiptLinks');
+      const normalized = (result.items || []).map(normalizeReceiptLinkItem);
+      setReceiptLinks(normalized);
+      setSelectedReceiptLinkIds(prev => prev.filter(id => normalized.some(item => item.id === id)));
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } finally {
+      setLinksLoading(false);
+    }
+  };
+
+  const filteredReceiptLinks = useMemo(() => {
+    const query = receiptLinkSearch.trim().toLowerCase();
+    return receiptLinks.filter(item => {
+      const byStatus = receiptLinkStatusFilter === 'all' || item.pipeline_status === receiptLinkStatusFilter;
+      const byQuery = !query
+        || String(item.receipt_url || '').toLowerCase().includes(query)
+        || String(item.telegram_id || '').toLowerCase().includes(query)
+        || String(item.city || '').toLowerCase().includes(query);
+      return byStatus && byQuery;
+    });
+  }, [receiptLinks, receiptLinkSearch, receiptLinkStatusFilter]);
+
+  const toggleReceiptLinkSelection = (id: string) => {
+    setSelectedReceiptLinkIds(prev => (prev.includes(id) ? prev.filter(itemId => itemId !== id) : [...prev, id]));
+  };
+
+  const selectAllFilteredReceiptLinks = () => {
+    setSelectedReceiptLinkIds(filteredReceiptLinks.map(item => item.id));
+  };
+
+  const clearReceiptLinkSelection = () => {
+    setSelectedReceiptLinkIds([]);
+  };
+
+  const updateSelectedReceiptLinksStatus = async (status: 'scanned' | 'failed' | 'unscanned') => {
+    if (selectedReceiptLinkIds.length === 0) return;
+    setModerationSavingId(`links-status-${status}`);
+    try {
+      await callModerationApi('updateReceiptLinksStatus', { ids: selectedReceiptLinkIds, status });
+      await fetchReceiptLinks();
+      setSelectedReceiptLinkIds([]);
+      window.Telegram?.WebApp?.showAlert(t.linksUpdated);
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } finally {
+      setModerationSavingId(null);
+    }
+  };
+
+  const deleteSelectedReceiptLinks = async () => {
+    if (selectedReceiptLinkIds.length === 0) return;
+    setModerationSavingId('links-delete');
+    try {
+      await callModerationApi('deleteReceiptLinks', { ids: selectedReceiptLinkIds });
+      await fetchReceiptLinks();
+      setSelectedReceiptLinkIds([]);
+      window.Telegram?.WebApp?.showAlert(t.linksDeleted);
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } finally {
+      setModerationSavingId(null);
     }
   };
 
@@ -2259,6 +2431,12 @@ export default function App() {
   useEffect(() => {
     if (mode === 'moderate' && isAdminUser && moderationSection === 'messages') {
       fetchModerationMessages();
+    }
+  }, [mode, isAdminUser, moderationSection]);
+
+  useEffect(() => {
+    if (mode === 'moderate' && isAdminUser && moderationSection === 'links') {
+      fetchReceiptLinks();
     }
   }, [mode, isAdminUser, moderationSection]);
 
@@ -4725,7 +4903,15 @@ export default function App() {
             {/* Row 1: Title + section tabs */}
             <div className="flex items-center justify-between gap-2">
               <h2 className="text-lg font-semibold whitespace-nowrap">
-                {moderationSection === 'prices' ? t.moderationTitle : moderationSection === 'products' ? t.productsTitle : t.messagesTitle}
+                {
+                  moderationSection === 'prices'
+                    ? t.moderationTitle
+                    : moderationSection === 'products'
+                      ? t.productsTitle
+                      : moderationSection === 'links'
+                        ? t.linksTitle
+                        : t.messagesTitle
+                }
               </h2>
               <div className="flex items-center gap-1">
                 <button
@@ -4747,6 +4933,15 @@ export default function App() {
                   {t.productsTab}
                 </button>
                 <button
+                  onClick={() => setModerationSection('links')}
+                  className={cn(
+                    'rounded-lg px-3 py-1.5 text-xs font-semibold',
+                    moderationSection === 'links' ? 'bg-emerald-600 text-white' : 'border border-stone-200 bg-white text-stone-600'
+                  )}
+                >
+                  {t.linksTab}
+                </button>
+                <button
                   onClick={() => setModerationSection('messages')}
                   className={cn(
                     'rounded-lg px-3 py-1.5 text-xs font-semibold',
@@ -4761,7 +4956,9 @@ export default function App() {
                       ? fetchModerationItems
                       : moderationSection === 'products'
                         ? fetchModerationProducts
-                        : fetchModerationMessages
+                        : moderationSection === 'links'
+                          ? fetchReceiptLinks
+                          : fetchModerationMessages
                   }
                   className="rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-stone-600"
                 >
@@ -4829,6 +5026,13 @@ export default function App() {
                     className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 disabled:opacity-50"
                   >
                     <span className="inline-flex items-center gap-1"><Download className="h-3.5 w-3.5" /> {t.queueDownload}</span>
+                  </button>
+                  <button
+                    onClick={downloadNonNormalizedQueueJson}
+                    disabled={queueSyncing}
+                    className="rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-1.5 text-xs font-semibold text-cyan-700 disabled:opacity-50"
+                  >
+                    <span className="inline-flex items-center gap-1"><Download className="h-3.5 w-3.5" /> {t.queueDownloadNonNormalized}</span>
                   </button>
                   <label className={cn("rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 cursor-pointer", queueSyncing && "opacity-50 pointer-events-none")}>
                     <span className="inline-flex items-center gap-1"><Upload className="h-3.5 w-3.5" /> {queueSyncing ? t.queueUploading : t.queueUpload}</span>
@@ -5329,6 +5533,116 @@ export default function App() {
                       </div>
                     </div>
                   </section>
+                )}
+              </div>
+            ) : moderationSection === 'links' ? (
+              <div className="space-y-3">
+                <section className="rounded-2xl border border-stone-200 bg-white p-3 shadow-sm space-y-3">
+                  <div className="grid gap-2 md:grid-cols-3">
+                    <input
+                      value={receiptLinkSearch}
+                      onChange={(e) => setReceiptLinkSearch(e.target.value)}
+                      title={t.linksFilterSearch}
+                      placeholder={t.linksFilterSearch}
+                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm"
+                    />
+                    <select
+                      value={receiptLinkStatusFilter}
+                      onChange={(e) => setReceiptLinkStatusFilter(e.target.value as 'all' | 'scanned' | 'failed' | 'unscanned')}
+                      title={t.linksFilterStatus}
+                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm"
+                    >
+                      <option value="all">{t.linksFilterStatus}: {t.allLabel}</option>
+                      <option value="unscanned">{t.linksStatusUnscanned}</option>
+                      <option value="failed">{t.linksStatusFailed}</option>
+                      <option value="scanned">{t.linksStatusScanned}</option>
+                    </select>
+                    <div className="flex items-center justify-between rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs text-stone-600">
+                      <span>{t.productTableTotal}</span>
+                      <span>{filteredReceiptLinks.length}</span>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button onClick={selectAllFilteredReceiptLinks} className="rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-xs font-medium text-stone-700">{t.moderationSelectAll}</button>
+                    <button onClick={clearReceiptLinkSelection} className="rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-xs font-medium text-stone-700">{t.moderationClearSelection}</button>
+                    <button onClick={() => updateSelectedReceiptLinksStatus('unscanned')} disabled={selectedReceiptLinkIds.length === 0 || String(moderationSavingId || '').startsWith('links-status-')} className="rounded-lg bg-amber-500 px-2 py-1.5 text-xs font-semibold text-white disabled:opacity-50">{t.linksSetUnscanned} ({selectedReceiptLinkIds.length})</button>
+                    <button onClick={() => updateSelectedReceiptLinksStatus('failed')} disabled={selectedReceiptLinkIds.length === 0 || String(moderationSavingId || '').startsWith('links-status-')} className="rounded-lg bg-rose-600 px-2 py-1.5 text-xs font-semibold text-white disabled:opacity-50">{t.linksSetFailed}</button>
+                    <button onClick={() => updateSelectedReceiptLinksStatus('scanned')} disabled={selectedReceiptLinkIds.length === 0 || String(moderationSavingId || '').startsWith('links-status-')} className="rounded-lg bg-emerald-600 px-2 py-1.5 text-xs font-semibold text-white disabled:opacity-50">{t.linksSetScanned}</button>
+                    <button onClick={deleteSelectedReceiptLinks} disabled={selectedReceiptLinkIds.length === 0 || moderationSavingId === 'links-delete'} className="rounded-lg bg-stone-800 px-2 py-1.5 text-xs font-semibold text-white disabled:opacity-50">{t.linksDeleteSelected}</button>
+                  </div>
+                </section>
+
+                {linksLoading ? (
+                  <div className="animate-pulse space-y-2">
+                    {[1, 2, 3, 4].map(i => <div key={i} className="h-10 bg-stone-200 rounded" />)}
+                  </div>
+                ) : filteredReceiptLinks.length === 0 ? (
+                  <div className="rounded-2xl border border-stone-200 bg-white p-8 text-center text-stone-500">{t.linksEmpty}</div>
+                ) : (
+                  <div className="rounded-xl border border-stone-200 bg-white shadow-sm overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-stone-200 bg-stone-50 text-left text-stone-600">
+                          <th className="px-2 py-2 w-8">
+                            <input
+                              type="checkbox"
+                              title={t.moderationSelectAll}
+                              checked={filteredReceiptLinks.length > 0 && filteredReceiptLinks.every(item => selectedReceiptLinkIds.includes(item.id))}
+                              onChange={() => {
+                                const allSelected = filteredReceiptLinks.length > 0 && filteredReceiptLinks.every(item => selectedReceiptLinkIds.includes(item.id));
+                                setSelectedReceiptLinkIds(prev => allSelected
+                                  ? prev.filter(id => !filteredReceiptLinks.some(item => item.id === id))
+                                  : [...new Set([...prev, ...filteredReceiptLinks.map(item => item.id)])]
+                                );
+                              }}
+                            />
+                          </th>
+                          <th className="px-2 py-2 font-semibold">URL</th>
+                          <th className="px-2 py-2 font-semibold">Status</th>
+                          <th className="px-2 py-2 font-semibold">Telegram</th>
+                          <th className="px-2 py-2 font-semibold">{t.cityLabel}</th>
+                          <th className="px-2 py-2 font-semibold">Created</th>
+                          <th className="px-2 py-2 font-semibold">Error</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredReceiptLinks.map((item) => (
+                          <tr key={item.id} className="border-b border-stone-100 align-top">
+                            <td className="px-2 py-2">
+                              <input
+                                type="checkbox"
+                                title={t.moderationSelectAll}
+                                checked={selectedReceiptLinkIds.includes(item.id)}
+                                onChange={() => toggleReceiptLinkSelection(item.id)}
+                              />
+                            </td>
+                            <td className="px-2 py-2 max-w-70 break-all text-stone-700">{item.receipt_url || '-'}</td>
+                            <td className="px-2 py-2">
+                              <span className={cn(
+                                'inline-flex rounded-full px-2 py-0.5 font-semibold',
+                                item.pipeline_status === 'scanned'
+                                  ? 'bg-emerald-100 text-emerald-700'
+                                  : item.pipeline_status === 'failed'
+                                    ? 'bg-rose-100 text-rose-700'
+                                    : 'bg-amber-100 text-amber-800'
+                              )}>
+                                {item.pipeline_status === 'scanned'
+                                  ? t.linksStatusScanned
+                                  : item.pipeline_status === 'failed'
+                                    ? t.linksStatusFailed
+                                    : t.linksStatusUnscanned}
+                              </span>
+                            </td>
+                            <td className="px-2 py-2 text-stone-600">{item.telegram_id || '-'}</td>
+                            <td className="px-2 py-2 text-stone-600">{item.city || '-'}</td>
+                            <td className="px-2 py-2 text-stone-600">{item.created_at ? formatDistanceToNow(new Date(item.created_at), { addSuffix: true, locale: reportLocale }) : '-'}</td>
+                            <td className="px-2 py-2 max-w-55 wrap-break-word text-rose-700">{item.error_message || '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
               </div>
             ) : (

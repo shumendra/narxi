@@ -32,6 +32,9 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const LIMBO_APPROVED_STATUS = 'approved_limbo';
 const LIMBO_IMPORTED_STATUS = 'imported';
 const LIMBO_EXPORT_PREFIX = 'limbo:';
+const RECEIPT_PIPELINE_STATUS_SCANNED = 'scanned';
+const RECEIPT_PIPELINE_STATUS_FAILED = 'failed';
+const RECEIPT_PIPELINE_STATUS_UNSCANNED = 'unscanned';
 
 function send(res, status, body) {
   res.status(status);
@@ -809,18 +812,27 @@ async function upsertProductAlias(productId, aliasText, storeName = null) {
 
   const { data: existing, error: existingError } = await supabase
     .from('product_aliases')
-    .select('id,times_seen')
+    .select('id,times_seen,store_name')
     .eq('product_id', productId)
     .ilike('alias_text', normalizedAlias)
-    .is('store_name', normalizedStore)
+    .limit(1)
     .maybeSingle();
 
   if (existingError) return;
 
   if (existing?.id) {
+    const nextPayload = {
+      times_seen: (Number(existing.times_seen) || 1) + 1,
+      language,
+    };
+
+    if (!normalizeMaybeText(existing.store_name) && normalizedStore) {
+      nextPayload.store_name = normalizedStore;
+    }
+
     await supabase
       .from('product_aliases')
-      .update({ times_seen: (Number(existing.times_seen) || 1) + 1, language })
+      .update(nextPayload)
       .eq('id', existing.id);
     return;
   }
@@ -905,32 +917,144 @@ function normalizeProductNameKey(value) {
     .trim();
 }
 
-function buildNormalizationQueueProducts(items) {
+function registerProductNameKey(map, productId, rawName) {
+  const key = normalizeProductNameKey(rawName);
+  if (!productId || !key) return;
+
+  if (!map.has(key)) {
+    map.set(key, new Set());
+  }
+  map.get(key).add(productId);
+}
+
+async function buildProductNameIndex() {
+  const [products, aliases] = await Promise.all([
+    fetchAllPages((from, to) => (
+      supabase
+        .from('products')
+        .select('id,name_uz,name_ru,name_en,category,unit')
+        .order('name_uz', { ascending: true })
+        .range(from, to)
+    )),
+    fetchAllPages((from, to) => (
+      supabase
+        .from('product_aliases')
+        .select('product_id,alias_text')
+        .range(from, to)
+    )),
+  ]);
+
+  const keyToProductIds = new Map();
+  const productById = new Map();
+
+  for (const product of products || []) {
+    if (!product?.id) continue;
+    productById.set(product.id, product);
+    registerProductNameKey(keyToProductIds, product.id, product.name_uz);
+    registerProductNameKey(keyToProductIds, product.id, product.name_ru);
+    registerProductNameKey(keyToProductIds, product.id, product.name_en);
+  }
+
+  for (const alias of aliases || []) {
+    registerProductNameKey(keyToProductIds, alias?.product_id, alias?.alias_text);
+  }
+
+  return { keyToProductIds, productById };
+}
+
+function getNormalizationEntryNameKeys(entry) {
+  const keys = new Set();
+  const push = (value) => {
+    const key = normalizeProductNameKey(value);
+    if (key) keys.add(key);
+  };
+
+  const canonical = entry?.canonical && typeof entry.canonical === 'object'
+    ? entry.canonical
+    : {};
+
+  push(canonical?.name_uz);
+  push(canonical?.name_ru);
+  push(canonical?.name_en);
+
+  const names = Array.isArray(entry?.names) ? entry.names : [];
+  for (const alias of names) {
+    push(alias?.alias_text);
+  }
+
+  const originalNames = Array.isArray(entry?.original_names) ? entry.original_names : [];
+  for (const originalName of originalNames) {
+    push(originalName);
+  }
+
+  return [...keys];
+}
+
+function resolveEntryProductIdFromIndex(entry, keyToProductIds) {
+  const matchingProductIds = new Set();
+  const keys = getNormalizationEntryNameKeys(entry);
+
+  for (const key of keys) {
+    const productIds = keyToProductIds.get(key) || new Set();
+    for (const productId of productIds) {
+      matchingProductIds.add(productId);
+    }
+  }
+
+  if (matchingProductIds.size === 1) {
+    return [...matchingProductIds][0];
+  }
+
+  return null;
+}
+
+function buildNormalizationQueueProducts(items, options = {}) {
+  const keyToProductIds = options?.keyToProductIds instanceof Map ? options.keyToProductIds : new Map();
+  const productById = options?.productById instanceof Map ? options.productById : new Map();
   const grouped = new Map();
 
   for (const item of items || []) {
     const rawName = String(item?.product_name_raw || '').trim();
     if (!rawName) continue;
 
-    const key = normalizeAliasKey(rawName);
+    const key = normalizeProductNameKey(rawName);
+    if (!key) continue;
+
     if (!grouped.has(key)) {
+      const matchedProductIds = Array.from(keyToProductIds.get(key) || []);
+      const uniqueMatchedProductId = matchedProductIds.length === 1 ? matchedProductIds[0] : null;
+      const matchedProduct = uniqueMatchedProductId ? productById.get(uniqueMatchedProductId) : null;
+      const normalizationState = uniqueMatchedProductId
+        ? 'normalized'
+        : (matchedProductIds.length > 1 ? 'ambiguous' : 'none');
+
       grouped.set(key, {
-        product_id: buildLimboProductId(rawName),
+        product_id: uniqueMatchedProductId || buildLimboProductId(rawName),
         canonical: {
-          name_uz: rawName,
-          name_ru: rawName,
-          name_en: rawName,
+          name_uz: normalizeMaybeText(matchedProduct?.name_uz) || rawName,
+          name_ru: normalizeMaybeText(matchedProduct?.name_ru) || rawName,
+          name_en: normalizeMaybeText(matchedProduct?.name_en) || rawName,
         },
-        category: 'Boshqa',
-        unit: 'dona',
+        category: normalizeMaybeText(matchedProduct?.category) || 'Boshqa',
+        unit: normalizeMaybeText(matchedProduct?.unit) || 'dona',
         names: [],
+        original_names: [],
+        normalized_in_db: normalizationState === 'normalized',
+        normalization_state: normalizationState,
+        matched_product_id: uniqueMatchedProductId,
+        matched_product_name: normalizeMaybeText(matchedProduct?.name_uz),
       });
     }
 
     const row = grouped.get(key);
+
+    if (!row.original_names.some(name => normalizeAliasKey(name) === normalizeAliasKey(rawName))) {
+      row.original_names.push(rawName);
+    }
+
     const storeName = normalizeMaybeText(item?.place_name);
     const aliasExists = row.names.some(alias => (
-      normalizeAliasKey(alias.alias_text) === key
+      normalizeProductNameKey(alias.alias_text) === key
       && normalizeAliasKey(alias.store_name || '') === normalizeAliasKey(storeName || '')
     ));
 
@@ -946,7 +1070,7 @@ function buildNormalizationQueueProducts(items) {
   return [...grouped.values()].sort((left, right) => String(left?.canonical?.name_uz || '').localeCompare(String(right?.canonical?.name_uz || '')));
 }
 
-async function resolveNormalizedEntryProduct(entry) {
+async function resolveNormalizedEntryProduct(entry, preferredProductId = null) {
   const canonical = entry?.canonical && typeof entry.canonical === 'object'
     ? entry.canonical
     : {};
@@ -966,7 +1090,6 @@ async function resolveNormalizedEntryProduct(entry) {
   const unit = normalizeMaybeText(entry?.unit) || 'dona';
   const searchText = `${nameUz} ${nameRu} ${nameEn}`.trim();
 
-  const requestedProductId = String(entry?.product_id || '').trim();
   const updates = {
     name_uz: nameUz,
     name_ru: nameRu,
@@ -975,6 +1098,28 @@ async function resolveNormalizedEntryProduct(entry) {
     unit,
     search_text: searchText,
   };
+
+  const preferredId = String(preferredProductId || '').trim();
+  if (preferredId && !preferredId.startsWith(LIMBO_EXPORT_PREFIX)) {
+    const { data: preferredExisting, error: preferredExistingError } = await supabase
+      .from('products')
+      .select('id')
+      .eq('id', preferredId)
+      .maybeSingle();
+
+    if (preferredExistingError) throw preferredExistingError;
+
+    if (preferredExisting?.id) {
+      const { error: updateError } = await supabase
+        .from('products')
+        .update(updates)
+        .eq('id', preferredExisting.id);
+      if (updateError) throw updateError;
+      return { productId: preferredExisting.id, created: false, updated: true, canonical: updates };
+    }
+  }
+
+  const requestedProductId = String(entry?.product_id || '').trim();
 
   if (requestedProductId && !requestedProductId.startsWith(LIMBO_EXPORT_PREFIX)) {
     const { data: existingById, error: existingByIdError } = await supabase
@@ -1107,7 +1252,7 @@ async function insertApprovedPriceRow({ pending, productId, context }) {
   await upsertProductAlias(productId, pending?.product_name_raw, placeName || null);
 }
 
-async function exportNormalizationQueue() {
+async function exportNormalizationQueue({ onlyNonNormalized = false } = {}) {
   const limboItems = await fetchAllPages((from, to) => (
     supabase
       .from('pending_prices')
@@ -1117,11 +1262,23 @@ async function exportNormalizationQueue() {
       .range(from, to)
   ));
 
-  const products = buildNormalizationQueueProducts(limboItems);
+  const { keyToProductIds, productById } = await buildProductNameIndex();
+  const products = buildNormalizationQueueProducts(limboItems, { keyToProductIds, productById });
+  const normalizedInDbCount = products.filter(item => item?.normalized_in_db === true).length;
+  const nonNormalizedCount = products.length - normalizedInDbCount;
+  const ambiguousCount = products.filter(item => item?.normalization_state === 'ambiguous').length;
+  const exportedProducts = onlyNonNormalized
+    ? products.filter(item => item?.normalized_in_db !== true)
+    : products;
+
   return {
-    products,
+    products: exportedProducts,
     limboItemCount: limboItems.length,
     groupedProductCount: products.length,
+    exportedProductCount: exportedProducts.length,
+    normalizedInDbCount,
+    nonNormalizedCount,
+    ambiguousCount,
   };
 }
 
@@ -1156,10 +1313,25 @@ async function importNormalizationQueue(productsInput) {
     };
   }
 
+  const { keyToProductIds } = await buildProductNameIndex();
+  const registerKnownProductName = (productId, rawName) => {
+    registerProductNameKey(keyToProductIds, productId, rawName);
+  };
+
   const aliasToProductId = new Map();
   const ambiguousAliasKeys = new Set();
+
+  for (const [key, productIdsSet] of keyToProductIds.entries()) {
+    const productIds = Array.from(productIdsSet || []);
+    if (productIds.length === 1) {
+      aliasToProductId.set(key, productIds[0]);
+    } else if (productIds.length > 1) {
+      ambiguousAliasKeys.add(key);
+    }
+  }
+
   const assignAliasToProduct = (rawKey, productId) => {
-    const key = normalizeAliasKey(rawKey);
+    const key = normalizeProductNameKey(rawKey);
     if (!key || !productId || ambiguousAliasKeys.has(key)) return;
 
     const existing = aliasToProductId.get(key);
@@ -1178,7 +1350,8 @@ async function importNormalizationQueue(productsInput) {
   let aliasesProcessed = 0;
 
   for (const entry of normalizedProducts) {
-    const resolved = await resolveNormalizedEntryProduct(entry);
+    const preferredProductId = resolveEntryProductIdFromIndex(entry, keyToProductIds);
+    const resolved = await resolveNormalizedEntryProduct(entry, preferredProductId);
     if (!resolved?.productId) continue;
 
     if (resolved.created) createdProducts += 1;
@@ -1192,16 +1365,24 @@ async function importNormalizationQueue(productsInput) {
 
     for (const canonicalName of canonicalCandidates) {
       assignAliasToProduct(canonicalName, resolved.productId);
+      registerKnownProductName(resolved.productId, canonicalName);
     }
 
-    const names = Array.isArray(entry?.names) ? entry.names : [];
+    const names = [
+      ...(Array.isArray(entry?.names) ? entry.names : []),
+      ...((Array.isArray(entry?.original_names) ? entry.original_names : []).map((aliasText) => ({
+        alias_text: aliasText,
+        language: detectAliasLanguage(aliasText),
+        store_name: null,
+      }))),
+    ];
     const seenAliasRows = new Set();
 
     for (const alias of names) {
       const aliasText = String(alias?.alias_text || '').trim();
       if (!aliasText) continue;
       const storeName = normalizeMaybeText(alias?.store_name);
-      const dedupeKey = `${normalizeAliasKey(aliasText)}|${normalizeAliasKey(storeName || '')}`;
+      const dedupeKey = normalizeProductNameKey(aliasText);
       if (seenAliasRows.has(dedupeKey)) continue;
       seenAliasRows.add(dedupeKey);
 
@@ -1209,6 +1390,7 @@ async function importNormalizationQueue(productsInput) {
       aliasesProcessed += 1;
 
       assignAliasToProduct(aliasText, resolved.productId);
+      registerKnownProductName(resolved.productId, aliasText);
     }
   }
 
@@ -1220,7 +1402,7 @@ async function importNormalizationQueue(productsInput) {
   let importedCount = 0;
 
   for (const pending of limboItems) {
-    const rawNameKey = normalizeAliasKey(pending?.product_name_raw);
+    const rawNameKey = normalizeProductNameKey(pending?.product_name_raw);
     const productId = aliasToProductId.get(rawNameKey);
 
     if (!productId) {
@@ -1602,6 +1784,114 @@ async function listContactMessages() {
   }
 }
 
+function normalizeReceiptPipelineFilter(value) {
+  const normalized = normalizeAliasKey(value || 'all');
+  if (normalized === RECEIPT_PIPELINE_STATUS_SCANNED) return RECEIPT_PIPELINE_STATUS_SCANNED;
+  if (normalized === RECEIPT_PIPELINE_STATUS_FAILED) return RECEIPT_PIPELINE_STATUS_FAILED;
+  if (normalized === RECEIPT_PIPELINE_STATUS_UNSCANNED) return RECEIPT_PIPELINE_STATUS_UNSCANNED;
+  return 'all';
+}
+
+function mapReceiptQueueStatusToPipeline(queueStatus, errorMessage = null) {
+  const normalized = normalizeAliasKey(queueStatus || '');
+  const hasError = Boolean(normalizeMaybeText(errorMessage));
+
+  if (normalized === 'processed' || normalized === 'done' || normalized === 'completed' || normalized === 'scanned') {
+    return RECEIPT_PIPELINE_STATUS_SCANNED;
+  }
+
+  if (normalized === 'failed' || normalized === 'error' || hasError) {
+    return RECEIPT_PIPELINE_STATUS_FAILED;
+  }
+
+  return RECEIPT_PIPELINE_STATUS_UNSCANNED;
+}
+
+function mapPipelineStatusToReceiptQueueStatus(pipelineStatus) {
+  const normalized = normalizeReceiptPipelineFilter(pipelineStatus);
+  if (normalized === RECEIPT_PIPELINE_STATUS_SCANNED) return 'processed';
+  if (normalized === RECEIPT_PIPELINE_STATUS_FAILED) return 'failed';
+  return 'pending';
+}
+
+async function listReceiptLinks(statusFilter = 'all') {
+  const rows = await fetchAllPages((from, to) => (
+    supabase
+      .from('receipt_queue')
+      .select('id,receipt_url,telegram_id,city,status,error_message,created_at,processed_at')
+      .order('created_at', { ascending: false })
+      .range(from, to)
+  ));
+
+  const normalizedFilter = normalizeReceiptPipelineFilter(statusFilter);
+
+  return (rows || [])
+    .map((row) => {
+      const pipelineStatus = mapReceiptQueueStatusToPipeline(row?.status, row?.error_message);
+      return {
+        ...row,
+        pipeline_status: pipelineStatus,
+      };
+    })
+    .filter((row) => normalizedFilter === 'all' || row.pipeline_status === normalizedFilter);
+}
+
+async function updateReceiptLinksStatus(ids, status) {
+  const targetIds = Array.isArray(ids) ? ids.map(id => String(id || '').trim()).filter(Boolean) : [];
+  if (targetIds.length === 0) return { updatedCount: 0 };
+
+  const normalizedStatus = normalizeReceiptPipelineFilter(status);
+  if (normalizedStatus === 'all') {
+    const invalid = new Error('status must be one of: scanned, failed, unscanned');
+    invalid.statusCode = 400;
+    throw invalid;
+  }
+
+  const dbStatus = mapPipelineStatusToReceiptQueueStatus(normalizedStatus);
+  const payload = {
+    status: dbStatus,
+  };
+
+  if (normalizedStatus === RECEIPT_PIPELINE_STATUS_UNSCANNED) {
+    payload.error_message = null;
+    payload.processed_at = null;
+  } else if (normalizedStatus === RECEIPT_PIPELINE_STATUS_SCANNED) {
+    payload.processed_at = new Date().toISOString();
+  } else {
+    payload.processed_at = null;
+  }
+
+  const { data, error } = await supabase
+    .from('receipt_queue')
+    .update(payload)
+    .in('id', targetIds)
+    .select('id');
+
+  if (error) throw error;
+
+  return {
+    updatedCount: Array.isArray(data) ? data.length : 0,
+    status: normalizedStatus,
+  };
+}
+
+async function deleteReceiptLinks(ids) {
+  const targetIds = Array.isArray(ids) ? ids.map(id => String(id || '').trim()).filter(Boolean) : [];
+  if (targetIds.length === 0) return { deletedCount: 0 };
+
+  const { data, error } = await supabase
+    .from('receipt_queue')
+    .delete()
+    .in('id', targetIds)
+    .select('id');
+
+  if (error) throw error;
+
+  return {
+    deletedCount: Array.isArray(data) ? data.length : 0,
+  };
+}
+
 async function updateProduct(id, changes) {
   const payload = {};
   if (typeof changes.name_uz === 'string' && changes.name_uz.trim()) payload.name_uz = changes.name_uz.trim();
@@ -1868,7 +2158,13 @@ export default async function moderation(req, res) {
         });
       }
       case 'downloadNormalizationQueue': {
-        const result = await exportNormalizationQueue();
+        const result = await exportNormalizationQueue({
+          onlyNonNormalized: Boolean(body.onlyNonNormalized),
+        });
+        return send(res, 200, { ok: true, ...result });
+      }
+      case 'downloadNonNormalizedQueue': {
+        const result = await exportNormalizationQueue({ onlyNonNormalized: true });
         return send(res, 200, { ok: true, ...result });
       }
       case 'importNormalizationQueue': {
@@ -1929,6 +2225,18 @@ export default async function moderation(req, res) {
       case 'listContactMessages': {
         const items = await listContactMessages();
         return send(res, 200, { ok: true, items });
+      }
+      case 'listReceiptLinks': {
+        const items = await listReceiptLinks(body.status);
+        return send(res, 200, { ok: true, items });
+      }
+      case 'updateReceiptLinksStatus': {
+        const result = await updateReceiptLinksStatus(body.ids || [], body.status);
+        return send(res, 200, { ok: true, ...result });
+      }
+      case 'deleteReceiptLinks': {
+        const result = await deleteReceiptLinks(body.ids || []);
+        return send(res, 200, { ok: true, ...result });
       }
       default:
         return send(res, 400, { ok: false, error: 'UNKNOWN_ACTION' });

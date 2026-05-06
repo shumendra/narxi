@@ -73,18 +73,27 @@ async function upsertProductAlias(productId, aliasText, storeName = null) {
 
   const { data: existing, error: existingError } = await supabase
     .from('product_aliases')
-    .select('id,times_seen')
+    .select('id,times_seen,store_name')
     .eq('product_id', productId)
     .ilike('alias_text', normalizedAlias)
-    .is('store_name', normalizedStore)
+    .limit(1)
     .maybeSingle();
 
   if (existingError) return;
 
   if (existing?.id) {
+    const nextPayload = {
+      times_seen: (Number(existing.times_seen) || 1) + 1,
+      language,
+    };
+
+    if (!normalizeMaybeText(existing.store_name) && normalizedStore) {
+      nextPayload.store_name = normalizedStore;
+    }
+
     await supabase
       .from('product_aliases')
-      .update({ times_seen: (Number(existing.times_seen) || 1) + 1, language })
+      .update(nextPayload)
       .eq('id', existing.id);
     return;
   }
