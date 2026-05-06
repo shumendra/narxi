@@ -205,6 +205,7 @@ interface ProductAdminItem {
     city?: string | null;
     created_at?: string;
   }>;
+  details_loaded?: boolean;
 }
 
 interface ContactMessageItem {
@@ -265,6 +266,7 @@ function ReportMapPicker({ onPick }: { onPick: (lat: number, lng: number) => voi
 
 type ScrapeStoreKey = 'makro' | 'korzinka' | 'yandex_baraka';
 const SCRAPE_STORES: ScrapeStoreKey[] = ['makro', 'korzinka', 'yandex_baraka'];
+const PRODUCTS_CACHE_TTL_MS = 30000;
 
 export default function App() {
   const SHOW_SHOPPING_PLAN_MENU = false;
@@ -292,6 +294,7 @@ export default function App() {
   const [moderationLoading, setModerationLoading] = useState(false);
   const [moderationSavingId, setModerationSavingId] = useState<string | null>(null);
   const [productAdminLoading, setProductAdminLoading] = useState(false);
+  const [productDetailLoadingId, setProductDetailLoadingId] = useState<string | null>(null);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [contactMessages, setContactMessages] = useState<ContactMessageItem[]>([]);
   const [linksLoading, setLinksLoading] = useState(false);
@@ -1363,6 +1366,8 @@ export default function App() {
   const contactFormRef = useRef<HTMLElement | null>(null);
   const findSearchInputRef = useRef<HTMLInputElement | null>(null);
   const findMapSectionRef = useRef<HTMLElement | null>(null);
+  const productsCacheRef = useRef<{ timestamp: number; data: Product[] } | null>(null);
+  const productsFetchPromiseRef = useRef<Promise<Product[]> | null>(null);
 
 
   useEffect(() => {
@@ -1380,7 +1385,7 @@ export default function App() {
       if (normalizedCity) setSelectedCity(normalizedCity);
     }
 
-    fetchProducts();
+    fetchProducts({ force: true });
     // Pre-fetch known store locations for coordinate-based store identification
     fetchKnownStores().catch(() => {});
   }, [isAdminUser]);
@@ -1432,26 +1437,52 @@ export default function App() {
     upsertMiniAppUser();
   }, [telegramUserId, telegramUser?.username, telegramUser?.first_name, telegramUser?.language_code, lang, selectedCity]);
 
-  const fetchProducts = async () => {
-    const [{ data }, { data: aliases }] = await Promise.all([
-      supabase.from('products').select('*').order('name_uz'),
-      supabase.from('product_aliases').select('product_id, alias_text'),
-    ]);
-    if (data) {
-      // Build alias lookup and enrich search_text
-      const aliasMap: Record<string, string[]> = {};
-      for (const a of aliases || []) {
-        if (!aliasMap[a.product_id]) aliasMap[a.product_id] = [];
-        aliasMap[a.product_id].push(a.alias_text);
-      }
-      const enriched = data.map(p => ({
-        ...p,
-        search_text: [p.search_text || '', ...(aliasMap[p.id] || [])].join(' '),
-      }));
-      setProducts(enriched);
-      return enriched as Product[];
+  const fetchProducts = async (options: { force?: boolean } = {}) => {
+    const force = Boolean(options.force);
+    const now = Date.now();
+
+    if (!force && productsCacheRef.current && (now - productsCacheRef.current.timestamp) < PRODUCTS_CACHE_TTL_MS) {
+      setProducts(productsCacheRef.current.data);
+      return productsCacheRef.current.data;
     }
-    return [] as Product[];
+
+    if (productsFetchPromiseRef.current) {
+      return productsFetchPromiseRef.current;
+    }
+
+    const requestPromise = (async () => {
+      const [{ data }, { data: aliases }] = await Promise.all([
+        supabase.from('products').select('*').order('name_uz'),
+        supabase.from('product_aliases').select('product_id, alias_text'),
+      ]);
+
+      if (data) {
+        const aliasMap: Record<string, string[]> = {};
+        for (const a of aliases || []) {
+          if (!aliasMap[a.product_id]) aliasMap[a.product_id] = [];
+          aliasMap[a.product_id].push(a.alias_text);
+        }
+
+        const enriched = data.map(p => ({
+          ...p,
+          search_text: [p.search_text || '', ...(aliasMap[p.id] || [])].join(' '),
+        })) as Product[];
+
+        productsCacheRef.current = {
+          timestamp: Date.now(),
+          data: enriched,
+        };
+        setProducts(enriched);
+        return enriched;
+      }
+
+      return [] as Product[];
+    })().finally(() => {
+      productsFetchPromiseRef.current = null;
+    });
+
+    productsFetchPromiseRef.current = requestPromise;
+    return requestPromise;
   };
 
   const loadPricesForProduct = async (productId: string) => {
@@ -1514,6 +1545,7 @@ export default function App() {
     pending: Array.isArray(item.pending) ? item.pending : [],
     price_count: Number(item.price_count) || 0,
     pending_count: Number(item.pending_count) || 0,
+    details_loaded: Boolean(item.details_loaded),
   });
 
   const normalizeReceiptLinkItem = (item: any): ReceiptLinkItem => {
@@ -1623,7 +1655,7 @@ export default function App() {
 
       const result = await callModerationApi('importNormalizationQueue', { products });
       await fetchModerationItems();
-      await fetchProducts();
+      await fetchProducts({ force: true });
       if (moderationSection === 'products') await fetchModerationProducts();
 
       const importedCount = Number(result?.importedCount) || 0;
@@ -1753,6 +1785,7 @@ export default function App() {
   const fetchModerationProducts = async () => {
     if (!isAdminUser || !telegramInitData) return;
     setProductAdminLoading(true);
+    setProductDetailLoadingId(null);
     try {
       const result = await callModerationApi('listProducts');
       const normalized = (result.items || []).map(normalizeProductAdminItem);
@@ -1763,6 +1796,36 @@ export default function App() {
       window.Telegram?.WebApp?.showAlert(t.moderationError);
     } finally {
       setProductAdminLoading(false);
+    }
+  };
+
+  const fetchProductLinkedData = async (productId: string) => {
+    const normalizedProductId = String(productId || '').trim();
+    if (!normalizedProductId || !isAdminUser || !telegramInitData) return;
+
+    setProductDetailLoadingId(normalizedProductId);
+    try {
+      const result = await callModerationApi('getProductLinkedData', { id: normalizedProductId });
+      const prices = Array.isArray(result?.prices) ? result.prices : [];
+      const pending = Array.isArray(result?.pending) ? result.pending : [];
+
+      setProductAdminItems(items => items.map(item => (
+        item.id === normalizedProductId
+          ? {
+              ...item,
+              prices,
+              pending,
+              price_count: Number(result?.price_count) || prices.length,
+              pending_count: Number(result?.pending_count) || pending.length,
+              latest_price: result?.latest_price || prices[0] || null,
+              details_loaded: true,
+            }
+          : item
+      )));
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } finally {
+      setProductDetailLoadingId(prev => (prev === normalizedProductId ? null : prev));
     }
   };
 
@@ -1856,7 +1919,7 @@ export default function App() {
       window.Telegram?.WebApp?.showAlert(
         `Done: ${result.canonical_updated || 0} updated, ${result.aliases_inserted || 0} aliases, ${result.products_deleted || 0} deleted${result.errors?.length ? ` (${result.errors.length} errors)` : ''}${queueImported > 0 || queueRemaining > 0 || queueAmbiguousAliases > 0 ? `\nQueue import: ${queueImported} added, ${queueRemaining} still queued${queueAmbiguousAliases > 0 ? `, ambiguous aliases: ${queueAmbiguousAliases}` : ''}` : ''}`
       );
-      await fetchProducts();
+      await fetchProducts({ force: true });
       await fetchModerationItems();
       if (moderationSection === 'products') await fetchModerationProducts();
     } catch (e) {
@@ -2308,7 +2371,7 @@ export default function App() {
         },
       });
       await fetchModerationProducts();
-      await fetchProducts();
+      await fetchProducts({ force: true });
       window.Telegram?.WebApp?.showAlert(t.moderationSaved);
     } catch {
       window.Telegram?.WebApp?.showAlert(t.moderationError);
@@ -2318,13 +2381,31 @@ export default function App() {
   };
 
   const deleteProductItem = async (item: ProductAdminItem) => {
+    const productId = String(item?.id || '').trim();
+    if (!productId) {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+      return;
+    }
+
     setModerationSavingId(item.id);
     try {
-      await callModerationApi('deleteProduct', { id: item.id });
-      await fetchModerationProducts();
-      await fetchProducts();
+      const result = await callModerationApi('deleteProduct', { id: productId });
+      if ((Number(result?.deletedCount) || 0) < 1) {
+        throw new Error('PRODUCT_DELETE_NOOP');
+      }
+
+      // Keep UI responsive by removing deleted product immediately.
+      setProductAdminItems(items => items.filter(existing => existing.id !== productId));
+      setSelectedProductIds(prev => prev.filter(id => id !== productId));
+      setActiveProductId(prev => (prev === productId ? null : prev));
+
+      await Promise.all([
+        fetchModerationProducts(),
+        fetchProducts({ force: true }),
+      ]);
       window.Telegram?.WebApp?.showAlert(t.productDeleted);
-    } catch {
+    } catch (error) {
+      console.error('deleteProduct failed', error);
       window.Telegram?.WebApp?.showAlert(t.moderationError);
     } finally {
       setModerationSavingId(null);
@@ -2344,18 +2425,28 @@ export default function App() {
   };
 
   const deleteSelectedProducts = async () => {
-    if (selectedProductIds.length === 0) return;
+    const idsToDelete = Array.from(new Set(selectedProductIds.map(id => String(id || '').trim()).filter(Boolean)));
+    if (idsToDelete.length === 0) return;
     if (!window.confirm(t.confirmDeleteSelectedProducts)) return;
 
     setModerationSavingId('bulk-delete-products');
     try {
-      await callModerationApi('deleteProductsMany', { ids: selectedProductIds });
-      await fetchModerationProducts();
-      await fetchProducts();
+      const result = await callModerationApi('deleteProductsMany', { ids: idsToDelete });
+      if ((Number(result?.deletedCount) || 0) < 1) {
+        throw new Error('PRODUCT_BULK_DELETE_NOOP');
+      }
+
+      setProductAdminItems(items => items.filter(item => !idsToDelete.includes(item.id)));
       setSelectedProductIds([]);
-      setActiveProductId(null);
+      setActiveProductId(prev => (prev && idsToDelete.includes(prev) ? null : prev));
+
+      await Promise.all([
+        fetchModerationProducts(),
+        fetchProducts({ force: true }),
+      ]);
       window.Telegram?.WebApp?.showAlert(t.productDeleted);
-    } catch {
+    } catch (error) {
+      console.error('deleteProductsMany failed', error);
       window.Telegram?.WebApp?.showAlert(t.moderationError);
     } finally {
       setModerationSavingId(null);
@@ -2369,7 +2460,7 @@ export default function App() {
     try {
       await callModerationApi('purgeAllProductsData');
       await fetchModerationProducts();
-      await fetchProducts();
+      await fetchProducts({ force: true });
       setSelectedProductIds([]);
       setActiveProductId(null);
       window.Telegram?.WebApp?.showAlert(t.productPurgeDone);
@@ -2407,7 +2498,7 @@ export default function App() {
         available_cities: selectedCity,
       });
       await fetchModerationProducts();
-      await fetchProducts();
+      await fetchProducts({ force: true });
       window.Telegram?.WebApp?.showAlert(t.moderationSaved);
     } catch {
       window.Telegram?.WebApp?.showAlert(t.moderationError);
@@ -2427,6 +2518,23 @@ export default function App() {
       fetchModerationProducts();
     }
   }, [mode, isAdminUser, moderationSection]);
+
+  useEffect(() => {
+    if (mode !== 'moderate' || !isAdminUser || moderationSection !== 'products') return;
+    if (!activeProductId) return;
+
+    const activeItem = productAdminItems.find(item => item.id === activeProductId);
+    if (!activeItem || activeItem.details_loaded || productDetailLoadingId === activeProductId) return;
+
+    fetchProductLinkedData(activeProductId);
+  }, [
+    mode,
+    isAdminUser,
+    moderationSection,
+    activeProductId,
+    productAdminItems,
+    productDetailLoadingId,
+  ]);
 
   useEffect(() => {
     if (mode === 'moderate' && isAdminUser && moderationSection === 'messages') {
@@ -5493,6 +5601,12 @@ export default function App() {
                         <button onClick={() => deleteProductItem(activeProductItem)} disabled={moderationSavingId === activeProductItem.id} className="rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{t.productDelete}</button>
                       </div>
                     </div>
+
+                    {productDetailLoadingId === activeProductItem.id && !activeProductItem.details_loaded && (
+                      <div className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs text-stone-600">
+                        {t.scrapeLoading}
+                      </div>
+                    )}
 
                     <div className="grid gap-3 md:grid-cols-2">
                       <input value={activeProductItem.name_uz || ''} onChange={(e) => updateProductField(activeProductItem.id, 'name_uz', e.target.value)} placeholder={t.productNameUz} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm" />

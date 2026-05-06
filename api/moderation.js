@@ -28,6 +28,8 @@ const parsedNormalizationMaxNames = Number.parseInt(process.env.NORMALIZATION_MA
 const NORMALIZATION_MAX_NAMES_PER_RUN = Number.isFinite(parsedNormalizationMaxNames) && parsedNormalizationMaxNames > 0
   ? parsedNormalizationMaxNames
   : 120;
+const BULK_DB_CHUNK_SIZE = 240;
+const BULK_DB_CONCURRENCY = 4;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const LIMBO_APPROVED_STATUS = 'approved_limbo';
 const LIMBO_IMPORTED_STATUS = 'imported';
@@ -35,6 +37,17 @@ const LIMBO_EXPORT_PREFIX = 'limbo:';
 const RECEIPT_PIPELINE_STATUS_SCANNED = 'scanned';
 const RECEIPT_PIPELINE_STATUS_FAILED = 'failed';
 const RECEIPT_PIPELINE_STATUS_UNSCANNED = 'unscanned';
+const SAFE_PERFORMANCE_INDEX_SQL = [
+  'CREATE INDEX IF NOT EXISTS prices_product_id_idx ON prices (product_id);',
+  'CREATE INDEX IF NOT EXISTS prices_product_id_receipt_date_idx ON prices (product_id, receipt_date DESC);',
+  'CREATE INDEX IF NOT EXISTS pending_prices_product_id_idx ON pending_prices (product_id);',
+  'CREATE INDEX IF NOT EXISTS pending_prices_product_id_created_at_idx ON pending_prices (product_id, created_at DESC);',
+  'CREATE INDEX IF NOT EXISTS pending_prices_status_idx ON pending_prices (status);',
+  'CREATE INDEX IF NOT EXISTS product_views_product_id_idx ON product_views (product_id);',
+];
+
+let performanceIndexesChecked = false;
+let ensurePerformanceIndexesPromise = null;
 
 function send(res, status, body) {
   res.status(status);
@@ -228,6 +241,47 @@ function chunkArray(values, size) {
     result.push(values.slice(i, i + size));
   }
   return result;
+}
+
+async function ensurePerformanceIndexes() {
+  if (performanceIndexesChecked) return;
+  if (ensurePerformanceIndexesPromise) {
+    await ensurePerformanceIndexesPromise;
+    return;
+  }
+
+  ensurePerformanceIndexesPromise = (async () => {
+    try {
+      const rpcAvailable = await isExecSqlAvailable();
+      if (!rpcAvailable) return;
+
+      for (const sql of SAFE_PERFORMANCE_INDEX_SQL) {
+        const { error } = await supabase.rpc('exec_sql', { sql });
+        if (!error) continue;
+
+        // If exec_sql cannot run here, keep moderation flow alive.
+        if (isExecSqlUnavailableError(error)) return;
+        if (String(error?.message || '').toLowerCase().includes('permission')) return;
+      }
+    } catch {
+      // Ignore one-time index bootstrap errors.
+    } finally {
+      performanceIndexesChecked = true;
+    }
+  })();
+
+  await ensurePerformanceIndexesPromise;
+  ensurePerformanceIndexesPromise = null;
+}
+
+function normalizeRequiredProductId(id) {
+  const normalized = String(id || '').trim();
+  if (!normalized) {
+    const invalid = new Error('product id is required');
+    invalid.statusCode = 400;
+    throw invalid;
+  }
+  return normalized;
 }
 
 function isMissingRelationError(errorLike) {
@@ -1632,11 +1686,22 @@ async function updateApproved(id, changes) {
   return data;
 }
 
+function buildKnownNameKeySet(product, aliases = []) {
+  return new Set([
+    normalizeProductNameKey(product?.name_uz),
+    normalizeProductNameKey(product?.name_ru),
+    normalizeProductNameKey(product?.name_en),
+    ...(aliases || []).map(alias => normalizeProductNameKey(alias)),
+  ].filter(Boolean));
+}
+
 async function listProducts() {
+  await ensurePerformanceIndexes();
+
   const products = await fetchAllPages((from, to) => (
     supabase
       .from('products')
-      .select('*')
+      .select('id,name_uz,name_ru,name_en,category,unit,available_cities')
       .order('name_uz', { ascending: true })
       .range(from, to)
   ));
@@ -1645,56 +1710,21 @@ async function listProducts() {
   if (productIds.length === 0) return [];
 
   const idChunks = chunkArray(productIds, 120);
-  const prices = [];
-  const pending = [];
   const aliases = [];
 
-  for (const chunkIds of idChunks) {
-    const [chunkPrices, chunkPending, chunkAliases] = await Promise.all([
-      fetchAllPages((from, to) => (
-        supabase
-          .from('prices')
-          .select('id,product_id,product_name_raw,price,city,place_name,place_address,receipt_date,source')
-          .not('source', 'like', 'history_%')
-          .in('product_id', chunkIds)
-          .order('receipt_date', { ascending: false })
-          .range(from, to)
-      )),
-      fetchAllPages((from, to) => (
-        supabase
-          .from('pending_prices')
-          .select('id,product_id,product_name_raw,status,city,created_at,match_confidence')
-          .in('product_id', chunkIds)
-          .or('status.eq.pending,status.is.null')
-          .order('created_at', { ascending: false })
-          .range(from, to)
-      )),
-      fetchAllPages((from, to) => (
-        supabase
-          .from('product_aliases')
-          .select('product_id,alias_text')
-          .in('product_id', chunkIds)
-          .range(from, to)
-      )),
-    ]);
+  for (let i = 0; i < idChunks.length; i += BULK_DB_CONCURRENCY) {
+    const batch = idChunks.slice(i, i + BULK_DB_CONCURRENCY);
+    const batchAliases = await Promise.all(batch.map((chunkIds) => fetchAllPages((from, to) => (
+      supabase
+        .from('product_aliases')
+        .select('product_id,alias_text')
+        .in('product_id', chunkIds)
+        .range(from, to)
+    ))));
 
-    prices.push(...chunkPrices);
-    pending.push(...chunkPending);
-    aliases.push(...chunkAliases);
-  }
-
-  const pricesByProduct = new Map();
-  for (const row of prices || []) {
-    const list = pricesByProduct.get(row.product_id) || [];
-    list.push(row);
-    pricesByProduct.set(row.product_id, list);
-  }
-
-  const pendingByProduct = new Map();
-  for (const row of pending || []) {
-    const list = pendingByProduct.get(row.product_id) || [];
-    list.push(row);
-    pendingByProduct.set(row.product_id, list);
+    for (const rows of batchAliases) {
+      aliases.push(...rows);
+    }
   }
 
   const aliasTextsByProduct = new Map();
@@ -1704,34 +1734,172 @@ async function listProducts() {
     aliasTextsByProduct.set(row.product_id, list);
   }
 
-  return (products || []).map(product => {
-    const knownNameKeys = new Set([
-      normalizeProductNameKey(product?.name_uz),
-      normalizeProductNameKey(product?.name_ru),
-      normalizeProductNameKey(product?.name_en),
-      ...(aliasTextsByProduct.get(product.id) || []).map(alias => normalizeProductNameKey(alias)),
-    ].filter(Boolean));
+  const knownNameKeysByProduct = new Map();
+  const summaryByProduct = new Map();
 
-    const productPrices = (pricesByProduct.get(product.id) || []).filter(row => (
-      knownNameKeys.has(normalizeProductNameKey(row?.product_name_raw))
-    ));
+  for (const product of products || []) {
+    knownNameKeysByProduct.set(
+      product.id,
+      buildKnownNameKeySet(product, aliasTextsByProduct.get(product.id) || [])
+    );
 
-    const productPending = (pendingByProduct.get(product.id) || []).filter(row => {
-      const normalizedRaw = normalizeProductNameKey(row?.product_name_raw);
-      if (knownNameKeys.has(normalizedRaw)) return true;
-      const confidence = Number(row?.match_confidence || 0);
-      return confidence >= STORE_API_MATCH_MIN_SCORE;
+    summaryByProduct.set(product.id, {
+      price_count: 0,
+      pending_count: 0,
+      latest_price: null,
     });
+  }
+
+  for (let i = 0; i < idChunks.length; i += BULK_DB_CONCURRENCY) {
+    const batch = idChunks.slice(i, i + BULK_DB_CONCURRENCY);
+    const batchRows = await Promise.all(batch.map(async (chunkIds) => {
+      const [chunkPrices, chunkPending] = await Promise.all([
+        fetchAllPages((from, to) => (
+          supabase
+            .from('prices')
+            .select('product_id,product_name_raw,receipt_date')
+            .not('source', 'like', 'history_%')
+            .in('product_id', chunkIds)
+            .order('receipt_date', { ascending: false })
+            .range(from, to)
+        )),
+        fetchAllPages((from, to) => (
+          supabase
+            .from('pending_prices')
+            .select('product_id,product_name_raw,match_confidence')
+            .in('product_id', chunkIds)
+            .or('status.eq.pending,status.is.null')
+            .order('created_at', { ascending: false })
+            .range(from, to)
+        )),
+      ]);
+
+      return { chunkPrices, chunkPending };
+    }));
+
+    for (const { chunkPrices, chunkPending } of batchRows) {
+      for (const row of chunkPrices || []) {
+        const productId = row?.product_id;
+        if (!productId || !summaryByProduct.has(productId)) continue;
+
+        const knownNameKeys = knownNameKeysByProduct.get(productId) || new Set();
+        if (!knownNameKeys.has(normalizeProductNameKey(row?.product_name_raw))) continue;
+
+        const summary = summaryByProduct.get(productId);
+        summary.price_count += 1;
+
+        const currentLatest = summary.latest_price;
+        if (!currentLatest || String(row?.receipt_date || '') > String(currentLatest?.receipt_date || '')) {
+          summary.latest_price = row;
+        }
+      }
+
+      for (const row of chunkPending || []) {
+        const productId = row?.product_id;
+        if (!productId || !summaryByProduct.has(productId)) continue;
+
+        const knownNameKeys = knownNameKeysByProduct.get(productId) || new Set();
+        const normalizedRaw = normalizeProductNameKey(row?.product_name_raw);
+        if (!knownNameKeys.has(normalizedRaw) && Number(row?.match_confidence || 0) < STORE_API_MATCH_MIN_SCORE) {
+          continue;
+        }
+
+        const summary = summaryByProduct.get(productId);
+        summary.pending_count += 1;
+      }
+    }
+  }
+
+  return (products || []).map(product => {
+    const summary = summaryByProduct.get(product.id) || {
+      price_count: 0,
+      pending_count: 0,
+      latest_price: null,
+    };
 
     return {
       ...product,
-      prices: productPrices,
-      pending: productPending,
-      price_count: productPrices.length,
-      pending_count: productPending.length,
-      latest_price: productPrices[0] || null,
+      prices: [],
+      pending: [],
+      price_count: Number(summary.price_count) || 0,
+      pending_count: Number(summary.pending_count) || 0,
+      latest_price: summary.latest_price || null,
+      details_loaded: false,
     };
   });
+}
+
+async function getProductLinkedData(productId) {
+  await ensurePerformanceIndexes();
+  const normalizedProductId = normalizeRequiredProductId(productId);
+
+  const { data: product, error: productError } = await supabase
+    .from('products')
+    .select('id,name_uz,name_ru,name_en')
+    .eq('id', normalizedProductId)
+    .maybeSingle();
+  if (productError) throw productError;
+
+  if (!product?.id) {
+    return {
+      prices: [],
+      pending: [],
+      price_count: 0,
+      pending_count: 0,
+      latest_price: null,
+      details_loaded: true,
+    };
+  }
+
+  const [aliases, pricesRows, pendingRows] = await Promise.all([
+    fetchAllPages((from, to) => (
+      supabase
+        .from('product_aliases')
+        .select('alias_text')
+        .eq('product_id', normalizedProductId)
+        .range(from, to)
+    )),
+    fetchAllPages((from, to) => (
+      supabase
+        .from('prices')
+        .select('id,product_id,product_name_raw,price,city,place_name,place_address,receipt_date,source')
+        .eq('product_id', normalizedProductId)
+        .not('source', 'like', 'history_%')
+        .order('receipt_date', { ascending: false })
+        .range(from, to)
+    )),
+    fetchAllPages((from, to) => (
+      supabase
+        .from('pending_prices')
+        .select('id,product_id,product_name_raw,status,city,created_at,match_confidence')
+        .eq('product_id', normalizedProductId)
+        .or('status.eq.pending,status.is.null')
+        .order('created_at', { ascending: false })
+        .range(from, to)
+    )),
+  ]);
+
+  const aliasTexts = (aliases || []).map(row => row?.alias_text).filter(Boolean);
+  const knownNameKeys = buildKnownNameKeySet(product, aliasTexts);
+
+  const prices = (pricesRows || []).filter(row => (
+    knownNameKeys.has(normalizeProductNameKey(row?.product_name_raw))
+  ));
+
+  const pending = (pendingRows || []).filter(row => {
+    const normalizedRaw = normalizeProductNameKey(row?.product_name_raw);
+    if (knownNameKeys.has(normalizedRaw)) return true;
+    return Number(row?.match_confidence || 0) >= STORE_API_MATCH_MIN_SCORE;
+  });
+
+  return {
+    prices,
+    pending,
+    price_count: prices.length,
+    pending_count: pending.length,
+    latest_price: prices[0] || null,
+    details_loaded: true,
+  };
 }
 
 async function createProduct(payload) {
@@ -1917,21 +2085,84 @@ async function updateProduct(id, changes) {
 }
 
 async function deleteProduct(id) {
-  await supabase.from('prices').delete().eq('product_id', id);
-  await supabase.from('pending_prices').delete().eq('product_id', id);
-  const { error } = await supabase.from('products').delete().eq('id', id);
+  await ensurePerformanceIndexes();
+  const normalizedProductId = normalizeRequiredProductId(id);
+
+  const [pricesDelete, pendingDelete, aliasesDelete] = await Promise.all([
+    supabase.from('prices').delete().eq('product_id', normalizedProductId),
+    supabase.from('pending_prices').delete().eq('product_id', normalizedProductId),
+    supabase.from('product_aliases').delete().eq('product_id', normalizedProductId),
+  ]);
+
+  if (pricesDelete.error) throw pricesDelete.error;
+  if (pendingDelete.error) throw pendingDelete.error;
+  if (aliasesDelete.error) throw aliasesDelete.error;
+
+  // Keep historical views but detach product FK eagerly to avoid expensive FK checks.
+  const { error: detachViewsError } = await supabase
+    .from('product_views')
+    .update({ product_id: null })
+    .eq('product_id', normalizedProductId);
+  if (detachViewsError && !isMissingRelationError(detachViewsError)) throw detachViewsError;
+
+  const { data, error } = await supabase
+    .from('products')
+    .delete()
+    .eq('id', normalizedProductId)
+    .select('id');
   if (error) throw error;
+
+  const deletedCount = Array.isArray(data) ? data.length : 0;
+  if (deletedCount === 0) {
+    const missing = new Error('PRODUCT_NOT_FOUND');
+    missing.statusCode = 404;
+    throw missing;
+  }
+
+  return { deletedCount };
 }
 
 async function deleteProductsMany(ids) {
-  const targetIds = Array.isArray(ids) ? ids.filter(Boolean) : [];
+  await ensurePerformanceIndexes();
+
+  const targetIds = Array.from(new Set(
+    Array.isArray(ids)
+      ? ids.map(value => String(value || '').trim()).filter(Boolean)
+      : []
+  ));
   if (targetIds.length === 0) return { deletedCount: 0 };
 
-  await supabase.from('prices').delete().in('product_id', targetIds);
-  await supabase.from('pending_prices').delete().in('product_id', targetIds);
-  const { error } = await supabase.from('products').delete().in('id', targetIds);
-  if (error) throw error;
-  return { deletedCount: targetIds.length };
+  let deletedCount = 0;
+  const chunks = chunkArray(targetIds, BULK_DB_CHUNK_SIZE);
+
+  for (let i = 0; i < chunks.length; i += BULK_DB_CONCURRENCY) {
+    const batch = chunks.slice(i, i + BULK_DB_CONCURRENCY);
+    const batchDeleted = await Promise.all(batch.map(async (chunkIds) => {
+      const [pricesDelete, pendingDelete, aliasesDelete, detachViews] = await Promise.all([
+        supabase.from('prices').delete().in('product_id', chunkIds),
+        supabase.from('pending_prices').delete().in('product_id', chunkIds),
+        supabase.from('product_aliases').delete().in('product_id', chunkIds),
+        supabase.from('product_views').update({ product_id: null }).in('product_id', chunkIds),
+      ]);
+
+      if (pricesDelete.error) throw pricesDelete.error;
+      if (pendingDelete.error) throw pendingDelete.error;
+      if (aliasesDelete.error) throw aliasesDelete.error;
+      if (detachViews.error && !isMissingRelationError(detachViews.error)) throw detachViews.error;
+
+      const { data, error } = await supabase
+        .from('products')
+        .delete()
+        .in('id', chunkIds)
+        .select('id');
+      if (error) throw error;
+      return Array.isArray(data) ? data.length : 0;
+    }));
+
+    deletedCount += batchDeleted.reduce((sum, value) => sum + Number(value || 0), 0);
+  }
+
+  return { deletedCount };
 }
 
 async function purgeAllProductsData() {
@@ -2057,32 +2288,74 @@ async function approvePending(id) {
 }
 
 async function approveMany(ids) {
-  const targetIds = Array.isArray(ids) ? ids.filter(Boolean) : [];
+  const targetIds = Array.from(new Set(Array.isArray(ids) ? ids.filter(Boolean) : []));
+  if (targetIds.length === 0) return { approvedCount: 0, failedIds: [] };
+
+  const { data: targetRows, error: targetRowsError } = await supabase
+    .from('pending_prices')
+    .select('id,receipt_url,status')
+    .in('id', targetIds);
+  if (targetRowsError) throw targetRowsError;
+
+  const foundIds = new Set((targetRows || []).map(row => row?.id).filter(Boolean));
+  const failedIds = targetIds.filter(id => !foundIds.has(id));
+
+  const receiptUrlToPrimaryId = new Map();
+  const primaryIdToIds = new Map();
+
+  for (const row of targetRows || []) {
+    const normalizedStatus = normalizeAliasKey(row?.status || 'pending');
+    if (normalizedStatus && normalizedStatus !== 'pending') continue;
+
+    const rowId = String(row?.id || '').trim();
+    if (!rowId) continue;
+
+    const receiptUrl = normalizeMaybeText(row?.receipt_url);
+    if (!receiptUrl) {
+      primaryIdToIds.set(rowId, [rowId]);
+      continue;
+    }
+
+    if (!receiptUrlToPrimaryId.has(receiptUrl)) {
+      receiptUrlToPrimaryId.set(receiptUrl, rowId);
+      primaryIdToIds.set(rowId, []);
+    }
+
+    const primaryId = receiptUrlToPrimaryId.get(receiptUrl);
+    const list = primaryIdToIds.get(primaryId) || [];
+    list.push(rowId);
+    primaryIdToIds.set(primaryId, list);
+  }
+
+  const primaryIds = [...primaryIdToIds.keys()];
+  if (primaryIds.length === 0) return { approvedCount: 0, failedIds };
+
   let approvedCount = 0;
-  const failedIds = [];
+  const CONCURRENCY = 24;
 
-  const CONCURRENCY = 16;
-
-  for (let i = 0; i < targetIds.length; i += CONCURRENCY) {
-    const chunk = targetIds.slice(i, i + CONCURRENCY);
+  for (let i = 0; i < primaryIds.length; i += CONCURRENCY) {
+    const chunk = primaryIds.slice(i, i + CONCURRENCY);
     const results = await Promise.all(
-      chunk.map(async (id) => {
+      chunk.map(async (primaryId) => {
         try {
-          const result = await approvePending(id);
-          return { ok: true, id, approvedCount: Number(result?.approvedCount) || 0 };
+          const result = await approvePending(primaryId);
+          return { ok: true, primaryId, approvedCount: Number(result?.approvedCount) || 0 };
         } catch {
-          return { ok: false, id };
+          return { ok: false, primaryId };
         }
       })
     );
 
     for (const result of results) {
-      if (result.ok) approvedCount += Number(result.approvedCount) || 0;
-      else failedIds.push(result.id);
+      if (result.ok) {
+        approvedCount += Number(result.approvedCount) || 0;
+      } else {
+        failedIds.push(...(primaryIdToIds.get(result.primaryId) || [result.primaryId]));
+      }
     }
   }
 
-  return { approvedCount, failedIds };
+  return { approvedCount, failedIds: [...new Set(failedIds)] };
 }
 
 async function rejectPending(id) {
@@ -2091,12 +2364,28 @@ async function rejectPending(id) {
 }
 
 async function rejectMany(ids) {
-  const targetIds = Array.isArray(ids) ? ids.filter(Boolean) : [];
+  const targetIds = Array.from(new Set(Array.isArray(ids) ? ids.filter(Boolean) : []));
   if (targetIds.length === 0) return { rejectedCount: 0 };
 
-  const { error } = await supabase.from('pending_prices').update({ status: 'rejected' }).in('id', targetIds);
-  if (error) throw error;
-  return { rejectedCount: targetIds.length };
+  let rejectedCount = 0;
+  const chunks = chunkArray(targetIds, BULK_DB_CHUNK_SIZE);
+
+  for (let i = 0; i < chunks.length; i += BULK_DB_CONCURRENCY) {
+    const batch = chunks.slice(i, i + BULK_DB_CONCURRENCY);
+    const batchRejected = await Promise.all(batch.map(async (chunkIds) => {
+      const { data, error } = await supabase
+        .from('pending_prices')
+        .update({ status: 'rejected' })
+        .in('id', chunkIds)
+        .select('id');
+      if (error) throw error;
+      return Array.isArray(data) ? data.length : 0;
+    }));
+
+    rejectedCount += batchRejected.reduce((sum, value) => sum + Number(value || 0), 0);
+  }
+
+  return { rejectedCount };
 }
 
 async function deleteApproved(id) {
@@ -2105,12 +2394,28 @@ async function deleteApproved(id) {
 }
 
 async function deleteApprovedMany(ids) {
-  const targetIds = Array.isArray(ids) ? ids.filter(Boolean) : [];
+  const targetIds = Array.from(new Set(Array.isArray(ids) ? ids.filter(Boolean) : []));
   if (targetIds.length === 0) return { deletedCount: 0 };
 
-  const { error } = await supabase.from('prices').delete().in('id', targetIds);
-  if (error) throw error;
-  return { deletedCount: targetIds.length };
+  let deletedCount = 0;
+  const chunks = chunkArray(targetIds, BULK_DB_CHUNK_SIZE);
+
+  for (let i = 0; i < chunks.length; i += BULK_DB_CONCURRENCY) {
+    const batch = chunks.slice(i, i + BULK_DB_CONCURRENCY);
+    const batchDeleted = await Promise.all(batch.map(async (chunkIds) => {
+      const { data, error } = await supabase
+        .from('prices')
+        .delete()
+        .in('id', chunkIds)
+        .select('id');
+      if (error) throw error;
+      return Array.isArray(data) ? data.length : 0;
+    }));
+
+    deletedCount += batchDeleted.reduce((sum, value) => sum + Number(value || 0), 0);
+  }
+
+  return { deletedCount };
 }
 
 export default async function moderation(req, res) {
@@ -2202,6 +2507,10 @@ export default async function moderation(req, res) {
         const items = await listProducts();
         return send(res, 200, { ok: true, items });
       }
+      case 'getProductLinkedData': {
+        const result = await getProductLinkedData(body.id);
+        return send(res, 200, { ok: true, ...result });
+      }
       case 'createProduct': {
         const item = await createProduct(body.payload || {});
         return send(res, 200, { ok: true, item });
@@ -2211,8 +2520,8 @@ export default async function moderation(req, res) {
         return send(res, 200, { ok: true, item });
       }
       case 'deleteProduct': {
-        await deleteProduct(body.id);
-        return send(res, 200, { ok: true });
+        const result = await deleteProduct(body.id);
+        return send(res, 200, { ok: true, ...result });
       }
       case 'deleteProductsMany': {
         const result = await deleteProductsMany(body.ids || []);
