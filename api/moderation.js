@@ -1365,20 +1365,6 @@ async function importNormalizationQueue(productsInput) {
       .range(from, to)
   ));
 
-  if (limboItems.length === 0) {
-    return {
-      importedCount: 0,
-      remainingLimboCount: 0,
-      createdProducts: 0,
-      updatedProducts: 0,
-      aliasesProcessed: 0,
-      unmatchedCount: 0,
-      failedCount: 0,
-      unmatchedSamples: [],
-      failedSamples: [],
-    };
-  }
-
   const { keyToProductIds } = await buildProductNameIndex();
   const registerKnownProductName = (productId, rawName) => {
     registerProductNameKey(keyToProductIds, productId, rawName);
@@ -1460,6 +1446,53 @@ async function importNormalizationQueue(productsInput) {
     }
   }
 
+  // Match unmatched store_products using the alias map built from the uploaded file,
+  // then backfill prices.product_id for those rows (prices already in DB from scraper).
+  let storeProductsLinked = 0;
+  let pricesBackfilled = 0;
+
+  if (aliasToProductId.size > 0) {
+    const { data: unmatchedSps, error: spFetchErr } = await supabase
+      .from('store_products')
+      .select('id, original_name, normalised_name')
+      .is('canonical_product_id', null);
+
+    if (!spFetchErr || isMissingRelationError(spFetchErr)) {
+      const toLink = [];
+      for (const sp of unmatchedSps || []) {
+        const key = normalizeProductNameKey(sp.original_name || sp.normalised_name || '');
+        const productId = key ? aliasToProductId.get(key) : null;
+        if (productId) toLink.push({ id: sp.id, canonical_product_id: productId });
+      }
+
+      for (const chunk of chunkArray(toLink, BULK_DB_CHUNK_SIZE)) {
+        await Promise.all(chunk.map(({ id, canonical_product_id }) =>
+          supabase
+            .from('store_products')
+            .update({ canonical_product_id, match_confidence: 'admin_confirmed' })
+            .eq('id', id)
+        ));
+        storeProductsLinked += chunk.length;
+      }
+
+      // Backfill prices that were inserted while the store_product was unmatched.
+      const toLinkMap = new Map(toLink.map(({ id, canonical_product_id }) => [id, canonical_product_id]));
+      for (const chunk of chunkArray(toLink, BULK_DB_CHUNK_SIZE)) {
+        for (const { id: spId } of chunk) {
+          const productId = toLinkMap.get(spId);
+          if (!productId) continue;
+          const { data } = await supabase
+            .from('prices')
+            .update({ product_id: productId })
+            .eq('store_product_id', spId)
+            .is('product_id', null)
+            .select('id');
+          pricesBackfilled += Array.isArray(data) ? data.length : 0;
+        }
+      }
+    }
+  }
+
   const receiptCache = new Map();
   const unmatchedSamples = [];
   const failedSamples = [];
@@ -1511,7 +1544,7 @@ async function importNormalizationQueue(productsInput) {
   }
 
   return {
-    importedCount,
+    importedCount: importedCount + pricesBackfilled,
     remainingLimboCount: limboItems.length - importedCount,
     createdProducts,
     updatedProducts,
@@ -1519,6 +1552,8 @@ async function importNormalizationQueue(productsInput) {
     ambiguousAliasCount: ambiguousAliasKeys.size,
     unmatchedCount,
     failedCount,
+    storeProductsLinked,
+    pricesBackfilled,
     unmatchedSamples,
     failedSamples,
   };

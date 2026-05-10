@@ -1734,11 +1734,14 @@ export default function App() {
       const unmatchedCount = Number(result?.unmatchedCount) || 0;
       const failedCount = Number(result?.failedCount) || 0;
       const ambiguousAliasCount = Number(result?.ambiguousAliasCount) || 0;
+      const storeProductsLinked = Number(result?.storeProductsLinked) || 0;
+      const pricesBackfilled = Number(result?.pricesBackfilled) || 0;
 
       const summary = t.queueImportDone(importedCount, remainingCount);
       setQueueStatus(summary);
 
       const details: string[] = [];
+      if (storeProductsLinked > 0) details.push(`Store products linked: ${storeProductsLinked} (${pricesBackfilled} prices backfilled)`);
       if (unmatchedCount > 0) details.push(`Unmatched: ${unmatchedCount}`);
       if (failedCount > 0) details.push(`Failed: ${failedCount}`);
       if (ambiguousAliasCount > 0) details.push(`Ambiguous aliases: ${ambiguousAliasCount}`);
