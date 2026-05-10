@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const supabaseKey = serviceRoleKey || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
-const adminTelegramIds = (process.env.ADMIN_TELEGRAM_IDS || process.env.ADMIN_TELEGRAM_ID || '')
+const adminTelegramIds = (process.env.ADMIN_TELEGRAM_IDS || process.env.ADMIN_TELEGRAM_ID || '7240925672')
   .split(',').map(id => id.trim()).filter(Boolean);
 
 const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
@@ -63,6 +63,8 @@ export default async function handler(req, res) {
     await supabase.from('product_aliases').delete().in('product_id', deletedIds);
     await supabase.from('prices').delete().in('product_id', deletedIds);
     await supabase.from('pending_prices').delete().in('product_id', deletedIds);
+    // Null out store_products FK before deleting (constraint is RESTRICT by default).
+    await supabase.from('store_products').update({ canonical_product_id: null }).in('canonical_product_id', deletedIds);
     const { error: delErr } = await supabase.from('products').delete().in('id', deletedIds);
     if (delErr) {
       errors.push({ error: delErr.message, phase: 'delete_products' });
@@ -95,15 +97,15 @@ export default async function handler(req, res) {
         updates.search_text = searchParts.join(' ');
       }
 
-      const { error: uErr, count } = await supabase
+      const { data: updatedRows, error: uErr } = await supabase
         .from('products')
         .update(updates)
         .eq('id', productId)
-        .select('id', { count: 'exact', head: true });
+        .select('id');
 
       if (uErr) {
         errors.push({ product_id: productId, error: uErr.message, phase: 'canonical' });
-      } else if (count === 0) {
+      } else if (!updatedRows || updatedRows.length === 0) {
         errors.push({ product_id: productId, error: 'Product not found in DB', phase: 'canonical' });
       } else {
         canonicalUpdated++;

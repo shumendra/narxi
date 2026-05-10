@@ -1,0 +1,691 @@
+[
+  {
+    "id": 34,
+    "district": {
+      "id": 10,
+      "title": "Яшнабадский район"
+    },
+    "title": "Makro Express",
+    "address": "г. Ташкент, Авиасозлар-2",
+    "longitude": "69.347479",
+    "latitude": "41.283957",
+    "open": "08:00:00",
+    "close": "00:00:00"
+  },
+  {
+    "id": 35,
+    "district": {
+      "id": 10,
+      "title": "Яшнабадский район"
+    },
+    "title": "Makro Express",
+    "address": "г. Ташкент, массив Куйлюк 4",
+    "longitude": "69.307972",
+    "latitude": "41.252139",
+    "open": "08:00:00",
+    "close": "00:00:00"
+  },
+  {
+    "id": 36,
+    "district": {
+      "id": 10,
+      "title": "Яшнабадский район"
+    },
+    "title": "Makro Supermarket 24h",
+    "address": "г. Ташкент, ул. Махтумкули, Ташсельмаш",
+    "longitude": "69.322503",
+    "latitude": "41.303855",
+    "open": "00:00:00",
+    "close": "23:59:59"
+  },
+  {
+    "id": 57,
+    "district": {
+      "id": 3,
+      "title": "Мирабадский район"
+    },
+    "title": "Makro Supermarket 24h",
+    "address": "г. Ташкент, ул. Нукус",
+    "longitude": "69.2714944",
+    "latitude": "41.2865085",
+    "open": "00:00:00",
+    "close": "23:59:59"
+  },
+  {
+    "id": 45,
+    "district": {
+      "id": 7,
+      "title": "Юнусабадский район"
+    },
+    "title": "Makro Supermarket",
+    "address": "г. Ташкент, пересечение ул. А.Дониш и Етти чинор",
+    "longitude": "69.2760917",
+    "latitude": "41.3595412",
+    "open": "08:00:00",
+    "close": "00:00:00"
+  },
+  {
+    "id": 50,
+    "district": {
+      "id": 6,
+      "title": "Шайхантаурский район"
+    },
+    "title": "Makro Supermarket",
+    "address": "г. Ташкент, ул. Нурафшон обводная. Ориентир: кафе Санаткор",
+    "longitude": "69.206600",
+    "latitude": "41.307373",
+    "open": "08:00:00",
+    "close": "00:00:00"
+  },
+  {
+    "id": 37,
+    "district": {
+      "id": 10,
+      "title": "Яшнабадский район"
+    },
+    "title": "Makro Supermarket",
+    "address": "г. Ташкент, ул. Махтумкули, Ориентир: ТЦ Atrium",
+    "longitude": "69.307694",
+    "latitude": "41.304611",
+    "open": "08:00:00",
+    "close": "00:00:00"
+  },
+  {
+    "id": 38,
+    "district": {
+      "id": 10,
+      "title": "Яшнабадский район"
+    },
+    "title": "Makro Express",
+    "address": "г. Ташкент, Авиасозлар, Ориентир: Базарчик",
+    "longitude": "69.335446",
+    "latitude": "41.294927",
+    "open": "08:00:00",
+    "close": "00:00:00"
+  },
+  {
+    "id": 51,
+    "district": {
+      "id": 5,
+      "title": "Сергелийский район"
+    },
+    "title": "Makro Express",
+    "address": "г. Ташкент, ул. Нозанин",
+    "longitude": "69.268611",
+    "latitude": "41.244866",
+    "open": "08:00:00",
+    "close": "00:00:00"
+  },
+  {
+    "id": 48,
+    "district": {
+      "id": 6,
+      "title": "Шайхантаурский район"
+    },
+    "title": "Makro Express",
+    "address": "г. Ташкент, массив Джангох",
+    "longitude": "69.245667",
+    "latitude": "41.325083",
+    "open": "08:00:00",
+    "close": "00:00:00"
+  },
+  {
+    "id": 49,
+    "district": {
+      "id": 6,
+      "title": "Шайхантаурский район"
+    },
+    "title": "Makro Express",
+    "address": "г. Ташкент, ул. Абай, Абай круг",
+    "longitude": "69.25506",
+    "latitude": "41.329544",
+    "open": "08:00:00",
+    "close": "00:00:00"
+  },
+  {
+    "id": 40,
+    "district": {
+      "id": 8,
+      "title": "Яккасарайский район"
+    },
+    "title": "Makro Express",
+    "address": "г. Ташкент, ул. Бабура, 174",
+    "longitude": "69.246032",
+    "latitude": "41.304575",
+    "open": "08:00:00",
+    "close": "00:00:00"
+  },
+  {
+    "id": 44,
+    "district": {
+      "id": 7,
+      "title": "Юнусабадский район"
+    },
+    "title": "Makro Express",
+    "address": "г. Ташкент, 6 квартал",
+    "longitude": "69.262500",
+    "latitude": "41.368444",
+    "open": "08:00:00",
+    "close": "00:00:00"
+  },
+  {
+    "id": 42,
+    "district": {
+      "id": 8,
+      "title": "Яккасарайский район"
+    },
+    "title": "Makro Express",
+    "address": "г. Ташкент, ул. Бабура",
+    "longitude": "69.258226",
+    "latitude": "41.276132",
+    "open": "08:00:00",
+    "close": "00:00:00"
+  },
+  {
+    "id": 55,
+    "district": {
+      "id": 3,
+      "title": "Мирабадский район"
+    },
+    "title": "Makro Express",
+    "address": "г. Ташкент, 2 проезд Инокобод",
+    "longitude": "69.293573",
+    "latitude": "41.284222",
+    "open": "08:00:00",
+    "close": "00:00:00"
+  },
+  {
+    "id": 41,
+    "district": {
+      "id": 8,
+      "title": "Яккасарайский район"
+    },
+    "title": "Makro Express 24h",
+    "address": "г. Ташкент, 1 проезд Мукимий",
+    "longitude": "69.249759",
+    "latitude": "41.278714",
+    "open": "00:00:00",
+    "close": "23:59:59"
+  },
+  {
+    "id": 70,
+    "district": {
+      "id": 1,
+      "title": "Чиланзарский район"
+    },
+    "title": "Makro Supermarket 24h",
+    "address": "г. Ташкент, ул.Чиланзар",
+    "longitude": "69.221980",
+    "latitude": "41.282848",
+    "open": "08:00:00",
+    "close": "23:59:59"
+  },
+  {
+    "id": 69,
+    "district": {
+      "id": 1,
+      "title": "Чиланзарский район"
+    },
+    "title": "Makro Supermarket",
+    "address": "г. Ташкент, ул.Катартал",
+    "longitude": "69.211105",
+    "latitude": "41.291839",
+    "open": "08:00:00",
+    "close": "23:00:00"
+  },
+  {
+    "id": 60,
+    "district": {
+      "id": 2,
+      "title": "Мирзо - Улугбекский район"
+    },
+    "title": "Makro Express",
+    "address": "г. Ташкент, ул. Архелогический",
+    "longitude": "69.340930",
+    "latitude": "41.313498",
+    "open": "08:00:00",
+    "close": "00:00:00"
+  },
+  {
+    "id": 58,
+    "district": {
+      "id": 2,
+      "title": "Мирзо - Улугбекский район"
+    },
+    "title": "Makro Express",
+    "address": "г. Ташкент, массив Карасу 6",
+    "longitude": "69.353094",
+    "latitude": "41.315692",
+    "open": "08:00:00",
+    "close": "00:00:00"
+  },
+  {
+    "id": 59,
+    "district": {
+      "id": 2,
+      "title": "Мирзо - Улугбекский район"
+    },
+    "title": "Makro Supermarket 24h",
+    "address": "г. Ташкент, ЖК Oq Saroy",
+    "longitude": "69.332260",
+    "latitude": "41.312919",
+    "open": "00:00:00",
+    "close": "23:59:59"
+  },
+  {
+    "id": 61,
+    "district": {
+      "id": 2,
+      "title": "Мирзо - Улугбекский район"
+    },
+    "title": "Makro Express",
+    "address": "г. Ташкент, ул. Ахмад Югнакий, Массив Хумаюн",
+    "longitude": "69.387038",
+    "latitude": "41.344707",
+    "open": "08:00:00",
+    "close": "00:00:00"
+  },
+  {
+    "id": 62,
+    "district": {
+      "id": 2,
+      "title": "Мирзо - Улугбекский район"
+    },
+    "title": "Makro Express",
+    "address": "г. Ташкент, ул. Дурмон йули, МВД Академия.",
+    "longitude": "69.362094",
+    "latitude": "41.323388",
+    "open": "08:00:00",
+    "close": "00:00:00"
+  },
+  {
+    "id": 63,
+    "district": {
+      "id": 2,
+      "title": "Мирзо - Улугбекский район"
+    },
+    "title": "Makro Supermarket 24h",
+    "address": "г. Ташкент, ул. Буюк ипак Йули",
+    "longitude": "69.3374158",
+    "latitude": "41.3274759",
+    "open": "00:00:00",
+    "close": "23:59:59"
+  },
+  {
+    "id": 64,
+    "district": {
+      "id": 2,
+      "title": "Мирзо - Улугбекский район"
+    },
+    "title": "Makro Supermarket",
+    "address": "г. Ташкент, ул. Гете (Корасу)",
+    "longitude": "69.347119",
+    "latitude": "41.318743",
+    "open": "08:00:00",
+    "close": "23:00:00"
+  },
+  {
+    "id": 66,
+    "district": {
+      "id": 2,
+      "title": "Мирзо - Улугбекский район"
+    },
+    "title": "Makro Supermarket 24h",
+    "address": "г. Ташкент, Центральный экопарк",
+    "longitude": "69.295390",
+    "latitude": "41.307409",
+    "open": "00:00:00",
+    "close": "23:59:59"
+  },
+  {
+    "id": 67,
+    "district": {
+      "id": 2,
+      "title": "Мирзо - Улугбекский район"
+    },
+    "title": "Makro Supermarket",
+    "address": "г. Ташкент, ул. Яхье Гулямова, Маркет уз",
+    "longitude": "69.289556",
+    "latitude": "41.310006",
+    "open": "08:00:00",
+    "close": "00:00:00"
+  },
+  {
+    "id": 68,
+    "district": {
+      "id": 1,
+      "title": "Чиланзарский район"
+    },
+    "title": "Makro Express",
+    "address": "г. Ташкент, 23-й квартал",
+    "longitude": "69.173092",
+    "latitude": "41.288538",
+    "open": "08:00:00",
+    "close": "00:00:00"
+  },
+  {
+    "id": 72,
+    "district": {
+      "id": 27,
+      "title": "Бектемирский район"
+    },
+    "title": "Makro",
+    "address": "Бектемирский район, ул. Рохат",
+    "longitude": "69.372203",
+    "latitude": "41.249308",
+    "open": "08:00:00",
+    "close": "00:00:00"
+  },
+  {
+    "id": 74,
+    "district": {
+      "id": 7,
+      "title": "Юнусабадский район"
+    },
+    "title": "Г.Ташкент, Юнусабадский район, Бегубор МФЙ, 18-квартал, 1Б дом",
+    "address": "Г.Ташкент, Юнусабадский район, Бегубор МФЙ, 18-квартал, 1Б дом",
+    "longitude": "69.315247",
+    "latitude": "41.369172",
+    "open": "08:00:00",
+    "close": "00:00:00"
+  },
+  {
+    "id": 32,
+    "district": {
+      "id": 11,
+      "title": "Кибрайский район"
+    },
+    "title": "Makro Express",
+    "address": "Тукай –Тепа м.ф.й., ул. Миллий-бог",
+    "longitude": "69.413502",
+    "latitude": "41.333475",
+    "open": "08:00:00",
+    "close": "00:00:00"
+  },
+  {
+    "id": 27,
+    "district": {
+      "id": 13,
+      "title": "г. Чирчик"
+    },
+    "title": "Makro Supermarket",
+    "address": "Ташкентская область, г. Чирчик, улица П. Юсупова",
+    "longitude": "69.588701",
+    "latitude": "41.473700",
+    "open": "08:00:00",
+    "close": "22:00:00"
+  },
+  {
+    "id": 28,
+    "district": {
+      "id": 13,
+      "title": "г. Чирчик"
+    },
+    "title": "Makro Supermarket",
+    "address": "Ташкентская область, г. Чирчик на развилке ул. Халк бирлиги и И.В.Кодирова",
+    "longitude": "69.560426",
+    "latitude": "41.447009",
+    "open": "08:00:00",
+    "close": "23:00:00"
+  },
+  {
+    "id": 30,
+    "district": {
+      "id": 12,
+      "title": "Урта-Чирчикский район"
+    },
+    "title": "Makro Supermarket",
+    "address": "Ташкентская область, Урта-Чирчикский район, ул. Тошкент йули (ТОЙ-ТЕПА)",
+    "longitude": "69.3564404",
+    "latitude": "41.0407384",
+    "open": "08:00:00",
+    "close": "00:00:00"
+  },
+  {
+    "id": 33,
+    "district": {
+      "id": 11,
+      "title": "Кибрайский район"
+    },
+    "title": "Makro Supermarket",
+    "address": "Ташкентская область, Кибрайский район, Кибрай ШФЙ",
+    "longitude": "69.457686",
+    "latitude": "41.386654",
+    "open": "08:00:00",
+    "close": "23:00:00"
+  },
+  {
+    "id": 2,
+    "district": {
+      "id": 25,
+      "title": "г. Коканд"
+    },
+    "title": "Makro Supermarket",
+    "address": "Ферганская область, г. Коканд, ул. Истиклол",
+    "longitude": "70.936361",
+    "latitude": "40.537647",
+    "open": "08:00:00",
+    "close": "23:00:00"
+  },
+  {
+    "id": 3,
+    "district": {
+      "id": 24,
+      "title": "г. Алтыарык"
+    },
+    "title": "Makro Supermarket",
+    "address": "Ферганская область, г. Алтыарык, ул. Мустакиллик, дом 6",
+    "longitude": "71.476403",
+    "latitude": "40.389506",
+    "open": "08:00:00",
+    "close": "23:00:00"
+  },
+  {
+    "id": 4,
+    "district": {
+      "id": 23,
+      "title": "г. Риштан"
+    },
+    "title": "Makro Supermarket",
+    "address": "Ферганская область, г. Риштан, ул. Б. Рашидоний, ориентир: бывшее здание ЦУМ",
+    "longitude": "71.2769489",
+    "latitude": "40.359032",
+    "open": "08:00:00",
+    "close": "23:00:00"
+  },
+  {
+    "id": 5,
+    "district": {
+      "id": 22,
+      "title": "г. Уйчи"
+    },
+    "title": "Makro Supermarket",
+    "address": "Наманганская область, г. Уйчи, ул А. Темура",
+    "longitude": "71.8493838",
+    "latitude": "41.0285713",
+    "open": "08:00:00",
+    "close": "23:00:00"
+  },
+  {
+    "id": 6,
+    "district": {
+      "id": 21,
+      "title": "г. Туракурган"
+    },
+    "title": "Makro Supermarket",
+    "address": "г. Наманган, пересечение ул. Навоий и Туракурган Ахси",
+    "longitude": "71.648714",
+    "latitude": "40.992035",
+    "open": "08:00:00",
+    "close": "23:00:00"
+  },
+  {
+    "id": 7,
+    "district": {
+      "id": 21,
+      "title": "г. Туракурган"
+    },
+    "title": "Makro Supermarket",
+    "address": "Наманганская область, г. Туракурган, ул. Наманганская, ТЦ \"Мусаффо\"",
+    "longitude": "71.502902",
+    "latitude": "41.002163",
+    "open": "08:00:00",
+    "close": "23:00:00"
+  },
+  {
+    "id": 12,
+    "district": {
+      "id": 19,
+      "title": "г. Наманган"
+    },
+    "title": "Makro Supermarket 24h",
+    "address": "г. Наманган, ул. Галаба-1, микрорайон 6",
+    "longitude": "71.613385",
+    "latitude": "40.993247",
+    "open": "00:00:00",
+    "close": "23:59:59"
+  },
+  {
+    "id": 13,
+    "district": {
+      "id": 19,
+      "title": "г. Наманган"
+    },
+    "title": "Makro Supermarket",
+    "address": "г. Наманган, Чуст, ул. Буюк ипак йули",
+    "longitude": "71.239806",
+    "latitude": "40.994139",
+    "open": "08:00:00",
+    "close": "23:00:00"
+  },
+  {
+    "id": 19,
+    "district": {
+      "id": 18,
+      "title": "г. Андижан"
+    },
+    "title": "Makro Supermarket",
+    "address": "г. Андижан, ул. Амир Умархон (ПУШКИН)",
+    "longitude": "72.355762",
+    "latitude": "40.764848",
+    "open": "08:00:00",
+    "close": "23:00:00"
+  },
+  {
+    "id": 20,
+    "district": {
+      "id": 18,
+      "title": "г. Андижан"
+    },
+    "title": "Makro Supermarket",
+    "address": "г. Андижан, ул. Бобур шох",
+    "longitude": "72.358331",
+    "latitude": "40.751574",
+    "open": "08:00:00",
+    "close": "23:00:00"
+  },
+  {
+    "id": 21,
+    "district": {
+      "id": 18,
+      "title": "г. Андижан"
+    },
+    "title": "Makro Supermarket",
+    "address": "г. Андижан, ул. Умид (АСАКА)",
+    "longitude": "72.2339058",
+    "latitude": "40.6486224",
+    "open": "08:00:00",
+    "close": "23:00:00"
+  },
+  {
+    "id": 22,
+    "district": {
+      "id": 18,
+      "title": "г. Андижан"
+    },
+    "title": "Makro Supermarket",
+    "address": "г. Андижан, ул.Чулпоншох",
+    "longitude": "72.349101",
+    "latitude": "40.786226",
+    "open": "08:00:00",
+    "close": "23:00:00"
+  },
+  {
+    "id": 23,
+    "district": {
+      "id": 17,
+      "title": "г. Пайтуг"
+    },
+    "title": "Makro Supermarket",
+    "address": "г. Пайтуг, Избасканский район, ул. Накшбанд",
+    "longitude": "72.252841",
+    "latitude": "40.895599",
+    "open": "08:00:00",
+    "close": "23:00:00"
+  },
+  {
+    "id": 24,
+    "district": {
+      "id": 16,
+      "title": "г. Шахрихан"
+    },
+    "title": "Makro Supermarket",
+    "address": "г. Шахрихан проспект Шахрихан",
+    "longitude": "72.053394",
+    "latitude": "40.713049",
+    "open": "08:00:00",
+    "close": "23:00:00"
+  },
+  {
+    "id": 25,
+    "district": {
+      "id": 15,
+      "title": "г. Хонобод"
+    },
+    "title": "Makro Supermarket",
+    "address": "Андижанская область, г. Хонобод, Умар Шайх Мирзо",
+    "longitude": "72.993417",
+    "latitude": "40.800272",
+    "open": "08:00:00",
+    "close": "23:00:00"
+  },
+  {
+    "id": 75,
+    "district": {
+      "id": 18,
+      "title": "г. Андижан"
+    },
+    "title": "Makro Supermarket",
+    "address": "г. Андижан, Микрорайон, улица Бобуршох 8",
+    "longitude": "40.751774",
+    "latitude": "72.358194",
+    "open": "08:00:00",
+    "close": "00:00:00"
+  },
+  {
+    "id": 76,
+    "district": {
+      "id": 18,
+      "title": "г. Андижан"
+    },
+    "title": "Makro Supermarket",
+    "address": "город Андижан, улица Шахрихоншох 1",
+    "longitude": null,
+    "latitude": null,
+    "open": "08:00:00",
+    "close": "00:00:00"
+  },
+  {
+    "id": 77,
+    "district": {
+      "id": 18,
+      "title": "г. Андижан"
+    },
+    "title": "Makro Supermarket",
+    "address": "город Андижан, махалийнский сход граждан Буюк Турон, ул Амир Умархон 24",
+    "longitude": "40.764629",
+    "latitude": "72.648629",
+    "open": "08:00:00",
+    "close": "00:00:00"
+  }
+]

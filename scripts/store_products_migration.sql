@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS store_products (
   store_name TEXT,                    -- human readable store name
 
   -- Canonical product this maps to
-  canonical_product_id UUID REFERENCES products(id),
+  canonical_product_id UUID REFERENCES products(id) ON DELETE SET NULL,
 
   -- Match metadata
   match_confidence TEXT DEFAULT 'unmatched',
@@ -123,3 +123,14 @@ WHERE p.store_product_id IS NULL
 -- WHERE p.store_product_id = sp.id
 --   AND p.product_id IS NULL
 --   AND sp.canonical_product_id IS NOT NULL;
+
+-- ============================================================
+-- FIX FK CONSTRAINT (run this if you already created the table
+-- without ON DELETE SET NULL — fixes delete-blocked-by-FK bug)
+-- ============================================================
+ALTER TABLE store_products
+  DROP CONSTRAINT IF EXISTS store_products_canonical_product_id_fkey;
+
+ALTER TABLE store_products
+  ADD CONSTRAINT store_products_canonical_product_id_fkey
+  FOREIGN KEY (canonical_product_id) REFERENCES products(id) ON DELETE SET NULL;

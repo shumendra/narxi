@@ -1,0 +1,844 @@
+{
+  "payload": {
+    "categories": [
+      {
+        "id": 44008,
+        "uid": "44008",
+        "parentId": null,
+        "name": "Скидки и акции",
+        "schedule": null,
+        "available": true,
+        "gallery": [
+          {
+            "url": "https://eda.yandex/images/3508859/c4adedf8f0867d6d5facebd2b18b2ebc.png/{w}x{h}",
+            "type": "categories_carousel"
+          }
+        ],
+        "items": [],
+        "backgroundColors": [
+          {
+            "theme": "light",
+            "value": "#63BBF2"
+          },
+          {
+            "theme": "light",
+            "value": "#CCAECB"
+          },
+          {
+            "theme": "dark",
+            "value": "#73BB3E"
+          },
+          {
+            "theme": "dark",
+            "value": "#60D8B4"
+          }
+        ],
+        "show_in": [
+          "categories_carousel",
+          "horizontal_carousel"
+        ]
+      },
+      {
+        "id": 1034,
+        "uid": "1034",
+        "parentId": null,
+        "name": "Овощи и зелень",
+        "schedule": null,
+        "available": true,
+        "gallery": [
+          {
+            "url": "https://avatars.mds.yandex.net/get-eda/3538649/dfed4ffd58fbd62a5ae55b689b8bd4c2/{w}x{h}",
+            "type": "categories_carousel"
+          }
+        ],
+        "items": [],
+        "show_in": [
+          "categories_carousel",
+          "horizontal_carousel"
+        ]
+      },
+      {
+        "id": 1033,
+        "uid": "1033",
+        "parentId": null,
+        "name": "Фрукты и ягоды",
+        "schedule": null,
+        "available": true,
+        "gallery": [
+          {
+            "url": "https://avatars.mds.yandex.net/get-eda/3378693/68e25939c402f2f2006187b362ee9f1a/{w}x{h}",
+            "type": "categories_carousel"
+          }
+        ],
+        "items": [],
+        "show_in": [
+          "categories_carousel",
+          "horizontal_carousel"
+        ]
+      },
+      {
+        "id": 1029,
+        "uid": "1029",
+        "parentId": null,
+        "name": "Мясо и птица",
+        "schedule": null,
+        "available": true,
+        "gallery": [
+          {
+            "url": "https://avatars.mds.yandex.net/get-eda/2415806/b1e97eb8752f8cbef02205d87fbc5f56/{w}x{h}",
+            "type": "categories_carousel"
+          }
+        ],
+        "items": [],
+        "show_in": [
+          "categories_carousel",
+          "horizontal_carousel"
+        ]
+      },
+      {
+        "id": 19280,
+        "uid": "19280",
+        "parentId": null,
+        "name": "Молоко и яйца",
+        "schedule": null,
+        "available": true,
+        "gallery": [
+          {
+            "url": "https://avatars.mds.yandex.net/get-eda/2394388/62170a8a9d9d66fd43eccad7b7a3bc6e/{w}x{h}",
+            "type": "categories_carousel"
+          }
+        ],
+        "items": [],
+        "show_in": [
+          "categories_carousel",
+          "horizontal_carousel"
+        ]
+      },
+      {
+        "id": 12881,
+        "uid": "12881",
+        "parentId": null,
+        "name": "Вода и напитки",
+        "schedule": null,
+        "available": true,
+        "gallery": [
+          {
+            "url": "https://eda.yandex/images/3595513/483350311705891fa66995ed297f0c32.png/{w}x{h}",
+            "type": "categories_carousel"
+          }
+        ],
+        "items": [],
+        "show_in": [
+          "categories_carousel",
+          "horizontal_carousel"
+        ]
+      },
+      {
+        "id": 139,
+        "uid": "139",
+        "parentId": null,
+        "name": "Сладости",
+        "schedule": null,
+        "available": true,
+        "gallery": [
+          {
+            "url": "https://avatars.mds.yandex.net/get-eda/3436037/f37270009a4eb28926f7d4a083072920/{w}x{h}",
+            "type": "categories_carousel"
+          }
+        ],
+        "items": [],
+        "show_in": [
+          "categories_carousel",
+          "horizontal_carousel"
+        ]
+      },
+      {
+        "id": 178,
+        "uid": "178",
+        "parentId": null,
+        "name": "Рыба и морепродукты",
+        "schedule": null,
+        "available": true,
+        "gallery": [
+          {
+            "url": "https://avatars.mds.yandex.net/get-eda/3595156/4b75937bc9ba708203e5d85c771044b4/{w}x{h}",
+            "type": "categories_carousel"
+          }
+        ],
+        "items": [],
+        "show_in": [
+          "categories_carousel",
+          "horizontal_carousel"
+        ]
+      },
+      {
+        "id": 147,
+        "uid": "147",
+        "parentId": null,
+        "name": "Заморозка",
+        "schedule": null,
+        "available": true,
+        "gallery": [
+          {
+            "url": "https://avatars.mds.yandex.net/get-eda/1962206/78ecfb9ef159db2f16ab23a2fe747645/{w}x{h}",
+            "type": "categories_carousel"
+          }
+        ],
+        "items": [],
+        "show_in": [
+          "categories_carousel",
+          "horizontal_carousel"
+        ]
+      },
+      {
+        "id": 148,
+        "uid": "148",
+        "parentId": null,
+        "name": "Колбасы и сосиски",
+        "schedule": null,
+        "available": true,
+        "gallery": [
+          {
+            "url": "https://eda.yandex/images/3569651/636d471a66890cf905823b3b985b9441.png/{w}x{h}",
+            "type": "categories_carousel"
+          }
+        ],
+        "items": [],
+        "show_in": [
+          "categories_carousel",
+          "horizontal_carousel"
+        ]
+      },
+      {
+        "id": 182,
+        "uid": "182",
+        "parentId": null,
+        "name": "Хлеб и выпечка",
+        "schedule": null,
+        "available": true,
+        "gallery": [
+          {
+            "url": "https://avatars.mds.yandex.net/get-eda/3529621/40585a49e70d7c9f4bae4083d937fc11/{w}x{h}",
+            "type": "categories_carousel"
+          },
+          {
+            "url": "https://eda.yandex/images/3528150/f1993352068de37b12bedc30ed70a9e4.png/{w}x{h}",
+            "type": "banner_carousel"
+          }
+        ],
+        "items": [],
+        "backgroundColors": [
+          {
+            "theme": "light",
+            "value": "#e3e4e5"
+          },
+          {
+            "theme": "dark",
+            "value": "#e3e4e5"
+          }
+        ],
+        "show_in": [
+          "categories_carousel",
+          "horizontal_carousel"
+        ]
+      },
+      {
+        "id": 167,
+        "uid": "167",
+        "parentId": null,
+        "name": "Сыры",
+        "schedule": null,
+        "available": true,
+        "gallery": [
+          {
+            "url": "https://avatars.mds.yandex.net/get-eda/3401132/a7f976bb6edc01d0c65743c557b5390e/{w}x{h}",
+            "type": "categories_carousel"
+          }
+        ],
+        "items": [],
+        "show_in": [
+          "categories_carousel",
+          "horizontal_carousel"
+        ]
+      },
+      {
+        "id": 19288,
+        "uid": "19288",
+        "parentId": null,
+        "name": "Макароны и крупы",
+        "schedule": null,
+        "available": true,
+        "gallery": [
+          {
+            "url": "https://avatars.mds.yandex.net/get-eda/3580810/03923bf87fd4fdb3817facbb3b93df43/{w}x{h}",
+            "type": "categories_carousel"
+          }
+        ],
+        "items": [],
+        "show_in": [
+          "categories_carousel",
+          "horizontal_carousel"
+        ]
+      },
+      {
+        "id": 19289,
+        "uid": "19289",
+        "parentId": null,
+        "name": "Кофе и чай",
+        "schedule": null,
+        "available": true,
+        "gallery": [
+          {
+            "url": "https://avatars.mds.yandex.net/get-eda/3420935/40755a92dda6811b271d849feb554389/{w}x{h}",
+            "type": "categories_carousel"
+          }
+        ],
+        "items": [],
+        "show_in": [
+          "categories_carousel",
+          "horizontal_carousel"
+        ]
+      },
+      {
+        "id": 38776,
+        "uid": "38776",
+        "parentId": null,
+        "name": "Все для выпечки и десертов",
+        "schedule": null,
+        "available": true,
+        "gallery": [
+          {
+            "url": "https://avatars.mds.yandex.net/get-eda/1327512/65e7a42ab7a1f4239c123ac162ef2922/{w}x{h}",
+            "type": "categories_carousel"
+          }
+        ],
+        "items": [],
+        "show_in": [
+          "categories_carousel",
+          "horizontal_carousel"
+        ]
+      },
+      {
+        "id": 19283,
+        "uid": "19283",
+        "parentId": null,
+        "name": "Масло, соусы и специи",
+        "schedule": null,
+        "available": true,
+        "gallery": [
+          {
+            "url": "https://avatars.mds.yandex.net/get-eda/3525402/71f55c3bb4a4e57aa6c1e183a1bfaa34/{w}x{h}",
+            "type": "categories_carousel"
+          }
+        ],
+        "items": [],
+        "show_in": [
+          "categories_carousel",
+          "horizontal_carousel"
+        ]
+      },
+      {
+        "id": 19291,
+        "uid": "19291",
+        "parentId": null,
+        "name": "Консервы и соления",
+        "schedule": null,
+        "available": true,
+        "gallery": [
+          {
+            "url": "https://avatars.mds.yandex.net/get-eda/3609085/c093adc106c5d5ceb5ce19de81313b96/{w}x{h}",
+            "type": "categories_carousel"
+          }
+        ],
+        "items": [],
+        "show_in": [
+          "categories_carousel",
+          "horizontal_carousel"
+        ]
+      },
+      {
+        "id": 30191,
+        "uid": "30191",
+        "parentId": null,
+        "name": "Орехи, снеки и чипсы",
+        "schedule": null,
+        "available": true,
+        "gallery": [
+          {
+            "url": "https://eda.yandex/images/3816972/f740dc3b7a64b60ffd305bd46ef50a99.png/{w}x{h}",
+            "type": "categories_carousel"
+          }
+        ],
+        "items": [],
+        "show_in": [
+          "categories_carousel",
+          "horizontal_carousel"
+        ]
+      },
+      {
+        "id": 21575,
+        "uid": "21575",
+        "parentId": null,
+        "name": "Для детей",
+        "schedule": null,
+        "available": true,
+        "gallery": [
+          {
+            "url": "https://avatars.mds.yandex.net/get-eda/3514991/0508557764a15cab1ca9a6005916cb28/{w}x{h}",
+            "type": "categories_carousel"
+          }
+        ],
+        "items": [],
+        "show_in": [
+          "categories_carousel",
+          "horizontal_carousel"
+        ]
+      },
+      {
+        "id": 3374,
+        "uid": "3374",
+        "parentId": null,
+        "name": "Красота и гигиена",
+        "schedule": null,
+        "available": true,
+        "gallery": [
+          {
+            "url": "https://avatars.mds.yandex.net/get-eda/3595381/7f63d5302b9939b747d5b18c35905f9a/{w}x{h}",
+            "type": "categories_carousel"
+          }
+        ],
+        "items": [],
+        "show_in": [
+          "categories_carousel",
+          "horizontal_carousel"
+        ]
+      },
+      {
+        "id": 19287,
+        "uid": "19287",
+        "parentId": null,
+        "name": "Стирка и уборка",
+        "schedule": null,
+        "available": true,
+        "gallery": [
+          {
+            "url": "https://avatars.mds.yandex.net/get-eda/3596693/3763d92128f5bbf0cebcb2b3e536a6fd/{w}x{h}",
+            "type": "categories_carousel"
+          }
+        ],
+        "items": [],
+        "show_in": [
+          "categories_carousel",
+          "horizontal_carousel"
+        ]
+      },
+      {
+        "id": 19286,
+        "uid": "19286",
+        "parentId": null,
+        "name": "Для животных",
+        "schedule": null,
+        "available": true,
+        "gallery": [
+          {
+            "url": "https://avatars.mds.yandex.net/get-eda/3534679/f49e5e725d81b1e7e1a36ebfabfdd300/{w}x{h}",
+            "type": "categories_carousel"
+          }
+        ],
+        "items": [],
+        "show_in": [
+          "categories_carousel",
+          "horizontal_carousel"
+        ]
+      },
+      {
+        "id": 44559,
+        "uid": "44559",
+        "parentId": null,
+        "name": "Дом, дача и авто",
+        "schedule": null,
+        "available": true,
+        "gallery": [
+          {
+            "url": "https://avatars.mds.yandex.net/get-eda/3806023/8b66bdfd97cff9635c7599b92e48f0ef/{w}x{h}",
+            "type": "categories_carousel"
+          }
+        ],
+        "items": [],
+        "show_in": [
+          "categories_carousel",
+          "horizontal_carousel"
+        ]
+      },
+      {
+        "id": 91205,
+        "uid": "91205",
+        "parentId": null,
+        "name": "Товары для уборки",
+        "schedule": null,
+        "available": true,
+        "gallery": [],
+        "items": [],
+        "show_in": [
+          "banner_carousel"
+        ]
+      },
+      {
+        "id": 220375,
+        "uid": "220375",
+        "parentId": null,
+        "name": "Газировка",
+        "schedule": null,
+        "available": true,
+        "gallery": [],
+        "items": [],
+        "show_in": [
+          "banner_carousel"
+        ]
+      },
+      {
+        "id": 585717,
+        "uid": "585717",
+        "parentId": null,
+        "name": "легко и сытно",
+        "schedule": null,
+        "available": true,
+        "gallery": [],
+        "items": [],
+        "show_in": [
+          "banner_carousel"
+        ]
+      },
+      {
+        "id": 585719,
+        "uid": "585719",
+        "parentId": null,
+        "name": "Энергия с утра",
+        "schedule": null,
+        "available": true,
+        "gallery": [],
+        "items": [],
+        "show_in": [
+          "banner_carousel"
+        ]
+      },
+      {
+        "id": 585718,
+        "uid": "585718",
+        "parentId": null,
+        "name": "Ужинаем легкими блюдами",
+        "schedule": null,
+        "available": true,
+        "gallery": [],
+        "items": [],
+        "show_in": [
+          "banner_carousel"
+        ]
+      },
+      {
+        "id": 614244,
+        "uid": "614244",
+        "parentId": null,
+        "name": "Празднуем Рамадан",
+        "schedule": null,
+        "available": true,
+        "gallery": [],
+        "items": [],
+        "show_in": [
+          "banner_carousel"
+        ]
+      },
+      {
+        "id": 159176,
+        "uid": "159176",
+        "parentId": null,
+        "name": "Лапша быстрого приготовления",
+        "schedule": null,
+        "available": true,
+        "gallery": [
+          {
+            "url": "https://eda.yandex/images/2394388/797494a26e84ab2d5529aa33d80df270.png/{w}x{h}",
+            "type": "banner_carousel"
+          },
+          {
+            "url": "https://eda.yandex/images/2394388/797494a26e84ab2d5529aa33d80df270.png/{w}x{h}",
+            "type": "categories_carousel"
+          }
+        ],
+        "items": [],
+        "show_in": [
+          "banner_carousel"
+        ]
+      },
+      {
+        "id": 34528,
+        "uid": "34528",
+        "parentId": null,
+        "name": "Чипсы",
+        "schedule": null,
+        "available": true,
+        "gallery": [],
+        "items": [],
+        "show_in": [
+          "banner_carousel"
+        ]
+      },
+      {
+        "id": 686103,
+        "uid": "686103",
+        "parentId": null,
+        "name": "Гол на тарелке: Идеальные снэки для болельщиков",
+        "schedule": null,
+        "available": true,
+        "gallery": [],
+        "items": [],
+        "show_in": [
+          "banner_carousel"
+        ]
+      }
+    ],
+    "communications_block": {
+      "communications": [
+        {
+          "offer": {
+            "shortcut_id": "6bc0f1dbb6d842d192a2cbb2c272bf53",
+            "title": {
+              "content": "Есть и смотреть",
+              "color": "FFFFFF"
+            },
+            "subtitle": {
+              "content": "",
+              "color": "000000"
+            },
+            "backgrounds": [
+              {
+                "type": "image",
+                "content": "https://avatars.mds.yandex.net/get-feeds-media/3954761/e43199b9cd5bd4cf84cd132438c37b33c0929613/orig"
+              }
+            ],
+            "is_viewed": false
+          },
+          "pages": [
+            {
+              "duration": 10,
+              "autonext": false,
+              "title": {
+                "content": "",
+                "color": "FFFFFF"
+              },
+              "text": {
+                "content": "",
+                "color": "000000"
+              },
+              "backgrounds": [
+                {
+                  "type": "image",
+                  "content": "https://avatars.mds.yandex.net/get-feeds-media/3710899/2a03a7b8b87798cd964bd2355749da86645f643f/orig"
+                }
+              ],
+              "widgets": {
+                "close_button": {
+                  "color": "000000"
+                },
+                "pager": {
+                  "color_on": "000000",
+                  "color_off": "C4CDD6"
+                },
+                "action_buttons": [
+                  {
+                    "color": "FFFFFF",
+                    "text": "Заказать",
+                    "text_color": "21201F",
+                    "deeplink": "eda.yandex://shop/baraka_market_m4krs?category=686103"
+                  }
+                ]
+              }
+            }
+          ],
+          "communication_type": "story",
+          "categories": [
+            "686103"
+          ],
+          "type": "story"
+        },
+        {
+          "offer": {
+            "shortcut_id": "427de7ddae1743628e62b6d9ce26d610",
+            "title": {
+              "content": "Быстрый перекус",
+              "color": "FFFFFF"
+            },
+            "subtitle": {
+              "content": "",
+              "color": "000000"
+            },
+            "backgrounds": [
+              {
+                "type": "image",
+                "content": "https://avatars.mds.yandex.net/get-feeds-media/3566719/dfb9175b8944770092848becc802d048fe6c5de7/orig"
+              }
+            ],
+            "is_viewed": false
+          },
+          "pages": [
+            {
+              "duration": 10,
+              "autonext": true,
+              "title": {
+                "content": "",
+                "color": "000000"
+              },
+              "text": {
+                "content": "",
+                "color": "000000"
+              },
+              "backgrounds": [
+                {
+                  "type": "image",
+                  "content": "https://avatars.mds.yandex.net/get-feeds-media/3954761/e0b186593f3bc2611cbb329b3c8875641a325de8/orig"
+                }
+              ],
+              "widgets": {
+                "close_button": {
+                  "color": "000000"
+                },
+                "pager": {
+                  "color_on": "000000",
+                  "color_off": "C4CDD6"
+                },
+                "action_buttons": [
+                  {
+                    "color": "FFFFFF",
+                    "text": "Заказать",
+                    "text_color": "21201F",
+                    "deeplink": "eda.yandex://retail/baraka_market/catalog/165"
+                  }
+                ]
+              }
+            },
+            {
+              "duration": 10,
+              "autonext": true,
+              "title": {
+                "content": "",
+                "color": "000000"
+              },
+              "text": {
+                "content": "",
+                "color": "000000"
+              },
+              "backgrounds": [
+                {
+                  "type": "image",
+                  "content": "https://avatars.mds.yandex.net/get-feeds-media/3566719/caf3780669dd012e5ffed27dad7ed4b3c24cf53a/orig"
+                }
+              ],
+              "widgets": {
+                "close_button": {
+                  "color": "000000"
+                },
+                "pager": {
+                  "color_on": "000000",
+                  "color_off": "C4CDD6"
+                },
+                "action_buttons": [
+                  {
+                    "color": "FFFFFF",
+                    "text": "Заказать",
+                    "text_color": "21201F",
+                    "deeplink": "eda.yandex://retail/baraka_market/catalog/220375"
+                  }
+                ]
+              }
+            },
+            {
+              "duration": 10,
+              "autonext": true,
+              "title": {
+                "content": "",
+                "color": "000000"
+              },
+              "text": {
+                "content": "",
+                "color": "000000"
+              },
+              "backgrounds": [
+                {
+                  "type": "image",
+                  "content": "https://avatars.mds.yandex.net/get-feeds-media/3710899/a081c93005c27ab17a135f734dce47d16806c1ba/orig"
+                }
+              ],
+              "widgets": {
+                "close_button": {
+                  "color": "000000"
+                },
+                "pager": {
+                  "color_on": "000000",
+                  "color_off": "C4CDD6"
+                },
+                "action_buttons": [
+                  {
+                    "color": "FFFFFF",
+                    "text": "Заказать",
+                    "text_color": "21201F",
+                    "deeplink": "eda.yandex://retail/baraka_market/catalog/34528"
+                  }
+                ]
+              }
+            },
+            {
+              "duration": 10,
+              "autonext": true,
+              "title": {
+                "content": "",
+                "color": "000000"
+              },
+              "text": {
+                "content": "",
+                "color": "000000"
+              },
+              "backgrounds": [
+                {
+                  "type": "image",
+                  "content": "https://avatars.mds.yandex.net/get-feeds-media/3710899/e282c09a4ea1bc621c81bb59b697f4a51bb2b069/orig"
+                }
+              ],
+              "widgets": {
+                "close_button": {
+                  "color": "000000"
+                },
+                "pager": {
+                  "color_on": "000000",
+                  "color_off": "C4CDD6"
+                },
+                "action_buttons": [
+                  {
+                    "color": "FFFFFF",
+                    "text": "Заказать",
+                    "text_color": "21201F",
+                    "deeplink": "eda.yandex://retail/baraka_market/catalog/159176"
+                  }
+                ]
+              }
+            }
+          ],
+          "communication_type": "story",
+          "type": "story"
+        }
+      ]
+    },
+    "carousel_mapping": {
+      "carousels": [
+        {
+          "show_in": "categories_carousel",
+          "title": ""
+        },
+        {
+          "show_in": "promo_bubbles_carousel",
+          "title": "Пригодится дома"
+        }
+      ]
+    }
+  },
+  "meta": null
+}

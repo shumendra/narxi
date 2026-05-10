@@ -1,0 +1,33 @@
+{
+  "count": 2,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": 36366,
+      "code": "1000025551",
+      "title": "Мука пшеничная Makfa высший сорт 1 кг",
+      "photo_medium": "https://api.makromarket.uz/media/product_images/2026/04/26/1000025551.png",
+      "newPrice": 12950,
+      "oldPrice": 14490,
+      "percent": 10,
+      "startDate": "2026-04-23",
+      "endDate": "2026-05-13",
+      "status": 1,
+      "promo_type": null
+    },
+    {
+      "id": 36544,
+      "code": "1000102524",
+      "title": "Макароны Grand di Pasta Cavatappi 450 г",
+      "photo_medium": "https://api.makromarket.uz/media/product_images/2026/04/26/1000102524.jpg",
+      "newPrice": 16950,
+      "oldPrice": 20490,
+      "percent": 17,
+      "startDate": "2026-04-23",
+      "endDate": "2026-05-13",
+      "status": 1,
+      "promo_type": null
+    }
+  ]
+}

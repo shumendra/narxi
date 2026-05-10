@@ -2198,6 +2198,13 @@ async function deleteProduct(id) {
     .eq('product_id', normalizedProductId);
   if (detachViewsError && !isMissingRelationError(detachViewsError)) throw detachViewsError;
 
+  // Unlink store_products FK before deleting — FK is RESTRICT by default.
+  const { error: spUnlinkError } = await supabase
+    .from('store_products')
+    .update({ canonical_product_id: null })
+    .eq('canonical_product_id', normalizedProductId);
+  if (spUnlinkError && !isMissingRelationError(spUnlinkError)) throw spUnlinkError;
+
   const { data, error } = await supabase
     .from('products')
     .delete()
@@ -2243,6 +2250,13 @@ async function deleteProductsMany(ids) {
       if (aliasesDelete.error) throw aliasesDelete.error;
       if (detachViews.error && !isMissingRelationError(detachViews.error)) throw detachViews.error;
 
+      // Unlink store_products FK before deleting products.
+      const { error: spUnlinkError } = await supabase
+        .from('store_products')
+        .update({ canonical_product_id: null })
+        .in('canonical_product_id', chunkIds);
+      if (spUnlinkError && !isMissingRelationError(spUnlinkError)) throw spUnlinkError;
+
       const { data, error } = await supabase
         .from('products')
         .delete()
@@ -2259,9 +2273,26 @@ async function deleteProductsMany(ids) {
 }
 
 async function purgeAllProductsData() {
-  await supabase.from('prices').delete().neq('id', '');
-  await supabase.from('pending_prices').delete().neq('id', '');
-  await supabase.from('products').delete().neq('id', '');
+  // Delete price rows first (they reference products).
+  const { error: prErr } = await supabase.from('prices').delete().neq('id', '');
+  if (prErr) throw prErr;
+  const { error: ppErr } = await supabase.from('pending_prices').delete().neq('id', '');
+  if (ppErr) throw ppErr;
+
+  // Delete aliases (FK to products, no cascade).
+  const { error: alErr } = await supabase.from('product_aliases').delete().neq('id', '');
+  if (alErr) throw alErr;
+
+  // Null out store_products FK before deleting products (FK is RESTRICT by default).
+  const { error: spErr } = await supabase
+    .from('store_products')
+    .update({ canonical_product_id: null })
+    .neq('id', '');
+  if (spErr && !isMissingRelationError(spErr)) throw spErr;
+
+  const { error: prodErr } = await supabase.from('products').delete().neq('id', '');
+  if (prodErr) throw prodErr;
+
   return { ok: true };
 }
 
