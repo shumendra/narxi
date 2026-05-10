@@ -2640,6 +2640,55 @@ export default async function moderation(req, res) {
         const result = await deleteReceiptLinks(body.ids || []);
         return send(res, 200, { ok: true, ...result });
       }
+      case 'getMatchingStats': {
+        // Return count of store_products rows grouped by match_confidence
+        const confidences = ['exact', 'normalised', 'fuzzy_high', 'fuzzy_low', 'admin_confirmed', 'unmatched'];
+        const counts = {};
+        await Promise.all(confidences.map(async (conf) => {
+          const { count } = await supabase
+            .from('store_products')
+            .select('*', { count: 'exact', head: true })
+            .eq('match_confidence', conf);
+          counts[conf] = count || 0;
+        }));
+        const { count: totalCount } = await supabase
+          .from('store_products')
+          .select('*', { count: 'exact', head: true });
+        const { count: unmatchedCount } = await supabase
+          .from('store_products')
+          .select('*', { count: 'exact', head: true })
+          .is('canonical_product_id', null);
+        return send(res, 200, { ok: true, stats: counts, total: totalCount || 0, unmatched: unmatchedCount || 0 });
+      }
+      case 'applyNormalizationSql': {
+        // Admin pastes normalisation SQL → backend executes it with service role, then backfills prices
+        const rawSql = String(body.sql || '').trim();
+        if (!rawSql) return send(res, 400, { ok: false, error: 'sql is required' });
+        if (!containsSqlDml(rawSql)) return send(res, 400, { ok: false, error: 'SQL must contain at least one INSERT, UPDATE, or DELETE statement' });
+
+        const rpcAvailable = await isExecSqlAvailable();
+        if (!rpcAvailable) return send(res, 500, { ok: false, error: 'exec_sql RPC not available on this project' });
+
+        const sanitized = sanitizeSqlApostrophes(rawSql);
+        const statements = splitSqlStatements(sanitized);
+        const results = { executed: 0, errors: [] };
+
+        for (const stmt of statements) {
+          const { error: stmtError } = await supabase.rpc('exec_sql', { sql: stmt });
+          if (stmtError) {
+            results.errors.push({ stmt: stmt.slice(0, 120), error: stmtError.message });
+          } else {
+            results.executed += 1;
+          }
+        }
+
+        // Backfill prices.product_id for rows that were inserted while store_product was unmatched
+        const backfillSql = `UPDATE prices p SET product_id = sp.canonical_product_id FROM store_products sp WHERE p.store_product_id = sp.id AND p.product_id IS NULL AND sp.canonical_product_id IS NOT NULL`;
+        const { error: backfillError } = await supabase.rpc('exec_sql', { sql: backfillSql });
+        if (backfillError) results.errors.push({ stmt: 'backfill_prices', error: backfillError.message });
+
+        return send(res, 200, { ok: true, ...results, message: `Executed ${results.executed} of ${statements.length} statements. Backfill ran.` });
+      }
       default:
         return send(res, 400, { ok: false, error: 'UNKNOWN_ACTION' });
     }

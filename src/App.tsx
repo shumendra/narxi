@@ -308,6 +308,11 @@ export default function App() {
   const [scrapeResult, setScrapeResult] = useState<string | null>(null);
   const [queueSyncing, setQueueSyncing] = useState(false);
   const [queueStatus, setQueueStatus] = useState<string | null>(null);
+  const [normSql, setNormSql] = useState<string>('');
+  const [normApplying, setNormApplying] = useState(false);
+  const [normApplyResult, setNormApplyResult] = useState<string | null>(null);
+  const [matchingStats, setMatchingStats] = useState<Record<string, number> | null>(null);
+  const [matchingStatsLoading, setMatchingStatsLoading] = useState(false);
   const [newApprovedItem, setNewApprovedItem] = useState({
     product_name_raw: '',
     price: '',
@@ -583,6 +588,19 @@ export default function App() {
         productDownload: 'Yuklab olish (JSON)',
         productUpload: 'Yuklash (JSON)',
         productUploading: 'Yuklanmoqda...',
+        downloadUnmatched: 'Nomoslashtirilmaganlarni yuklab olish',
+        uploadNormSql: 'Normalizatsiya SQL yuklash',
+        normSqlPlaceholder: 'INSERT INTO ... normalizatsiya SQL ni bu yerga joylashtiring',
+        applyNormSql: 'SQL qollash',
+        applyingNormSql: 'Qollanmoqda...',
+        matchingStats: 'Moslashuv statistikasi',
+        matchingStatsExact: 'Aniq (Level 1)',
+        matchingStatsNormalised: 'Normallashtirilgan (Level 2-3)',
+        matchingStatsFuzzyHigh: 'Yuqori fuzzy (Level 4-5)',
+        matchingStatsFuzzyLow: 'Past fuzzy (tekshirish kerak)',
+        matchingStatsConfirmed: 'Admin tasdiqlagan',
+        matchingStatsUnmatched: 'Moslashmagan (normalizatsiya kerak)',
+        matchingStatsLoad: 'Statistikani yuklash',
         productTableId: 'ID',
         productTableNameUz: 'Nomi (UZ)',
         productTableNameRu: 'Nomi (RU)',
@@ -898,6 +916,19 @@ export default function App() {
         productDownload: 'Скачать (JSON)',
         productUpload: 'Загрузить (JSON)',
         productUploading: 'Загрузка...',
+        downloadUnmatched: 'Скачать несопоставленные',
+        uploadNormSql: 'Загрузить SQL нормализации',
+        normSqlPlaceholder: 'Вставьте SQL нормализации (INSERT INTO ...) сюда',
+        applyNormSql: 'Применить SQL',
+        applyingNormSql: 'Применяется...',
+        matchingStats: 'Статистика соответствий',
+        matchingStatsExact: 'Точные (Level 1)',
+        matchingStatsNormalised: 'Нормализованные (Level 2-3)',
+        matchingStatsFuzzyHigh: 'Высокий fuzzy (Level 4-5)',
+        matchingStatsFuzzyLow: 'Низкий fuzzy (требует проверки)',
+        matchingStatsConfirmed: 'Подтверждено администратором',
+        matchingStatsUnmatched: 'Несопоставленные (нужна нормализация)',
+        matchingStatsLoad: 'Загрузить статистику',
         productTableId: 'ID',
         productTableNameUz: 'Название (UZ)',
         productTableNameRu: 'Название (RU)',
@@ -1214,6 +1245,19 @@ export default function App() {
         productDownload: 'Download (JSON)',
         productUpload: 'Upload (JSON)',
         productUploading: 'Uploading...',
+        downloadUnmatched: 'Download Unmatched',
+        uploadNormSql: 'Upload Normalisation SQL',
+        normSqlPlaceholder: 'Paste normalisation SQL (INSERT INTO ...) here',
+        applyNormSql: 'Apply SQL',
+        applyingNormSql: 'Applying...',
+        matchingStats: 'Matching Stats',
+        matchingStatsExact: 'Exact (Level 1)',
+        matchingStatsNormalised: 'Normalised (Level 2-3)',
+        matchingStatsFuzzyHigh: 'Fuzzy high (Level 4-5)',
+        matchingStatsFuzzyLow: 'Fuzzy low (needs review)',
+        matchingStatsConfirmed: 'Admin confirmed',
+        matchingStatsUnmatched: 'Unmatched (needs normalisation)',
+        matchingStatsLoad: 'Load Stats',
         productTableId: 'ID',
         productTableNameUz: 'Name (UZ)',
         productTableNameRu: 'Name (RU)',
@@ -1371,6 +1415,7 @@ export default function App() {
   const findMapSectionRef = useRef<HTMLElement | null>(null);
   const productsCacheRef = useRef<{ timestamp: number; data: Product[] } | null>(null);
   const productsFetchPromiseRef = useRef<Promise<Product[]> | null>(null);
+  const [productsLoading, setProductsLoading] = useState(false);
 
 
   useEffect(() => {
@@ -1453,33 +1498,56 @@ export default function App() {
       return productsFetchPromiseRef.current;
     }
 
+    const FIRST_PAGE = 200;
+
+    const buildEnriched = (data: Product[], aliases: { product_id: string; alias_text: string }[]) => {
+      const aliasMap: Record<string, string[]> = {};
+      for (const a of aliases || []) {
+        if (!aliasMap[a.product_id]) aliasMap[a.product_id] = [];
+        aliasMap[a.product_id].push(a.alias_text);
+      }
+      return data.map(p => ({
+        ...p,
+        search_text: [p.search_text || '', ...(aliasMap[p.id] || [])].join(' '),
+      })) as Product[];
+    };
+
     const requestPromise = (async () => {
-      const [{ data }, { data: aliases }] = await Promise.all([
-        supabase.from('products').select('*').order('name_uz'),
+      setProductsLoading(true);
+      // --- First page: show immediately ---
+      const [firstPage, aliasesRes] = await Promise.all([
+        supabase.from('products').select('*').order('name_uz').range(0, FIRST_PAGE - 1),
         supabase.from('product_aliases').select('product_id, alias_text'),
       ]);
 
-      if (data) {
-        const aliasMap: Record<string, string[]> = {};
-        for (const a of aliases || []) {
-          if (!aliasMap[a.product_id]) aliasMap[a.product_id] = [];
-          aliasMap[a.product_id].push(a.alias_text);
-        }
-
-        const enriched = data.map(p => ({
-          ...p,
-          search_text: [p.search_text || '', ...(aliasMap[p.id] || [])].join(' '),
-        })) as Product[];
-
-        productsCacheRef.current = {
-          timestamp: Date.now(),
-          data: enriched,
-        };
-        setProducts(enriched);
-        return enriched;
+      const aliases = aliasesRes.data || [];
+      if (firstPage.data && firstPage.data.length > 0) {
+        setProducts(buildEnriched(firstPage.data, aliases));
       }
 
-      return [] as Product[];
+      // --- Rest in background ---
+      let allData = firstPage.data || [];
+      if ((firstPage.data?.length ?? 0) === FIRST_PAGE) {
+        let offset = FIRST_PAGE;
+        while (true) {
+          const { data: page } = await supabase
+            .from('products')
+            .select('*')
+            .order('name_uz')
+            .range(offset, offset + FIRST_PAGE - 1);
+          if (!page || page.length === 0) break;
+          allData = [...allData, ...page];
+          setProducts(buildEnriched(allData, aliases));
+          if (page.length < FIRST_PAGE) break;
+          offset += FIRST_PAGE;
+        }
+      }
+
+      const enriched = buildEnriched(allData, aliases);
+      productsCacheRef.current = { timestamp: Date.now(), data: enriched };
+      setProducts(enriched);
+      setProductsLoading(false);
+      return enriched;
     })().finally(() => {
       productsFetchPromiseRef.current = null;
     });
@@ -1832,10 +1900,14 @@ export default function App() {
     }
   };
 
-  const downloadProductsJson = async () => {
+  const downloadProductsJson = async (idsFilter?: string[]) => {
+    const useSelection = Array.isArray(idsFilter) && idsFilter.length > 0;
     try {
+      let prodsQuery = supabase.from('products').select('id, name_uz, name_ru, name_en, search_text, category, unit, available_cities').order('name_uz');
+      if (useSelection) prodsQuery = prodsQuery.in('id', idsFilter);
+
       const [{ data: prods }, { data: aliases }] = await Promise.all([
-        supabase.from('products').select('id, name_uz, name_ru, name_en, search_text, category, unit, available_cities').order('name_uz'),
+        prodsQuery,
         supabase.from('product_aliases').select('product_id, alias_text, language, store_name'),
       ]);
       const aliasMap: Record<string, Array<{ alias_text: string; language: string; store_name: string | null }>> = {};
@@ -1852,7 +1924,7 @@ export default function App() {
       }));
 
       let queueProducts: any[] = [];
-      if (isAdminUser) {
+      if (isAdminUser && !useSelection) {
         try {
           const queueResult = await callModerationApi('downloadNormalizationQueue');
           queueProducts = Array.isArray(queueResult?.products) ? queueResult.products : [];
@@ -1865,15 +1937,70 @@ export default function App() {
       }
 
       const payload = [...dbProducts, ...queueProducts];
+      const suffix = useSelection ? `-selected${idsFilter.length}` : '';
       const blob = new Blob([JSON.stringify({ products: payload }, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `narxi-products-${new Date().toISOString().slice(0, 10)}.json`;
+      a.download = `narxi-products${suffix}-${new Date().toISOString().slice(0, 10)}.json`;
       a.click();
       URL.revokeObjectURL(url);
     } catch {
       window.Telegram?.WebApp?.showAlert(t.moderationError);
+    }
+  };
+
+  const downloadUnmatched = async () => {
+    try {
+      const { data: unmatched } = await supabase
+        .from('store_products')
+        .select('id, original_name, normalised_name, source, store_name, times_seen, first_seen')
+        .is('canonical_product_id', null)
+        .order('times_seen', { ascending: false });
+
+      const grouped: Record<string, typeof unmatched> = {};
+      for (const item of unmatched || []) {
+        if (!grouped[item.source]) grouped[item.source] = [];
+        grouped[item.source]!.push(item);
+      }
+
+      const blob = new Blob([JSON.stringify({ unmatched: grouped }, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `narxi-unmatched-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    }
+  };
+
+  const applyNormalizationSql = async () => {
+    const sql = normSql.trim();
+    if (!sql) return;
+    setNormApplying(true);
+    setNormApplyResult(null);
+    try {
+      const result = await callModerationApi('applyNormalizationSql', { sql });
+      setNormApplyResult(result.message || 'Done');
+      setNormSql('');
+    } catch (err: any) {
+      setNormApplyResult(`Error: ${err?.message || 'Unknown error'}`);
+    } finally {
+      setNormApplying(false);
+    }
+  };
+
+  const fetchMatchingStats = async () => {
+    setMatchingStatsLoading(true);
+    try {
+      const result = await callModerationApi('getMatchingStats');
+      setMatchingStats(result.stats || {});
+    } catch {
+      setMatchingStats(null);
+    } finally {
+      setMatchingStatsLoading(false);
     }
   };
 
@@ -4092,6 +4219,9 @@ export default function App() {
                   <ChevronRight className="w-4 h-4 text-stone-300" />
                 </button>
               ))}
+              {productsLoading && (
+                <div className="px-4 py-2 text-xs text-center text-stone-400 italic">Loading more products...</div>
+              )}
             </div>
           )}
         </div>}
@@ -4905,6 +5035,9 @@ export default function App() {
                               <div className="text-xs text-stone-500">{getProductSecondary(p, lang)}</div>
                             </button>
                           ))}
+                          {productsLoading && (
+                            <div className="px-4 py-2 text-xs text-center text-stone-400 italic">Loading more products...</div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -5527,12 +5660,49 @@ export default function App() {
                     <button onClick={clearProductSelection} className="rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-xs font-medium text-stone-700">{t.productClearSelection}</button>
                     <button onClick={deleteSelectedProducts} disabled={selectedProductIds.length === 0 || moderationSavingId === 'bulk-delete-products'} className="rounded-lg bg-rose-600 px-2 py-1.5 text-xs font-semibold text-white disabled:opacity-50">{t.productDeleteSelected} ({selectedProductIds.length})</button>
                     <button onClick={purgeAllProductsData} disabled={moderationSavingId === 'purge-all-products'} className="rounded-lg bg-rose-700 px-2 py-1.5 text-xs font-semibold text-white disabled:opacity-50">{t.productPurgeAll}</button>
-                    <button onClick={downloadProductsJson} className="rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-xs font-semibold text-emerald-700 flex items-center gap-1"><Download className="w-3.5 h-3.5" /> {t.productDownload}</button>
+                    <button onClick={() => downloadProductsJson(selectedProductIds.length > 0 ? selectedProductIds : undefined)} className="rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-xs font-semibold text-emerald-700 flex items-center gap-1"><Download className="w-3.5 h-3.5" /> {selectedProductIds.length > 0 ? `${t.productDownload} (${selectedProductIds.length})` : t.productDownload}</button>
+                    <button onClick={downloadUnmatched} className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs font-semibold text-amber-700 flex items-center gap-1"><Download className="w-3.5 h-3.5" /> {t.downloadUnmatched}</button>
                     <label className={cn("rounded-lg border border-blue-200 bg-blue-50 px-2 py-1.5 text-xs font-semibold text-blue-700 flex items-center gap-1 cursor-pointer", aliasImporting && "opacity-50 pointer-events-none")}>
                       <Upload className="w-3.5 h-3.5" /> {aliasImporting ? t.productUploading : t.productUpload}
                       <input type="file" accept=".json" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadAliasesJson(f); e.target.value = ''; }} />
                     </label>
                   </div>
+                </section>
+
+                {/* Matching stats */}
+                <section className="rounded-2xl border border-stone-200 bg-white p-3 shadow-sm space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-stone-700">{t.matchingStats}</span>
+                    <button onClick={fetchMatchingStats} disabled={matchingStatsLoading} className="rounded border border-stone-200 bg-stone-50 px-2 py-0.5 text-xs text-stone-600 disabled:opacity-50">{matchingStatsLoading ? '...' : t.matchingStatsLoad}</button>
+                  </div>
+                  {matchingStats && (
+                    <div className="grid grid-cols-2 gap-1 text-xs">
+                      <div className="rounded-lg bg-emerald-50 px-2 py-1 flex justify-between"><span className="text-stone-600">{t.matchingStatsExact}</span><span className="font-semibold text-emerald-700">{matchingStats['exact'] || 0}</span></div>
+                      <div className="rounded-lg bg-blue-50 px-2 py-1 flex justify-between"><span className="text-stone-600">{t.matchingStatsNormalised}</span><span className="font-semibold text-blue-700">{(matchingStats['normalised'] || 0)}</span></div>
+                      <div className="rounded-lg bg-sky-50 px-2 py-1 flex justify-between"><span className="text-stone-600">{t.matchingStatsFuzzyHigh}</span><span className="font-semibold text-sky-700">{matchingStats['fuzzy_high'] || 0}</span></div>
+                      <div className="rounded-lg bg-yellow-50 px-2 py-1 flex justify-between"><span className="text-stone-600">{t.matchingStatsFuzzyLow}</span><span className="font-semibold text-yellow-700">{matchingStats['fuzzy_low'] || 0}</span></div>
+                      <div className="rounded-lg bg-stone-100 px-2 py-1 flex justify-between"><span className="text-stone-600">{t.matchingStatsConfirmed}</span><span className="font-semibold text-stone-700">{matchingStats['admin_confirmed'] || 0}</span></div>
+                      <div className="rounded-lg bg-rose-50 px-2 py-1 flex justify-between"><span className="text-stone-600">{t.matchingStatsUnmatched}</span><span className="font-semibold text-rose-700">{matchingStats['unmatched'] || 0}</span></div>
+                    </div>
+                  )}
+                </section>
+
+                {/* Normalisation SQL upload */}
+                <section className="rounded-2xl border border-stone-200 bg-white p-3 shadow-sm space-y-2">
+                  <div className="text-xs font-semibold text-stone-700">{t.uploadNormSql}</div>
+                  <textarea
+                    value={normSql}
+                    onChange={(e) => setNormSql(e.target.value)}
+                    placeholder={t.normSqlPlaceholder}
+                    rows={5}
+                    className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-mono resize-y"
+                  />
+                  {normApplyResult && (
+                    <div className={cn('rounded-lg px-3 py-2 text-xs', normApplyResult.startsWith('Error') ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700')}>{normApplyResult}</div>
+                  )}
+                  <button onClick={applyNormalizationSql} disabled={normApplying || !normSql.trim()} className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+                    {normApplying ? t.applyingNormSql : t.applyNormSql}
+                  </button>
                 </section>
 
                 {/* Products table */}

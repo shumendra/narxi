@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
-import { fuzzyMatchProduct } from './utils/receipt.js';
+import * as fuzzball from 'fuzzball';
+import { matchProduct } from './utils/matcher.js';
 import { extractCityFromAddress, normalizeCityName } from '../src/constants/cities.js';
 
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
@@ -147,7 +148,7 @@ const CHAIN_REPRESENTATIVE_STORES = {
   },
 };
 
-const STORE_API_MATCH_MIN_SCORE = 70;
+// Thresholds are now in api/utils/matcher.js
 const HTTP_CONCURRENCY = 8;
 const DB_CHUNK_SIZE = 250;
 
@@ -207,7 +208,15 @@ async function fetchMakroStores() {
     });
   });
 
-  const stores = regionStores.flat().filter(Boolean);
+  // Deduplicate across regions — the same physical store appears in multiple region responses.
+  const seen = new Set();
+  const stores = regionStores.flat().filter(Boolean).filter(s => {
+    if (!s.lat || !s.lng) return false;
+    const key = `${s.lat.toFixed(4)},${s.lng.toFixed(4)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
   return stores;
 }
 
@@ -408,22 +417,22 @@ async function scrapeMakro() {
     const data = await res.json();
     if (!Array.isArray(data?.results)) return [];
 
-    return data.results.map((item) => ({
-      name: item.title,
-      price: Math.round(item.newPrice), // current promo price
-      oldPrice: Math.round(item.oldPrice),
+    return (data.results || []).map((item) => ({
+      name: String(item.title || '').trim(),
+      price: Math.round(parseFloat(item.newPrice) || parseFloat(item.oldPrice) || 0),
+      oldPrice: Math.round(parseFloat(item.oldPrice) || 0),
       code: item.code,
       category: cat.title,
-    }));
+    })).filter(p => p.price > 0 && p.name);
   });
 
   const allProducts = categoryRows.flat().filter(Boolean);
 
   // Deduplicate by code (same product may appear in multiple categories)
-  const seen = new Set();
+  const seenMakro = new Set();
   return allProducts.filter(p => {
-    if (seen.has(p.code)) return false;
-    seen.add(p.code);
+    if (seenMakro.has(p.code)) return false;
+    seenMakro.add(p.code);
     return true;
   });
 }
@@ -443,9 +452,9 @@ async function scrapeKorzinka() {
       headers: { ...KORZINKA_HEADERS, 'Content-Type': 'application/json' },
       body: JSON.stringify({ get_products: ccid }),
     }).catch(() => null);
-    if (!res) return [];
+    if (!res || !res.ok) return [];
     const data = await res.json().catch(() => null);
-    if (!Array.isArray(data?.data) || data.data.length === 0) return [];
+    if (!data || !Array.isArray(data.data) || data.data.length === 0) return [];
 
     return data.data.map((item) => {
       const priceStr = item.prices?.actual_price || '0';
@@ -564,140 +573,14 @@ export default async function handler(req, res) {
   try {
     const startedAt = Date.now();
 
-    // 1. Fetch our products for matching
-    const { data: products } = await supabase
-      .from('products')
-      .select('id,name_uz,name_ru,name_en,search_text');
+    // 1. Pre-fetch data needed for the matcher caches (avoids N repeated DB calls in the loop).
+    //    sourceProductsCache  — all store_products already seen from this source (Level 4)
+    //    canonicalProductsCache — all canonical products (Level 5)
+    //    Both are loaded after we know the store name; populated below after step 2.
 
-    // Also get aliases for enriched matching
-    const { data: aliases } = await supabase.from('product_aliases').select('product_id, alias_text');
-    const aliasMap = {};
-    for (const a of aliases || []) {
-      if (!aliasMap[a.product_id]) aliasMap[a.product_id] = [];
-      aliasMap[a.product_id].push(a.alias_text);
-    }
-
-    const productIdsByNameKey = new Map();
-    const registerProductNameKey = (productId, rawName) => {
-      const key = normalizeProductNameKey(rawName);
-      if (!productId || !key) return;
-
-      if (!productIdsByNameKey.has(key)) {
-        productIdsByNameKey.set(key, new Set());
-      }
-      productIdsByNameKey.get(key).add(productId);
-    };
-
-    for (const product of products || []) {
-      registerProductNameKey(product.id, product.name_uz);
-      registerProductNameKey(product.id, product.name_ru);
-      registerProductNameKey(product.id, product.name_en);
-    }
-    for (const alias of aliases || []) {
-      registerProductNameKey(alias.product_id, alias.alias_text);
-    }
-
-    const enrichedProducts = (products || []).map(p => ({
-      ...p,
-      search_text: [p.search_text || '', ...(aliasMap[p.id] || [])].join(' '),
-    }));
-
-    const createdProductIdByNameKey = new Map();
-    let autoCreatedProducts = 0;
-
-    const resolveOrCreateProductForApiName = async (rawName, cityHint = 'Tashkent', nameOverrides = {}) => {
-      const normalizedName = String(rawName || '').trim();
-      const rawKey = normalizeProductNameKey(normalizedName);
-      if (!normalizedName || !rawKey) return null;
-
-      const knownIds = Array.from(productIdsByNameKey.get(rawKey) || []);
-      if (knownIds.length === 1) return knownIds[0];
-      if (knownIds.length > 1) return null;
-
-      if (createdProductIdByNameKey.has(rawKey)) {
-        return createdProductIdByNameKey.get(rawKey);
-      }
-
-      const { data: existingByName } = await supabase
-        .from('products')
-        .select('id,name_uz,name_ru,name_en,search_text')
-        .ilike('name_uz', normalizedName)
-        .limit(1)
-        .maybeSingle();
-
-      if (existingByName?.id) {
-        registerProductNameKey(existingByName.id, existingByName.name_uz);
-        registerProductNameKey(existingByName.id, existingByName.name_ru);
-        registerProductNameKey(existingByName.id, existingByName.name_en);
-        registerProductNameKey(existingByName.id, normalizedName);
-        createdProductIdByNameKey.set(rawKey, existingByName.id);
-        enrichedProducts.push({
-          id: existingByName.id,
-          name_uz: existingByName.name_uz,
-          name_ru: existingByName.name_ru,
-          name_en: existingByName.name_en,
-          search_text: existingByName.search_text || `${existingByName.name_uz || ''} ${existingByName.name_ru || ''} ${existingByName.name_en || ''}`.trim(),
-        });
-        return existingByName.id;
-      }
-
-      const cityValue = normalizeCityName(cityHint || '') || 'Tashkent';
-      const createPayload = {
-        name_uz: normalizeMaybeText(nameOverrides.nameUz) || normalizedName,
-        name_ru: normalizeMaybeText(nameOverrides.nameRu) || normalizedName,
-        name_en: normalizedName,
-        search_text: [normalizeMaybeText(nameOverrides.nameUz), normalizeMaybeText(nameOverrides.nameRu), normalizedName].filter(Boolean).join(' ').trim() || normalizedName,
-        category: 'Boshqa',
-        unit: 'dona',
-        available_cities: cityValue ? [cityValue] : [],
-      };
-
-      const { data: created, error: createError } = await supabase
-        .from('products')
-        .insert(createPayload)
-        .select('id,name_uz,name_ru,name_en,search_text')
-        .single();
-
-      if (createError || !created?.id) {
-        const { data: fallback } = await supabase
-          .from('products')
-          .select('id,name_uz,name_ru,name_en,search_text')
-          .ilike('name_uz', normalizedName)
-          .limit(1)
-          .maybeSingle();
-
-        if (!fallback?.id) return null;
-
-        registerProductNameKey(fallback.id, fallback.name_uz);
-        registerProductNameKey(fallback.id, fallback.name_ru);
-        registerProductNameKey(fallback.id, fallback.name_en);
-        registerProductNameKey(fallback.id, normalizedName);
-        createdProductIdByNameKey.set(rawKey, fallback.id);
-        enrichedProducts.push({
-          id: fallback.id,
-          name_uz: fallback.name_uz,
-          name_ru: fallback.name_ru,
-          name_en: fallback.name_en,
-          search_text: fallback.search_text || `${fallback.name_uz || ''} ${fallback.name_ru || ''} ${fallback.name_en || ''}`.trim(),
-        });
-        return fallback.id;
-      }
-
-      autoCreatedProducts += 1;
-      registerProductNameKey(created.id, created.name_uz);
-      registerProductNameKey(created.id, created.name_ru);
-      registerProductNameKey(created.id, created.name_en);
-      registerProductNameKey(created.id, normalizedName);
-      createdProductIdByNameKey.set(rawKey, created.id);
-      enrichedProducts.push({
-        id: created.id,
-        name_uz: created.name_uz,
-        name_ru: created.name_ru,
-        name_en: created.name_en,
-        search_text: created.search_text || normalizedName,
-      });
-      return created.id;
-    };
+    // Caches populated after we know the store; passed to matchProduct to avoid N DB round-trips.
+    let sourceProductsCache = [];
+    let canonicalProductsCache = [];
 
     // 2. Scrape store
     let storeProducts;
@@ -781,62 +664,26 @@ export default async function handler(req, res) {
 
     const defaultCity = normalizeStoreCity(stores?.[0]?.city, stores?.[0]?.address);
 
-    // 3b. Korzinka bulk pre-create: avoid ~21k individual async DB inserts in the matching loop.
-    //     Only runs for Korzinka because its full catalog is largely unseen in the DB on first import.
-    //     For other stores (Baraka ~1.9k items) the per-item resolve path in the loop is fast enough.
-    if (store === 'korzinka' && storeProducts.length > 0) {
-      const bulkCreatePayloads = [];
-      const pendingKeys = new Set();
+    // 3b. Pre-fetch matcher caches once (avoids repeated DB queries inside the per-product loop).
+    //     sourceProductsCache — all store_products already matched for this source (Level 4 in matcher)
+    //     canonicalProductsCache — full canonical products table (Level 5 in matcher)
+    const normSource = store === 'makro' ? 'makro_api'
+      : store === 'korzinka' ? 'korzinka_api'
+      : store.startsWith('yandex_') ? `${store.replace(/^yandex_/, '')}_api`
+      : store;
 
-      for (const sp of storeProducts) {
-        const rawName = sp.nameUz || sp.name || '';
-        if (!rawName || sp.price <= 0) continue;
-        const rawKey = normalizeProductNameKey(rawName);
-        // Also check the Russian-name key to avoid duplicates when nameUz differs lexically
-        const ruKey = sp.name ? normalizeProductNameKey(sp.name) : null;
-        if (!rawKey || productIdsByNameKey.has(rawKey) || createdProductIdByNameKey.has(rawKey) || pendingKeys.has(rawKey)) continue;
-        if (ruKey && (productIdsByNameKey.has(ruKey) || createdProductIdByNameKey.has(ruKey) || pendingKeys.has(ruKey))) continue;
+    const [{ data: spRows }, { data: cpRows }] = await Promise.all([
+      supabase.from('store_products')
+        .select('id, original_name, normalised_name, token_sorted_name, canonical_product_id')
+        .eq('source', normSource)
+        .not('canonical_product_id', 'is', null),
+      supabase.from('products')
+        .select('id, name_uz, name_ru, name_en, search_text'),
+    ]);
+    sourceProductsCache = spRows || [];
+    canonicalProductsCache = cpRows || [];
 
-        {
-          const nameUz = normalizeMaybeText(sp.nameUz) || normalizeMaybeText(sp.name) || rawName;
-          const nameRu = normalizeMaybeText(sp.name) || rawName;
-          pendingKeys.add(rawKey);
-          if (ruKey && ruKey !== rawKey) pendingKeys.add(ruKey);
-          bulkCreatePayloads.push({
-            _key: rawKey,
-            name_uz: nameUz,
-            name_ru: nameRu,
-            name_en: nameRu,
-            search_text: [nameUz !== nameRu ? nameUz : null, nameRu].filter(Boolean).join(' ').trim(),
-            category: 'Boshqa',
-            unit: 'dona',
-            available_cities: defaultCity ? [defaultCity] : [],
-          });
-        }
-      }
-
-      for (const chunk of chunkArray(bulkCreatePayloads, DB_CHUNK_SIZE)) {
-        const insertPayloads = chunk.map(({ _key, ...rest }) => rest);
-        const { data: createdRows } = await supabase
-          .from('products')
-          .insert(insertPayloads)
-          .select('id,name_uz,name_ru,name_en,search_text');
-
-        for (const row of createdRows || []) {
-          if (!row?.id) continue;
-          registerProductNameKey(row.id, row.name_uz);
-          registerProductNameKey(row.id, row.name_ru);
-          registerProductNameKey(row.id, row.name_en);
-          const uzKey = normalizeProductNameKey(row.name_uz);
-          const ruKey = normalizeProductNameKey(row.name_ru);
-          if (uzKey) createdProductIdByNameKey.set(uzKey, row.id);
-          if (ruKey && ruKey !== uzKey) createdProductIdByNameKey.set(ruKey, row.id);
-          autoCreatedProducts += 1;
-        }
-      }
-    }
-
-    // 4. Match in-memory first and batch DB writes later.
+    // 4. Match via store_products layer and batch DB writes.
     let matched = 0;
     let unmatched = 0;
     let skipped = 0;
@@ -850,41 +697,22 @@ export default async function handler(req, res) {
 
     for (const sp of storeProducts) {
       const rawName = sp.nameUz || sp.name || '';
-      if (!rawName || sp.price <= 0) { skipped++; continue; }
+      if (!rawName || !(sp.price > 0)) { skipped++; continue; } // !(x > 0) correctly rejects NaN
 
-      const rawNameKey = normalizeProductNameKey(rawName);
-      const exactIds = rawNameKey ? Array.from(productIdsByNameKey.get(rawNameKey) || []) : [];
-      let matchedProductId = exactIds.length === 1 ? exactIds[0] : null;
+      // Five-level matching: exact → normalised → token-sorted → store-scoped fuzzy → cross-store fuzzy → unmatched
+      const matchResult = await matchProduct(rawName, store, supabase, fuzzball, {
+        sourceProductsCache,
+        canonicalProductsCache,
+      });
 
-      if (!matchedProductId && enrichedProducts.length > 0) {
-        // Fuzzy match against our product catalog
-        const { product: bestMatch, score } = fuzzyMatchProduct(rawName, enrichedProducts);
-
-        // If match confidence is below threshold, also try the Russian name
-        let finalMatch = bestMatch;
-        let finalScore = score;
-        if (score < STORE_API_MATCH_MIN_SCORE && sp.name && sp.name !== rawName) {
-          const { product: ruMatch, score: ruScore } = fuzzyMatchProduct(sp.name, enrichedProducts);
-          if (ruScore > finalScore) {
-            finalMatch = ruMatch;
-            finalScore = ruScore;
-          }
-        }
-
-        const isConfidentMatch = Boolean(finalMatch) && finalScore >= STORE_API_MATCH_MIN_SCORE;
-        matchedProductId = isConfidentMatch ? finalMatch.id : null;
+      if (!matchResult.canonical_product_id) {
+        // Level 6: queued as unmatched in store_products; price will be inserted after normalisation
+        unmatched += 1;
+        continue;
       }
 
-      if (!matchedProductId) {
-        matchedProductId = await resolveOrCreateProductForApiName(rawName, defaultCity, {
-          nameRu: sp.name || null,
-          nameUz: sp.nameUz || null,
-        });
-        if (!matchedProductId) {
-          unmatched += 1;
-          continue;
-        }
-      }
+      const matchedProductId = matchResult.canonical_product_id;
+      const storeProductId = matchResult.store_product_id;
 
       // Queue inserts for every branch — API prices are chain-wide.
       let queuedThisProduct = false;
@@ -924,6 +752,7 @@ export default async function handler(req, res) {
         rowsToInsert.push({
           product_name_raw: rawName,
           product_id: matchedProductId,
+          store_product_id: storeProductId,
           price: sp.price,
           quantity: 1,
           unit_price: sp.price,
@@ -978,10 +807,9 @@ export default async function handler(req, res) {
       skippedDup,
       archived,
       queued: rowsToInsert.length,
-      autoCreatedProducts,
       durationMs,
       errors: errors.length > 0 ? errors.slice(0, 10) : undefined,
-      message: `Scraped ${storeProducts.length} products × ${stores.length} branches from ${store}: ${inserted} prices written (${matched} matched products, ${unmatched} unmatched, ${autoCreatedProducts} auto-created), ${skippedDup} unchanged duplicates skipped in ${Math.round(durationMs / 1000)}s.`,
+      message: `Scraped ${storeProducts.length} products × ${stores.length} branches from ${store}: ${inserted} prices written (${matched} matched products, ${unmatched} unmatched/queued for normalisation), ${skippedDup} unchanged duplicates skipped in ${Math.round(durationMs / 1000)}s.`,
     });
   } catch (err) {
     console.error('scrape-stores error:', err);
