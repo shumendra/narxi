@@ -466,6 +466,7 @@ export default function App() {
         urlFallbackSubmit: 'Yuborish',
         scannerInvalidAlert: "QR kod soliq.uz havolasi bo'lishi kerak",
         alertFill: "Iltimos, barcha maydonlarni to'ldiring",
+        invalidPrice: "Narx 0 dan katta bo'lishi kerak",
         alertSuccess: "Narxingiz yuborildi va ko'rib chiqilgandan so'ng qo'shiladi ✅",
         alertError: "Xatolik yuz berdi. Qayta urinib ko'ring.",
         locationHint: "Joylashuv tanlanmagan",
@@ -781,6 +782,7 @@ export default function App() {
         urlFallbackSubmit: 'Отправить',
         scannerInvalidAlert: 'QR код должен содержать ссылку soliq.uz',
         alertFill: 'Пожалуйста, заполните все поля',
+        invalidPrice: 'Цена должна быть больше 0',
         alertSuccess: 'Цена отправлена и будет добавлена после проверки ✅',
         alertError: 'Произошла ошибка. Попробуйте еще раз.',
         locationHint: 'Локация не выбрана',
@@ -1096,6 +1098,7 @@ export default function App() {
         urlFallbackSubmit: 'Submit',
         scannerInvalidAlert: 'QR code must contain a soliq.uz URL',
         alertFill: 'Please fill in all fields',
+        invalidPrice: 'Price must be greater than 0',
         alertSuccess: 'Your price was submitted and will be added after review ✅',
         alertError: 'Something went wrong. Please try again.',
         locationHint: 'Location not selected',
@@ -3242,6 +3245,12 @@ export default function App() {
       return;
     }
 
+    const parsedPrice = parseInt(reportPrice);
+    if (!parsedPrice || parsedPrice <= 0) {
+      window.Telegram?.WebApp?.showAlert(t.invalidPrice);
+      return;
+    }
+
     if (!reportProofUrl.trim()) {
       window.Telegram?.WebApp?.showAlert(t.proofRequired);
       return;
@@ -3255,9 +3264,9 @@ export default function App() {
       product_name_raw: manualName || searchQuery.trim(),
       match_confidence: selectedProduct ? 100 : 0,
       status: 'pending',
-      price: parseInt(reportPrice),
+      price: parsedPrice,
       quantity: 1,
-      unit_price: parseInt(reportPrice),
+      unit_price: parsedPrice,
       latitude: reportLocation?.lat ?? null,
       longitude: reportLocation?.lng ?? null,
       place_name: detectedStore || null,

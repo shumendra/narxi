@@ -429,80 +429,56 @@ async function scrapeMakro() {
 }
 
 // ─── Korzinka scraper ──────────────────────────────────────────────────────
+// The Korzinka catalog is accessible via the mobile endpoint with catalog_category_id values.
+// These IDs cluster from ~800 to ~1410. Scanning this range yields ~21k unique products.
+// The top-level /api/catalogs/categories response only has 8 promotional categories (~260 embedded).
 async function scrapeKorzinka() {
-  // Get all categories
-  const catRes = await fetch('https://catalog.korzinka.uz/api/catalogs/categories', {
-    headers: KORZINKA_HEADERS,
-  });
-  const catData = await catRes.json();
-  const categories = catData.data || [];
+  const KORZINKA_SCAN_START = 750;
+  const KORZINKA_SCAN_END = 1410;
+  const ids = Array.from({ length: KORZINKA_SCAN_END - KORZINKA_SCAN_START + 1 }, (_, i) => KORZINKA_SCAN_START + i);
 
-  const allProducts = [];
-
-  // Collect products already embedded in categories response
-  for (const cat of categories) {
-    if (cat.products && Array.isArray(cat.products)) {
-      for (const item of cat.products) {
-        const priceStr = item.prices?.actual_price || '0';
-        const price = parseInt(String(priceStr).replace(/\s/g, ''), 10) || 0;
-        const oldPriceStr = item.prices?.old_price || '0';
-        const oldPrice = parseInt(String(oldPriceStr).replace(/\s/g, ''), 10) || 0;
-        allProducts.push({
-          name: item.title_ru || item.title || '',
-          nameUz: item.title_uz || '',
-          price,
-          oldPrice,
-          id: item.id,
-          categoryId: item.catalog_category_id,
-          category: cat.title_ru || cat.title_uz || '',
-          weight: item.weight_param || '',
-        });
-      }
-    }
-  }
-
-  // Also fetch via mobile endpoint for each category that has products
-  const categoryIds = [...new Set(categories.map(c => c.id).filter(Boolean))];
-  const mobileRows = await runWithConcurrency(categoryIds, HTTP_CONCURRENCY, async (catId) => {
+  const categoryRows = await runWithConcurrency(ids, 15, async (ccid) => {
     const res = await fetch('https://catalog.korzinka.uz/api/mobile/catalogs/category/products', {
       method: 'POST',
-      headers: {
-        'User-Agent': 'Mozilla/5.0',
-        'Content-Type': 'application/json',
-        'Origin': 'https://korzinka.uz',
-        'Referer': 'https://korzinka.uz/',
-      },
-      body: JSON.stringify({ get_products: catId }),
-    });
-    const data = await res.json();
-    if (!Array.isArray(data?.data)) return [];
+      headers: { ...KORZINKA_HEADERS, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ get_products: ccid }),
+    }).catch(() => null);
+    if (!res) return [];
+    const data = await res.json().catch(() => null);
+    if (!Array.isArray(data?.data) || data.data.length === 0) return [];
 
     return data.data.map((item) => {
       const priceStr = item.prices?.actual_price || '0';
       const price = parseInt(String(priceStr).replace(/\s/g, ''), 10) || 0;
       const oldPriceStr = item.prices?.old_price || '0';
       const oldPrice = parseInt(String(oldPriceStr).replace(/\s/g, ''), 10) || 0;
+      const titleRu = String(item.title_ru || item.title || '').trim();
+      const titleUz = item.title_uz && item.title_uz !== 'null' ? String(item.title_uz).trim() : null;
       return {
-        name: item.title_ru || item.title || '',
-        nameUz: item.title_uz || '',
+        name: titleRu,         // Russian name — primary for DB matching and creation
+        nameUz: titleUz,       // Uzbek name from API (null when API has none)
         price,
         oldPrice,
         id: item.id,
-        categoryId: item.catalog_category_id,
-        category: '',
+        vendorCode: String(item.vendor_code || '').trim(),
         weight: item.weight_param || '',
       };
-    });
+    }).filter(p => p.price > 0 && p.name);
   });
-  allProducts.push(...mobileRows.flat().filter(Boolean));
 
-  // Deduplicate by id
-  const seen = new Set();
-  return allProducts.filter(p => {
-    if (seen.has(p.id)) return false;
-    seen.add(p.id);
-    return p.price > 0;
-  });
+  // Deduplicate: prefer vendor_code, fall back to product id
+  const seenVc = new Set();
+  const seenId = new Set();
+  const allProducts = [];
+  for (const item of categoryRows.flat().filter(Boolean)) {
+    const vc = item.vendorCode;
+    if (vc && seenVc.has(vc)) continue;
+    if (seenId.has(item.id)) continue;
+    if (vc) seenVc.add(vc);
+    seenId.add(item.id);
+    allProducts.push(item);
+  }
+  return allProducts;
 }
 
 async function archiveStoreRows(sourceTag, rowIds, errors) {
@@ -629,7 +605,7 @@ export default async function handler(req, res) {
     const createdProductIdByNameKey = new Map();
     let autoCreatedProducts = 0;
 
-    const resolveOrCreateProductForApiName = async (rawName, cityHint = 'Tashkent') => {
+    const resolveOrCreateProductForApiName = async (rawName, cityHint = 'Tashkent', nameOverrides = {}) => {
       const normalizedName = String(rawName || '').trim();
       const rawKey = normalizeProductNameKey(normalizedName);
       if (!normalizedName || !rawKey) return null;
@@ -667,10 +643,10 @@ export default async function handler(req, res) {
 
       const cityValue = normalizeCityName(cityHint || '') || 'Tashkent';
       const createPayload = {
-        name_uz: normalizedName,
-        name_ru: normalizedName,
+        name_uz: normalizeMaybeText(nameOverrides.nameUz) || normalizedName,
+        name_ru: normalizeMaybeText(nameOverrides.nameRu) || normalizedName,
         name_en: normalizedName,
-        search_text: normalizedName,
+        search_text: [normalizeMaybeText(nameOverrides.nameUz), normalizeMaybeText(nameOverrides.nameRu), normalizedName].filter(Boolean).join(' ').trim() || normalizedName,
         category: 'Boshqa',
         unit: 'dona',
         available_cities: cityValue ? [cityValue] : [],
@@ -805,6 +781,61 @@ export default async function handler(req, res) {
 
     const defaultCity = normalizeStoreCity(stores?.[0]?.city, stores?.[0]?.address);
 
+    // 3b. Korzinka bulk pre-create: avoid ~21k individual async DB inserts in the matching loop.
+    //     Only runs for Korzinka because its full catalog is largely unseen in the DB on first import.
+    //     For other stores (Baraka ~1.9k items) the per-item resolve path in the loop is fast enough.
+    if (store === 'korzinka' && storeProducts.length > 0) {
+      const bulkCreatePayloads = [];
+      const pendingKeys = new Set();
+
+      for (const sp of storeProducts) {
+        const rawName = sp.nameUz || sp.name || '';
+        if (!rawName || sp.price <= 0) continue;
+        const rawKey = normalizeProductNameKey(rawName);
+        // Also check the Russian-name key to avoid duplicates when nameUz differs lexically
+        const ruKey = sp.name ? normalizeProductNameKey(sp.name) : null;
+        if (!rawKey || productIdsByNameKey.has(rawKey) || createdProductIdByNameKey.has(rawKey) || pendingKeys.has(rawKey)) continue;
+        if (ruKey && (productIdsByNameKey.has(ruKey) || createdProductIdByNameKey.has(ruKey) || pendingKeys.has(ruKey))) continue;
+
+        {
+          const nameUz = normalizeMaybeText(sp.nameUz) || normalizeMaybeText(sp.name) || rawName;
+          const nameRu = normalizeMaybeText(sp.name) || rawName;
+          pendingKeys.add(rawKey);
+          if (ruKey && ruKey !== rawKey) pendingKeys.add(ruKey);
+          bulkCreatePayloads.push({
+            _key: rawKey,
+            name_uz: nameUz,
+            name_ru: nameRu,
+            name_en: nameRu,
+            search_text: [nameUz !== nameRu ? nameUz : null, nameRu].filter(Boolean).join(' ').trim(),
+            category: 'Boshqa',
+            unit: 'dona',
+            available_cities: defaultCity ? [defaultCity] : [],
+          });
+        }
+      }
+
+      for (const chunk of chunkArray(bulkCreatePayloads, DB_CHUNK_SIZE)) {
+        const insertPayloads = chunk.map(({ _key, ...rest }) => rest);
+        const { data: createdRows } = await supabase
+          .from('products')
+          .insert(insertPayloads)
+          .select('id,name_uz,name_ru,name_en,search_text');
+
+        for (const row of createdRows || []) {
+          if (!row?.id) continue;
+          registerProductNameKey(row.id, row.name_uz);
+          registerProductNameKey(row.id, row.name_ru);
+          registerProductNameKey(row.id, row.name_en);
+          const uzKey = normalizeProductNameKey(row.name_uz);
+          const ruKey = normalizeProductNameKey(row.name_ru);
+          if (uzKey) createdProductIdByNameKey.set(uzKey, row.id);
+          if (ruKey && ruKey !== uzKey) createdProductIdByNameKey.set(ruKey, row.id);
+          autoCreatedProducts += 1;
+        }
+      }
+    }
+
     // 4. Match in-memory first and batch DB writes later.
     let matched = 0;
     let unmatched = 0;
@@ -829,10 +860,10 @@ export default async function handler(req, res) {
         // Fuzzy match against our product catalog
         const { product: bestMatch, score } = fuzzyMatchProduct(rawName, enrichedProducts);
 
-        // If match confidence is very low, also try the Russian name
+        // If match confidence is below threshold, also try the Russian name
         let finalMatch = bestMatch;
         let finalScore = score;
-        if (score < 60 && sp.name && sp.name !== rawName) {
+        if (score < STORE_API_MATCH_MIN_SCORE && sp.name && sp.name !== rawName) {
           const { product: ruMatch, score: ruScore } = fuzzyMatchProduct(sp.name, enrichedProducts);
           if (ruScore > finalScore) {
             finalMatch = ruMatch;
@@ -845,7 +876,10 @@ export default async function handler(req, res) {
       }
 
       if (!matchedProductId) {
-        matchedProductId = await resolveOrCreateProductForApiName(rawName, defaultCity);
+        matchedProductId = await resolveOrCreateProductForApiName(rawName, defaultCity, {
+          nameRu: sp.name || null,
+          nameUz: sp.nameUz || null,
+        });
         if (!matchedProductId) {
           unmatched += 1;
           continue;

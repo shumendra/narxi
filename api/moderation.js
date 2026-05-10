@@ -761,6 +761,9 @@ async function runNormalization({ trigger = 'manual' } = {}) {
 
   const mergedSql = sanitizeSqlApostrophes(generatedSqlBlocks.join('\n\n'));
   const refreshSearchSql = "UPDATE products SET search_text = TRIM(CONCAT(COALESCE(name_uz,''), ' ', COALESCE(name_ru,''), ' ', COALESCE(name_en,''))) WHERE search_text IS NULL OR search_text = '' OR search_text != TRIM(CONCAT(COALESCE(name_uz,''), ' ', COALESCE(name_ru,''), ' ', COALESCE(name_en,'')));";
+  // After alias rows are populated, relink all prices whose product_name_raw matches an alias
+  // but whose product_id doesn't yet point to the canonical product.
+  const relinkPricesSql = "UPDATE prices pr SET product_id = pa.product_id FROM product_aliases pa WHERE lower(trim(pr.product_name_raw)) = lower(trim(pa.alias_text)) AND pr.product_id IS DISTINCT FROM pa.product_id;";
 
   let rpcAvailable = true;
   let sqlSuccessCount = 0;
@@ -771,7 +774,7 @@ async function runNormalization({ trigger = 'manual' } = {}) {
 
   rpcAvailable = await isExecSqlAvailable();
   if (!rpcAvailable) {
-    manualSql = `${mergedSql}\n\n${refreshSearchSql}`;
+    manualSql = `${mergedSql}\n\n${refreshSearchSql}\n\n${relinkPricesSql}`;
     appendLog('exec_sql RPC is unavailable; SQL returned for manual execution');
   } else {
     const statements = splitSqlStatements(mergedSql);
@@ -793,6 +796,15 @@ async function runNormalization({ trigger = 'manual' } = {}) {
     } else {
       sqlSuccessCount += 1;
       appendLog('search_text refreshed');
+    }
+
+    const { error: relinkError } = await supabase.rpc('exec_sql', { sql: relinkPricesSql });
+    if (relinkError) {
+      sqlErrorCount += 1;
+      appendLog(`prices relink failed: ${String(relinkError.message || '').slice(0, 160)}`);
+    } else {
+      sqlSuccessCount += 1;
+      appendLog('prices relinked via alias match');
     }
   }
 
@@ -1509,6 +1521,87 @@ async function importNormalizationQueue(productsInput) {
     failedCount,
     unmatchedSamples,
     failedSamples,
+  };
+}
+
+async function backfillAliasesFromLinkedRows() {
+  const seenAliases = new Set();
+  let pricesRowsScanned = 0;
+  let pendingRowsScanned = 0;
+  let aliasesProcessed = 0;
+
+  const pricesRows = await fetchAllPages((from, to) => (
+    supabase
+      .from('prices')
+      .select('product_id,product_name_raw,place_name,source')
+      .not('product_id', 'is', null)
+      .not('product_name_raw', 'is', null)
+      .neq('source', 'website_scrape')
+      .range(from, to)
+  ));
+
+  const pendingRows = await fetchAllPages((from, to) => (
+    supabase
+      .from('pending_prices')
+      .select('product_id,product_name_raw,place_name')
+      .not('product_id', 'is', null)
+      .not('product_name_raw', 'is', null)
+      .range(from, to)
+  ));
+
+  const processRow = async (row) => {
+    const productId = String(row?.product_id || '').trim();
+    const rawName = String(row?.product_name_raw || '').trim();
+    if (!productId || !rawName) return;
+
+    const normalizedNameKey = normalizeProductNameKey(rawName);
+    if (!normalizedNameKey) return;
+
+    const dedupeKey = `${productId}::${normalizedNameKey}`;
+    if (seenAliases.has(dedupeKey)) return;
+    seenAliases.add(dedupeKey);
+
+    const storeName = normalizeMaybeText(row?.place_name);
+    await upsertProductAlias(productId, rawName, storeName);
+    aliasesProcessed += 1;
+  };
+
+  for (const row of pricesRows || []) {
+    pricesRowsScanned += 1;
+    // Keep historical store names as aliases so repeated API pulls map to canonical product IDs.
+    await processRow(row);
+  }
+
+  for (const row of pendingRows || []) {
+    pendingRowsScanned += 1;
+    await processRow(row);
+  }
+
+  return {
+    aliasesProcessed,
+    pricesRowsScanned,
+    pendingRowsScanned,
+  };
+}
+
+export async function runNormalizationNowForCli(options = {}) {
+  if (!supabase) {
+    const configError = new Error('SUPABASE_NOT_CONFIGURED');
+    configError.statusCode = 500;
+    throw configError;
+  }
+
+  const trigger = String(options?.trigger || 'manual_cli').trim() || 'manual_cli';
+  const includeAliasBackfill = options?.includeAliasBackfill !== false;
+
+  const normalizationResult = await runNormalization({ trigger });
+  const aliasBackfill = includeAliasBackfill
+    ? await backfillAliasesFromLinkedRows()
+    : { aliasesProcessed: 0, pricesRowsScanned: 0, pendingRowsScanned: 0 };
+
+  return {
+    ...normalizationResult,
+    aliasBackfill,
   };
 }
 
