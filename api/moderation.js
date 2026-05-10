@@ -1559,6 +1559,108 @@ async function importNormalizationQueue(productsInput) {
   };
 }
 
+/**
+ * Bulk-import store products from the "Download Unmatched" JSON format.
+ * For each entry:
+ *   - Looks up the store_products row by (source, original_name).
+ *   - If canonical_product_id is provided in the entry, reuse it.
+ *   - Otherwise creates a new canonical product (uses canonical fields if
+ *     filled, otherwise falls back to original_name).
+ *   - Links the store_products row and backfills prices.product_id.
+ */
+async function importStoreProductsBatch(productsInput) {
+  const products = Array.isArray(productsInput) ? productsInput : [];
+  let linked = 0;
+  let created = 0;
+  let pricesBackfilled = 0;
+  const errors = [];
+
+  for (const entry of products) {
+    try {
+      const originalName = String(entry.original_name || '').trim();
+      const source = String(entry.source || '').trim();
+      if (!originalName || !source) continue;
+
+      const canonical = (entry.canonical && typeof entry.canonical === 'object') ? entry.canonical : {};
+      const nameRu = normalizeMaybeText(canonical.name_ru) || originalName;
+      const nameUz = normalizeMaybeText(canonical.name_uz) || nameRu;
+      const nameEn = normalizeMaybeText(canonical.name_en) || nameRu;
+      const category = normalizeMaybeText(canonical.category) || 'Boshqa';
+      const unit = normalizeMaybeText(canonical.unit) || 'dona';
+      const searchText = `${nameUz} ${nameRu} ${nameEn}`.trim();
+
+      // Find the store_products row by unique key (source, original_name).
+      const { data: spRows, error: spFetchErr } = await supabase
+        .from('store_products')
+        .select('id, canonical_product_id')
+        .eq('source', source)
+        .eq('original_name', originalName)
+        .limit(1);
+
+      if (spFetchErr && !isMissingRelationError(spFetchErr)) {
+        errors.push({ original_name: originalName, error: spFetchErr.message });
+        continue;
+      }
+
+      const sp = spRows?.[0];
+
+      // Resolve canonical product id.
+      let canonicalProductId = String(entry.canonical_product_id || '').trim() || null;
+      if (!canonicalProductId && sp?.canonical_product_id) {
+        // Already linked in DB — skip.
+        continue;
+      }
+
+      if (!canonicalProductId) {
+        // Create a new canonical product.
+        const { data: newProduct, error: createErr } = await supabase
+          .from('products')
+          .insert({ name_uz: nameUz, name_ru: nameRu, name_en: nameEn, category, unit, search_text: searchText })
+          .select('id')
+          .single();
+
+        if (createErr) {
+          errors.push({ original_name: originalName, error: createErr.message, phase: 'create_product' });
+          continue;
+        }
+        canonicalProductId = newProduct.id;
+        created++;
+
+        // Register aliases for the new product.
+        await upsertProductAlias(canonicalProductId, originalName, normalizeMaybeText(entry.store_name));
+      }
+
+      // Link store_products row.
+      if (sp?.id) {
+        const { error: linkErr } = await supabase
+          .from('store_products')
+          .update({ canonical_product_id: canonicalProductId, match_confidence: 'admin_confirmed' })
+          .eq('id', sp.id)
+          .is('canonical_product_id', null);
+
+        if (linkErr && !isMissingRelationError(linkErr)) {
+          errors.push({ original_name: originalName, error: linkErr.message, phase: 'link' });
+          continue;
+        }
+        linked++;
+
+        // Backfill prices that were inserted while the store_product was unmatched.
+        const { data: backfilled } = await supabase
+          .from('prices')
+          .update({ product_id: canonicalProductId })
+          .eq('store_product_id', sp.id)
+          .is('product_id', null)
+          .select('id');
+        pricesBackfilled += Array.isArray(backfilled) ? backfilled.length : 0;
+      }
+    } catch (err) {
+      errors.push({ original_name: entry?.original_name, error: String(err?.message || 'UNKNOWN') });
+    }
+  }
+
+  return { linked, created, pricesBackfilled, errors };
+}
+
 async function backfillAliasesFromLinkedRows() {
   const seenAliases = new Set();
   let pricesRowsScanned = 0;
@@ -2636,6 +2738,13 @@ export default async function moderation(req, res) {
           ? body.products
           : (Array.isArray(body?.payload?.products) ? body.payload.products : []);
         const result = await importNormalizationQueue(products);
+        return send(res, 200, { ok: true, ...result });
+      }
+      case 'importStoreProductsBatch': {
+        const products = Array.isArray(body.products)
+          ? body.products
+          : (Array.isArray(body?.payload?.products) ? body.payload.products : []);
+        const result = await importStoreProductsBatch(products);
         return send(res, 200, { ok: true, ...result });
       }
       case 'reject': {

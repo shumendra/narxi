@@ -589,6 +589,7 @@ export default function App() {
         productUpload: 'Yuklash (JSON)',
         productUploading: 'Yuklanmoqda...',
         downloadUnmatched: 'Nomoslashtirilmaganlarni yuklab olish',
+        uploadUnmatched: 'Yuklab olinganlarni yuklash',
         uploadNormSql: 'Normalizatsiya SQL yuklash',
         normSqlPlaceholder: 'INSERT INTO ... normalizatsiya SQL ni bu yerga joylashtiring',
         applyNormSql: 'SQL qollash',
@@ -917,6 +918,7 @@ export default function App() {
         productUpload: 'Загрузить (JSON)',
         productUploading: 'Загрузка...',
         downloadUnmatched: 'Скачать несопоставленные',
+        uploadUnmatched: 'Загрузить несопоставленные',
         uploadNormSql: 'Загрузить SQL нормализации',
         normSqlPlaceholder: 'Вставьте SQL нормализации (INSERT INTO ...) сюда',
         applyNormSql: 'Применить SQL',
@@ -1246,6 +1248,7 @@ export default function App() {
         productUpload: 'Upload (JSON)',
         productUploading: 'Uploading...',
         downloadUnmatched: 'Download Unmatched',
+        uploadUnmatched: 'Upload Unmatched',
         uploadNormSql: 'Upload Normalisation SQL',
         normSqlPlaceholder: 'Paste normalisation SQL (INSERT INTO ...) here',
         applyNormSql: 'Apply SQL',
@@ -1976,6 +1979,28 @@ export default function App() {
       URL.revokeObjectURL(url);
     } catch {
       window.Telegram?.WebApp?.showAlert(t.moderationError);
+    }
+  };
+
+  const uploadStoreProductsBatch = async (file: File) => {
+    try {
+      const text = await file.text();
+      const payload = JSON.parse(text || '{}');
+      // Accept both { products: [...] } and flat array formats.
+      const products = Array.isArray(payload)
+        ? payload
+        : (Array.isArray(payload?.products) ? payload.products : []);
+      if (products.length === 0) {
+        window.Telegram?.WebApp?.showAlert('No products found in file');
+        return;
+      }
+      const result = await callModerationApi('importStoreProductsBatch', { products });
+      await fetchModerationProducts();
+      const msg = `Created: ${result.created || 0} · Linked: ${result.linked || 0} · Prices backfilled: ${result.pricesBackfilled || 0}` +
+        (result.errors?.length ? `\n${result.errors.length} errors` : '');
+      window.Telegram?.WebApp?.showAlert(msg);
+    } catch (err: any) {
+      window.Telegram?.WebApp?.showAlert(`Error: ${err?.message || 'unknown'}`);
     }
   };
 
@@ -5665,6 +5690,10 @@ export default function App() {
                     <button onClick={purgeAllProductsData} disabled={moderationSavingId === 'purge-all-products'} className="rounded-lg bg-rose-700 px-2 py-1.5 text-xs font-semibold text-white disabled:opacity-50">{t.productPurgeAll}</button>
                     <button onClick={() => downloadProductsJson(selectedProductIds.length > 0 ? selectedProductIds : undefined)} className="rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-xs font-semibold text-emerald-700 flex items-center gap-1"><Download className="w-3.5 h-3.5" /> {selectedProductIds.length > 0 ? `${t.productDownload} (${selectedProductIds.length})` : t.productDownload}</button>
                     <button onClick={downloadUnmatched} className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs font-semibold text-amber-700 flex items-center gap-1"><Download className="w-3.5 h-3.5" /> {t.downloadUnmatched}</button>
+                    <label className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs font-semibold text-amber-700 flex items-center gap-1 cursor-pointer">
+                      <Upload className="w-3.5 h-3.5" /> {t.uploadUnmatched}
+                      <input type="file" accept=".json" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadStoreProductsBatch(f); e.target.value = ''; }} />
+                    </label>
                     <label className={cn("rounded-lg border border-blue-200 bg-blue-50 px-2 py-1.5 text-xs font-semibold text-blue-700 flex items-center gap-1 cursor-pointer", aliasImporting && "opacity-50 pointer-events-none")}>
                       <Upload className="w-3.5 h-3.5" /> {aliasImporting ? t.productUploading : t.productUpload}
                       <input type="file" accept=".json" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadAliasesJson(f); e.target.value = ''; }} />
