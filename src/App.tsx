@@ -308,9 +308,7 @@ export default function App() {
   const [scrapeResult, setScrapeResult] = useState<string | null>(null);
   const [queueSyncing, setQueueSyncing] = useState(false);
   const [queueStatus, setQueueStatus] = useState<string | null>(null);
-  const [normSql, setNormSql] = useState<string>('');
-  const [normApplying, setNormApplying] = useState(false);
-  const [normApplyResult, setNormApplyResult] = useState<string | null>(null);
+  const [flushingLimbo, setFlushingLimbo] = useState(false);
   const [matchingStats, setMatchingStats] = useState<Record<string, number> | null>(null);
   const [matchingStatsLoading, setMatchingStatsLoading] = useState(false);
   const [newApprovedItem, setNewApprovedItem] = useState({
@@ -526,12 +524,12 @@ export default function App() {
         normalizeStatusEmpty: 'Hozircha log yo\'q',
         normalizeManualSqlTitle: 'exec_sql topilmadi. Quyidagi SQLni Supabase SQL Editor\'da ishga tushiring:',
         normalizeCompleted: (successCount: number, errorCount: number) => `Normallashtirish tugadi: ${successCount} SQL, ${errorCount} xato`,
-        approvedThenNormalize: (approvedCount: number) => `✅ ${approvedCount} ta narx tasdiqlandi → 🔄 Normallashtirish boshlandi...`,
+        approvedThenNormalize: (approvedCount: number) => `✅ ${approvedCount} ta narx ma'lumotlar bazasiga qo'shildi`,
         queueDownload: 'Navbatni yuklab olish (JSON)',
         queueDownloadNonNormalized: 'Normallanmaganlarni yuklab olish',
         queueUpload: 'Normallashtirilgan faylni yuklash',
         queueUploading: 'Yuklanmoqda...',
-        approvedToQueue: (approvedCount: number) => `✅ ${approvedCount} ta narx normallashtirish navbatiga yuborildi`,
+        approvedToQueue: (approvedCount: number) => `✅ ${approvedCount} ta narx ma'lumotlar bazasiga qo'shildi`,
         queueImportDone: (importedCount: number, remainingCount: number) => `Import yakunlandi: ${importedCount} ta narx bazaga qo\'shildi, navbatda ${remainingCount} qoldi`,
         messagesTitle: 'Foydalanuvchi xabarlari',
         messagesEmpty: 'Xabarlar yo‘q',
@@ -856,12 +854,12 @@ export default function App() {
         normalizeStatusEmpty: 'Пока нет логов',
         normalizeManualSqlTitle: 'exec_sql недоступен. Выполните SQL ниже в Supabase SQL Editor:',
         normalizeCompleted: (successCount: number, errorCount: number) => `Нормализация завершена: ${successCount} SQL, ошибок: ${errorCount}`,
-        approvedThenNormalize: (approvedCount: number) => `✅ Одобрено ${approvedCount} цен → 🔄 Нормализация запущена...`,
+        approvedThenNormalize: (approvedCount: number) => `✅ ${approvedCount} цен добавлено в базу данных`,
         queueDownload: 'Скачать очередь (JSON)',
         queueDownloadNonNormalized: 'Скачать ненормализованные',
         queueUpload: 'Загрузить нормализованный файл',
         queueUploading: 'Загрузка...',
-        approvedToQueue: (approvedCount: number) => `✅ ${approvedCount} цен отправлено в очередь нормализации`,
+        approvedToQueue: (approvedCount: number) => `✅ ${approvedCount} цен добавлено в базу данных`,
         queueImportDone: (importedCount: number, remainingCount: number) => `Импорт завершен: ${importedCount} цен добавлено в базу, в очереди осталось ${remainingCount}`,
         messagesTitle: 'Сообщения от пользователей',
         messagesEmpty: 'Сообщений пока нет',
@@ -1186,12 +1184,12 @@ export default function App() {
         normalizeStatusEmpty: 'No logs yet',
         normalizeManualSqlTitle: 'exec_sql is unavailable. Run the SQL below in Supabase SQL Editor:',
         normalizeCompleted: (successCount: number, errorCount: number) => `Normalization finished: ${successCount} SQL, errors: ${errorCount}`,
-        approvedThenNormalize: (approvedCount: number) => `✅ ${approvedCount} prices approved → 🔄 Normalization started...`,
+        approvedThenNormalize: (approvedCount: number) => `✅ ${approvedCount} prices added to database`,
         queueDownload: 'Download queue (JSON)',
         queueDownloadNonNormalized: 'Download non-normalized',
         queueUpload: 'Upload normalized file',
         queueUploading: 'Uploading...',
-        approvedToQueue: (approvedCount: number) => `✅ ${approvedCount} prices sent to normalization queue`,
+        approvedToQueue: (approvedCount: number) => `✅ ${approvedCount} prices added to database`,
         queueImportDone: (importedCount: number, remainingCount: number) => `Import complete: ${importedCount} prices added to database, ${remainingCount} still in queue`,
         messagesTitle: 'User messages',
         messagesEmpty: 'No messages yet',
@@ -2004,19 +2002,19 @@ export default function App() {
     }
   };
 
-  const applyNormalizationSql = async () => {
-    const sql = normSql.trim();
-    if (!sql) return;
-    setNormApplying(true);
-    setNormApplyResult(null);
+  const flushLimboToDatabase = async () => {
+    setFlushingLimbo(true);
     try {
-      const result = await callModerationApi('applyNormalizationSql', { sql });
-      setNormApplyResult(result.message || 'Done');
-      setNormSql('');
+      const result = await callModerationApi('flushLimboToDatabase');
+      await fetchModerationItems();
+      window.Telegram?.WebApp?.showAlert(
+        `✅ Flushed ${result.flushed || 0} / ${result.total || 0} to database` +
+        (result.errors?.length ? `\n${result.errors.length} errors` : '')
+      );
     } catch (err: any) {
-      setNormApplyResult(`Error: ${err?.message || 'Unknown error'}`);
+      window.Telegram?.WebApp?.showAlert(`Error: ${err?.message || 'Unknown'}`);
     } finally {
-      setNormApplying(false);
+      setFlushingLimbo(false);
     }
   };
 
@@ -5325,6 +5323,13 @@ export default function App() {
                       }}
                     />
                   </label>
+                  <button
+                    onClick={flushLimboToDatabase}
+                    disabled={flushingLimbo}
+                    className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                  >
+                    {flushingLimbo ? '⏳ Flushing...' : '⚡ Flush Queue → DB'}
+                  </button>
                   {scrapeResult && (
                     <span className="text-xs text-stone-500 bg-stone-100 rounded-lg px-2 py-1">
                       {scrapeResult}
@@ -5717,24 +5722,6 @@ export default function App() {
                       <div className="rounded-lg bg-rose-50 px-2 py-1 flex justify-between"><span className="text-stone-600">{t.matchingStatsUnmatched}</span><span className="font-semibold text-rose-700">{matchingStats['unmatched'] || 0}</span></div>
                     </div>
                   )}
-                </section>
-
-                {/* Normalisation SQL upload */}
-                <section className="rounded-2xl border border-stone-200 bg-white p-3 shadow-sm space-y-2">
-                  <div className="text-xs font-semibold text-stone-700">{t.uploadNormSql}</div>
-                  <textarea
-                    value={normSql}
-                    onChange={(e) => setNormSql(e.target.value)}
-                    placeholder={t.normSqlPlaceholder}
-                    rows={5}
-                    className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-mono resize-y"
-                  />
-                  {normApplyResult && (
-                    <div className={cn('rounded-lg px-3 py-2 text-xs', normApplyResult.startsWith('Error') ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700')}>{normApplyResult}</div>
-                  )}
-                  <button onClick={applyNormalizationSql} disabled={normApplying || !normSql.trim()} className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
-                    {normApplying ? t.applyingNormSql : t.applyNormSql}
-                  </button>
                 </section>
 
                 {/* Products table */}

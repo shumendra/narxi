@@ -1661,6 +1661,34 @@ async function importStoreProductsBatch(productsInput) {
   return { linked, created, pricesBackfilled, errors };
 }
 
+async function flushLimboToDatabase() {
+  const limboItems = await fetchAllPages((from, to) =>
+    supabase.from('pending_prices').select('*').eq('status', LIMBO_APPROVED_STATUS).range(from, to)
+  );
+
+  let flushed = 0;
+  const errors = [];
+
+  for (const pending of limboItems) {
+    try {
+      const context = await resolvePendingStoreContext(pending, null);
+      const productId = await ensureProductForName(pending.product_name_raw, context.city);
+      if (productId) {
+        await insertApprovedPriceRow({ pending, productId, context });
+        await supabase.from('pending_prices').update({
+          status: 'approved',
+          product_id: productId,
+        }).eq('id', pending.id);
+        flushed++;
+      }
+    } catch (err) {
+      errors.push(`${pending.id}: ${String(err?.message || 'UNKNOWN')}`);
+    }
+  }
+
+  return { flushed, total: limboItems.length, errors };
+}
+
 async function backfillAliasesFromLinkedRows() {
   const seenAliases = new Set();
   let pricesRowsScanned = 0;
@@ -2523,11 +2551,18 @@ async function approvePending(id) {
     if (status && status !== 'pending') continue;
 
     const context = await resolvePendingStoreContext(target, receiptCache);
+
+    // Directly create product and insert into prices — no normalization queue
+    const productId = await ensureProductForName(target.product_name_raw, context.city);
+    if (productId) {
+      await insertApprovedPriceRow({ pending: target, productId, context });
+    }
+
     const { error: updateError } = await supabase
       .from('pending_prices')
       .update({
-        status: LIMBO_APPROVED_STATUS,
-        product_id: null,
+        status: 'approved',
+        product_id: productId,
         city: context.city,
         place_name: context.placeName,
         place_address: context.placeAddress,
@@ -2544,7 +2579,6 @@ async function approvePending(id) {
   return {
     approvedCount,
     receiptScope: targets.length,
-    movedToLimbo: approvedCount,
   };
 }
 
@@ -2745,6 +2779,10 @@ export default async function moderation(req, res) {
           ? body.products
           : (Array.isArray(body?.payload?.products) ? body.payload.products : []);
         const result = await importStoreProductsBatch(products);
+        return send(res, 200, { ok: true, ...result });
+      }
+      case 'flushLimboToDatabase': {
+        const result = await flushLimboToDatabase();
         return send(res, 200, { ok: true, ...result });
       }
       case 'reject': {
