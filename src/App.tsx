@@ -141,6 +141,8 @@ interface PriceRecord {
   receipt_date: string;
   product_id: string;
   city?: string | null;
+  source?: string | null;
+  price_scope?: 'chain' | 'location' | null;
 }
 
 interface PendingModerationItem {
@@ -157,6 +159,11 @@ interface PendingModerationItem {
   place_name: string | null;
   place_address: string | null;
   city?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  receipt_url?: string | null;
+  photo_url?: string | null;
+  price_scope?: 'chain' | 'location' | null;
 }
 
 interface ApprovedModerationItem {
@@ -491,6 +498,14 @@ export default function App() {
         moderationSource: 'Manba',
         moderationUser: 'Foydalanuvchi',
         moderationDate: 'Sana',
+        moderationPlace: "Do'kon nomi",
+        moderationAddress: 'Manzil',
+        moderationLat: 'Kenglik (lat)',
+        moderationLng: 'Uzunlik (lng)',
+        moderationReceipt: "Chekni ko'rish",
+        moderationScopeLabel: 'Qamrov',
+        moderationScopeChain: 'Barcha filiallar',
+        moderationScopeLocation: 'Faqat shu manzil',
         moderationSaved: 'O‘zgarishlar saqlandi ✅',
         moderationApproved: 'Tasdiqlandi ✅',
         moderationRejected: 'Rad etildi ✅',
@@ -821,6 +836,14 @@ export default function App() {
         moderationSource: 'Источник',
         moderationUser: 'Пользователь',
         moderationDate: 'Дата',
+        moderationPlace: 'Название магазина',
+        moderationAddress: 'Адрес',
+        moderationLat: 'Широта (lat)',
+        moderationLng: 'Долгота (lng)',
+        moderationReceipt: 'Открыть чек',
+        moderationScopeLabel: 'Охват',
+        moderationScopeChain: 'Все филиалы',
+        moderationScopeLocation: 'Только этот адрес',
         moderationSaved: 'Изменения сохранены ✅',
         moderationApproved: 'Одобрено ✅',
         moderationRejected: 'Отклонено ✅',
@@ -1151,6 +1174,14 @@ export default function App() {
         moderationSource: 'Source',
         moderationUser: 'User',
         moderationDate: 'Date',
+        moderationPlace: 'Store name',
+        moderationAddress: 'Address',
+        moderationLat: 'Latitude',
+        moderationLng: 'Longitude',
+        moderationReceipt: 'View receipt',
+        moderationScopeLabel: 'Price scope',
+        moderationScopeChain: 'All branches',
+        moderationScopeLocation: 'This location only',
         moderationSaved: 'Changes saved ✅',
         moderationApproved: 'Approved ✅',
         moderationRejected: 'Rejected ✅',
@@ -1417,6 +1448,7 @@ export default function App() {
   const productsCacheRef = useRef<{ timestamp: number; data: Product[] } | null>(null);
   const productsFetchPromiseRef = useRef<Promise<Product[]> | null>(null);
   const [productsLoading, setProductsLoading] = useState(false);
+  const [knownStores, setKnownStores] = useState<Array<{ name: string; lat: number; lng: number }>>(KNOWN_STORES_FALLBACK);
 
 
   useEffect(() => {
@@ -1436,7 +1468,7 @@ export default function App() {
 
     fetchProducts({ force: true });
     // Pre-fetch known store locations for coordinate-based store identification
-    fetchKnownStores().catch(() => {});
+    fetchKnownStores().then(stores => setKnownStores(stores)).catch(() => {});
   }, [isAdminUser]);
 
   useEffect(() => {
@@ -2222,9 +2254,12 @@ export default function App() {
   const updateModerationField = (id: string, field: keyof PendingModerationItem, value: string) => {
     setModerationItems(items => items.map(item => {
       if (item.id !== id) return item;
-      if (field === 'price' || field === 'quantity' || field === 'unit_price') {
-        const numericValue = Number(value);
-        return { ...item, [field]: Number.isFinite(numericValue) ? numericValue : 0 };
+      if (field === 'price' || field === 'quantity' || field === 'unit_price' || field === 'latitude' || field === 'longitude') {
+        const numericValue = parseFloat(value);
+        return { ...item, [field]: value === '' ? null : (Number.isFinite(numericValue) ? numericValue : item[field]) };
+      }
+      if (field === 'price_scope' && (value === 'chain' || value === 'location')) {
+        return { ...item, price_scope: value };
       }
       return { ...item, [field]: value };
     }));
@@ -2240,6 +2275,12 @@ export default function App() {
           price: item.price,
           quantity: item.quantity,
           unit_price: item.unit_price,
+          place_name: item.place_name ?? '',
+          place_address: item.place_address ?? '',
+          city: item.city ?? '',
+          latitude: typeof item.latitude === 'number' ? item.latitude : undefined,
+          longitude: typeof item.longitude === 'number' ? item.longitude : undefined,
+          price_scope: item.price_scope ?? 'location',
         },
       });
       await fetchModerationItems();
@@ -2261,6 +2302,12 @@ export default function App() {
           price: item.price,
           quantity: item.quantity,
           unit_price: item.unit_price,
+          place_name: item.place_name ?? '',
+          place_address: item.place_address ?? '',
+          city: item.city ?? '',
+          latitude: typeof item.latitude === 'number' ? item.latitude : undefined,
+          longitude: typeof item.longitude === 'number' ? item.longitude : undefined,
+          price_scope: item.price_scope ?? 'location',
         },
       });
       const result = await callModerationApi('approve', { id: item.id });
@@ -2884,29 +2931,64 @@ export default function App() {
   };
 
   const sortedPrices = useMemo(() => {
-    const priceByStore = new Map<string, PriceRecord>();
-    for (const price of prices) {
-      const storeKey = [
-        (price.place_name || '').trim().toLowerCase(),
-        (price.place_address || '').trim().toLowerCase(),
-        (price.city || '').trim().toLowerCase(),
-        price.product_id,
-      ].join('|');
+    // Priority: receipt (source='receipt') > location-specific (price_scope='location') > chain-wide (price_scope='chain')
+    const pricePriority = (p: PriceRecord) => {
+      if (p.source === 'receipt') return 3;
+      if ((p.price_scope ?? 'location') === 'location') return 2;
+      return 1;
+    };
 
-      const existing = priceByStore.get(storeKey);
-      if (!existing) {
-        priceByStore.set(storeKey, price);
-        continue;
-      }
+    // Separate chain-wide (no lat/lng, scope='chain') from everything else
+    const chainPrices = prices.filter(p => p.price_scope === 'chain' && p.latitude == null && p.longitude == null);
+    const locationPrices = prices.filter(p => !(p.price_scope === 'chain' && p.latitude == null && p.longitude == null));
 
-      const existingTs = new Date(existing.receipt_date || 0).getTime();
-      const nextTs = new Date(price.receipt_date || 0).getTime();
-      if (nextTs >= existingTs) {
-        priceByStore.set(storeKey, price);
+    // Dedup location prices by rounded lat/lng cluster or place key, keeping highest priority
+    const priceByKey = new Map<string, PriceRecord>();
+    for (const price of locationPrices) {
+      const latR = price.latitude != null ? Math.round(price.latitude * 1000) / 1000 : null;
+      const lngR = price.longitude != null ? Math.round(price.longitude * 1000) / 1000 : null;
+      const key = latR != null
+        ? `${latR},${lngR}|${price.product_id}`
+        : `${(price.place_name || '').trim().toLowerCase()}|${(price.place_address || '').trim().toLowerCase()}|${(price.city || '').trim().toLowerCase()}|${price.product_id}`;
+
+      const existing = priceByKey.get(key);
+      if (!existing) { priceByKey.set(key, price); continue; }
+      const ep = pricePriority(existing), np = pricePriority(price);
+      if (np > ep) { priceByKey.set(key, price); continue; }
+      if (np === ep) {
+        const existingTs = new Date(existing.receipt_date || 0).getTime();
+        const nextTs = new Date(price.receipt_date || 0).getTime();
+        if (nextTs >= existingTs) priceByKey.set(key, price);
       }
     }
 
-    const dedupedByStore = Array.from(priceByStore.values());
+    // Expand chain-wide prices to all known branches of that chain,
+    // but only where no location-specific price already exists
+    for (const chainPrice of chainPrices) {
+      const chainName = (chainPrice.place_name || '').toLowerCase().trim();
+      const matchingBranches = knownStores.filter(s =>
+        s.name.toLowerCase().includes(chainName) || chainName.includes(s.name.toLowerCase())
+      );
+
+      if (matchingBranches.length === 0) {
+        // No known branches — show as a plain entry without coordinates
+        const fallbackKey = `chain_${chainName}|${chainPrice.product_id}`;
+        if (!priceByKey.has(fallbackKey)) priceByKey.set(fallbackKey, chainPrice);
+        continue;
+      }
+
+      for (const branch of matchingBranches) {
+        const latR = Math.round(branch.lat * 1000) / 1000;
+        const lngR = Math.round(branch.lng * 1000) / 1000;
+        const locKey = `${latR},${lngR}|${chainPrice.product_id}`;
+        // Only use chain price here if no receipt/location-specific price is already set
+        if (!priceByKey.has(locKey)) {
+          priceByKey.set(locKey, { ...chainPrice, latitude: branch.lat, longitude: branch.lng });
+        }
+      }
+    }
+
+    const dedupedByStore = Array.from(priceByKey.values());
 
     const withDistance = dedupedByStore.map(price => ({
       ...price,
@@ -2928,7 +3010,7 @@ export default function App() {
     }
 
     return withDistance.sort((left, right) => left.price - right.price);
-  }, [prices, nearbyEnabled, userLocation]);
+  }, [prices, nearbyEnabled, userLocation, knownStores]);
 
   const mapPrices = useMemo(
     () => sortedPrices.filter(p => p.latitude !== null && p.longitude !== null),
@@ -5394,6 +5476,16 @@ export default function App() {
                         <div>{t.moderationUser}: {item.submitted_by}</div>
                         <div>{t.moderationDate}: {formatDistanceToNow(new Date(item.created_at), { addSuffix: true, locale: reportLocale })}</div>
                         <div>{t.moderationSource}: {item.source}</div>
+                        {(item.receipt_url || item.photo_url) && (
+                          <a
+                            href={item.receipt_url || item.photo_url || ''}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mt-1 inline-flex items-center gap-1 rounded-lg bg-blue-50 px-2 py-0.5 text-blue-700 underline"
+                          >
+                            🧾 {t.moderationReceipt}
+                          </a>
+                        )}
                       </div>
                     </div>
 
@@ -5434,6 +5526,89 @@ export default function App() {
                           value={item.unit_price}
                           title={t.moderationUnitPrice}
                           onChange={(e) => updateModerationField(item.id, 'unit_price', e.target.value)}
+                          className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">{t.cityLabel}</label>
+                        <input
+                          value={item.city ?? ''}
+                          title={t.cityLabel}
+                          onChange={(e) => updateModerationField(item.id, 'city', e.target.value)}
+                          className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">{t.moderationPlace}</label>
+                        <input
+                          value={item.place_name ?? ''}
+                          title={t.moderationPlace}
+                          onChange={(e) => updateModerationField(item.id, 'place_name', e.target.value)}
+                          className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                        />
+                      </div>
+
+                      {/* Scope toggle — full width */}
+                      <div className="md:col-span-2">
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">{t.moderationScopeLabel}</label>
+                        <div className="flex rounded-xl border border-stone-200 overflow-hidden text-sm font-semibold">
+                          <button
+                            type="button"
+                            onClick={() => updateModerationField(item.id, 'price_scope', 'chain')}
+                            className={cn(
+                              'flex-1 py-2.5 transition-colors',
+                              (item.price_scope ?? 'location') === 'chain'
+                                ? 'bg-blue-600 text-white'
+                                : 'bg-stone-50 text-stone-600 hover:bg-stone-100'
+                            )}
+                          >
+                            🌐 {t.moderationScopeChain}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => updateModerationField(item.id, 'price_scope', 'location')}
+                            className={cn(
+                              'flex-1 py-2.5 transition-colors',
+                              (item.price_scope ?? 'location') === 'location'
+                                ? 'bg-emerald-600 text-white'
+                                : 'bg-stone-50 text-stone-600 hover:bg-stone-100'
+                            )}
+                          >
+                            📍 {t.moderationScopeLocation}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="md:col-span-2">
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">{t.moderationAddress}</label>
+                        <input
+                          value={item.place_address ?? ''}
+                          title={t.moderationAddress}
+                          onChange={(e) => updateModerationField(item.id, 'place_address', e.target.value)}
+                          className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                        />
+                      </div>
+
+                      {/* Lat/lng only needed for location scope */}
+                      <div className={cn((item.price_scope ?? 'location') === 'chain' && 'opacity-40 pointer-events-none')}>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">{t.moderationLat}</label>
+                        <input
+                          type="number"
+                          step="0.000001"
+                          value={item.latitude ?? ''}
+                          title={t.moderationLat}
+                          onChange={(e) => updateModerationField(item.id, 'latitude', e.target.value)}
+                          className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
+                        />
+                      </div>
+                      <div className={cn((item.price_scope ?? 'location') === 'chain' && 'opacity-40 pointer-events-none')}>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">{t.moderationLng}</label>
+                        <input
+                          type="number"
+                          step="0.000001"
+                          value={item.longitude ?? ''}
+                          title={t.moderationLng}
+                          onChange={(e) => updateModerationField(item.id, 'longitude', e.target.value)}
                           className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
                         />
                       </div>

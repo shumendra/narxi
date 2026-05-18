@@ -1261,6 +1261,7 @@ async function insertApprovedPriceRow({ pending, productId, context }) {
     receipt_date: context?.receiptDate || pending?.receipt_date || new Date().toISOString(),
     submitted_by: pending?.submitted_by || 'admin',
     source,
+    price_scope: pending?.price_scope === 'chain' ? 'chain' : 'location',
   };
 
   if (isStoreApiSource) {
@@ -2484,6 +2485,16 @@ async function updatePending(id, changes) {
   if (typeof changes.unit_price === 'number' && Number.isFinite(changes.unit_price) && changes.unit_price > 0) {
     payload.unit_price = Math.round(changes.unit_price);
   }
+
+  if (typeof changes.place_name === 'string') payload.place_name = changes.place_name.trim() || null;
+  if (typeof changes.place_address === 'string') payload.place_address = changes.place_address.trim() || null;
+  if (typeof changes.city === 'string') {
+    const normalizedChangeCity = normalizeCityName(changes.city.trim());
+    payload.city = normalizedChangeCity || changes.city.trim() || null;
+  }
+  if (typeof changes.latitude === 'number' && Number.isFinite(changes.latitude)) payload.latitude = changes.latitude;
+  if (typeof changes.longitude === 'number' && Number.isFinite(changes.longitude)) payload.longitude = changes.longitude;
+  if (changes.price_scope === 'chain' || changes.price_scope === 'location') payload.price_scope = changes.price_scope;
 
   if (payload.price && payload.quantity && !payload.unit_price) {
     payload.unit_price = Math.round(payload.price / payload.quantity);
