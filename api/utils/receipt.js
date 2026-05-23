@@ -5,6 +5,70 @@ import { extractCityFromAddress as extractCityFromAddressBase, normalizeCityName
 
 const RECEIPT_AUTO_MATCH_MIN_SCORE = 70;
 
+/**
+ * Maps known legal entity names (as they appear on Soliq / ofd.soliq.uz receipts)
+ * to recognizable brand names. Each entry lists keyword substrings (matched case-insensitively
+ * against the full legal name) and the canonical brand string to use instead.
+ * Order matters: first match wins.
+ */
+const STORE_BRAND_MAP = [
+  // ── Grocery / Supermarket ───────────────────────────────────────────────────
+  { keywords: ['ANGLESEY', 'KORZINKA'],                      brand: 'Korzinka' },
+  { keywords: ['XALQ RETAIL'],                               brand: 'OLMA' },
+  { keywords: ['HAVAS FOOD', 'HAVAS FUDBOLIT', 'HAVAS SUPERMARKET', 'HAVAS MARKET'], brand: 'HAVAS' },
+  { keywords: ['MAKRO SUPERMARKET', 'MAKRO MARKET', 'ORIENT GROUP MAKRO', '"MAKRO"'], brand: 'Makro' },
+  { keywords: ['MAGNIT'],                                    brand: 'Magnit' },
+  { keywords: ['ANDALUS'],                                   brand: 'Andalus' },
+  { keywords: ['LEGION CO', 'LEGION SHOP', 'LEGION MAGAZIN', 'LEGION MARKET'], brand: 'Legion' },
+  { keywords: ['BARAKA MARKET', 'BARAKA-MARKET', 'BARAKA BOZOR'], brand: 'Baraka Market' },
+  { keywords: ['SMART MINIMARKET', 'SMART MARKET', 'SMART MINI'], brand: 'Smart' },
+  { keywords: ['ABI MARKET', 'ABI BOZOR', 'АБИ МАРКЕТ', 'АБИ БОЗОР'], brand: 'Abi Market' },
+  { keywords: ['KAPITAL MARKET', 'KAPITAL BOZOR', 'KAPITAL SUPERMARKET'], brand: 'Kapital Market' },
+  { keywords: ['SARKOR'],                                    brand: 'Sarkor' },
+  { keywords: ['IPAK YULI MARKET', 'IPAK YOLI MARKET', 'IPAK YO\'LI MARKET'], brand: 'Ipak Yuli Market' },
+  { keywords: ['RICH MARKET', 'RICH SUPERMARKET'],           brand: 'Rich Market' },
+  { keywords: ['KOMPAS MARKET', 'KOMPASS MARKET', 'KOMPAS BOZOR'], brand: 'Kompas Market' },
+  { keywords: ['METRO CASH', 'METRO MARKET', 'METRO SAVDO'], brand: 'Metro' },
+  { keywords: ['FAMILY MARKET', 'FAMILY BOZOR'],             brand: 'Family Market' },
+  { keywords: ['MEGA PLANET'],                               brand: 'Mega Planet' },
+  { keywords: ['RAMSTORE', 'IMKON TRADE', 'TERRA GROUP'],    brand: 'Ramstore' },
+  { keywords: ['HAMKORLIK BOZOR', 'HAMKOR MARKET'],          brand: 'Hamkorlik Market' },
+  { keywords: ['NEXT RETAIL', 'NEXT SHOP', 'NEXT STORE'],    brand: 'Next' },
+  // ── Electronics / Appliances ────────────────────────────────────────────────
+  { keywords: ['TEXNOMART'],                                 brand: 'Texnomart' },
+  { keywords: ['MEDIAPARK'],                                 brand: 'MediaPark' },
+  { keywords: ['MEDIA MARKET', 'MEDIAMARKET'],               brand: 'MediaMarket' },
+  { keywords: ['ARTEL ELECTRONIC', 'ARTEL SAVDO'],           brand: 'Artel' },
+  { keywords: ['ZIT.UZ', '"ZIT"'],                          brand: 'ZIT' },
+  // ── Pharmacy ────────────────────────────────────────────────────────────────
+  { keywords: ['OSON APTEKA', 'OSON FARMATSIYA'],            brand: 'Oson Apteka' },
+  { keywords: ['SHIFT APTEKA', 'SHIFT FARM'],                brand: 'Shift Apteka' },
+  { keywords: ['APTEKA 36', '36.6 APTEKA'],                  brand: 'Apteka 36.6' },
+  { keywords: ['DOʼSTON APTEKA', 'DOSTON APTEKA'],           brand: "Do'ston Apteka" },
+  // ── Food service / Restaurant ────────────────────────────────────────────────
+  { keywords: ['DODO PIZZA', 'DODO FRANCHISING'],            brand: 'Dodo Pizza' },
+  { keywords: ['BURGER KING'],                               brand: 'Burger King' },
+  { keywords: ['KFC', 'KENTUCKY FRIED'],                     brand: 'KFC' },
+  { keywords: ['MCDONALDS', 'MC DONALDS'],                   brand: "McDonald's" },
+  // ── Fuel ────────────────────────────────────────────────────────────────────
+  { keywords: ['LUKOIL'],                                    brand: 'Lukoil' },
+];
+
+/**
+ * Given a legal entity name from a Soliq receipt, returns a recognizable brand name
+ * if one is found in STORE_BRAND_MAP; otherwise returns the original name unchanged.
+ */
+export function resolveStoreBrand(legalName) {
+  if (!legalName) return legalName;
+  const upper = String(legalName).toUpperCase();
+  for (const entry of STORE_BRAND_MAP) {
+    if (entry.keywords.some(kw => upper.includes(kw.toUpperCase()))) {
+      return entry.brand;
+    }
+  }
+  return legalName;
+}
+
 export function isSoliqUrl(url) {
   try {
     const parsed = new URL(String(url || ''));
@@ -570,16 +634,35 @@ export function parseReceiptHtml(html) {
       }
     });
 
+    const isReceiptDeviceId = (text) => {
+      // Fiscal terminal / NKM device IDs: 1-3 uppercase letters followed by 6+ digits (e.g. LG420230642268)
+      if (/^[A-Z]{1,3}\d{6,}$/.test(text)) return true;
+      // Pure digit strings (TINs / STIR appended standalone)
+      if (/^\d{6,}$/.test(text)) return true;
+      // SN / FN / FD / NKM label lines (e.g. "SN : 102071", "FN : 9999078900011399")
+      if (/^(?:SN|FN|FD|FP|NKM|ФН|ФД|ФП)\s*[:\s]/.test(text)) return true;
+      return false;
+    };
+
     for (const text of allText) {
+      if (isReceiptDeviceId(text)) continue;
+      const upper = text.toUpperCase();
       if (
-        text.includes('MCHJ')
-        || text.includes('МЧЖ')
-        || text.includes('XK')
-        || text.includes('МАС\'УЛИЯТИ')
-        || text.includes('КОРХОНА')
-        || text.includes('ООО')
-        || text.includes('ЧП')
-        || (text.length > 10 && text === text.toUpperCase() && text.length < 150)
+        upper.includes('MCHJ')
+        || upper.includes('МЧЖ')
+        || upper.includes('MAS\'ULIYATI')
+        || upper.includes('МАС\'УЛИЯТИ')
+        || upper.includes('JAMIYAT')
+        || upper.includes('KORXONA')
+        || upper.includes('КОРХОНА')
+        || upper.includes('SHIRKAT')
+        || upper.includes('AKSIYADORLIK')
+        || upper.includes('ХУСУСИЙ КОРХОНА')
+        || upper.includes('ООО')
+        || upper.includes('ОАО')
+        || upper.includes('ЗАО')
+        || upper.includes('ЧП')
+        || (text.length > 10 && text === upper && text.length < 150)
       ) {
         if (!storeName) storeName = text;
       }
@@ -710,7 +793,7 @@ function parseReceiptFromHtml(html) {
   const totalAmount = parsed.items.reduce((sum, item) => sum + (Number(item.price) || 0), 0) || extractReceiptTotal($) || null;
 
   return {
-    storeName: parsed.store_name,
+    storeName: resolveStoreBrand(parsed.store_name),
     storeAddress: parsed.store_address,
     city: detectedCity,
     detectedCity,
