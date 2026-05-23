@@ -2192,6 +2192,83 @@ async function createProduct(payload) {
   return data;
 }
 
+// ─── Store management ─────────────────────────────────────────────────────
+
+async function listUnverifiedStores(city = null) {
+  let q = supabase
+    .from('stores')
+    .select('*')
+    .eq('verified', false)
+    .order('times_submitted', { ascending: false })
+    .limit(200);
+  if (city) q = q.eq('city', city);
+  const { data, error } = await q;
+  if (error) throw error;
+  return data || [];
+}
+
+async function verifyStore(id) {
+  const { data, error } = await supabase
+    .from('stores')
+    .update({ verified: true })
+    .eq('id', id)
+    .select('*')
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function mergeStores(sourceId, targetId) {
+  if (sourceId === targetId) throw new Error('Source and target must differ');
+
+  // 1. Fetch both stores
+  const { data: src, error: srcErr } = await supabase.from('stores').select('*').eq('id', sourceId).single();
+  if (srcErr) throw srcErr;
+  const { data: tgt, error: tgtErr } = await supabase.from('stores').select('*').eq('id', targetId).single();
+  if (tgtErr) throw tgtErr;
+
+  // 2. Move prices & pending_prices references
+  await supabase.from('prices').update({ store_id: targetId }).eq('store_id', sourceId);
+  await supabase.from('pending_prices').update({ store_id: targetId }).eq('store_id', sourceId);
+
+  // 3. Merge name_variants into target
+  const mergedVariants = Array.from(new Set([
+    ...(tgt.name_variants || []),
+    ...(src.name_variants || []),
+    src.name,
+  ]));
+  await supabase.from('stores').update({ name_variants: mergedVariants, times_submitted: (tgt.times_submitted || 0) + (src.times_submitted || 0) }).eq('id', targetId);
+
+  // 4. Delete source
+  const { error: delErr } = await supabase.from('stores').delete().eq('id', sourceId);
+  if (delErr) throw delErr;
+
+  return { merged: true, sourceId, targetId, mergedVariantsCount: mergedVariants.length };
+}
+
+async function deleteStore(id) {
+  // Unlink prices first so FK constraint doesn't block deletion
+  await supabase.from('prices').update({ store_id: null }).eq('store_id', id);
+  await supabase.from('pending_prices').update({ store_id: null }).eq('store_id', id);
+  const { error } = await supabase.from('stores').delete().eq('id', id);
+  if (error) throw error;
+  return { deleted: true, id };
+}
+
+async function searchStoresAdmin(query, city = null) {
+  let q = supabase.from('stores').select('*');
+  if (query && query.length >= 2) {
+    q = q.or(`name.ilike.%${query}%,address.ilike.%${query}%`);
+  }
+  if (city) q = q.eq('city', city);
+  q = q.order('verified', { ascending: false }).order('times_submitted', { ascending: false }).limit(20);
+  const { data, error } = await q;
+  if (error) throw error;
+  return data || [];
+}
+
+// ─── /Store management ────────────────────────────────────────────────────
+
 async function listContactMessages() {
   try {
     const { data, error } = await supabase
@@ -2912,6 +2989,26 @@ export default async function moderation(req, res) {
         if (backfillError) results.errors.push({ stmt: 'backfill_prices', error: backfillError.message });
 
         return send(res, 200, { ok: true, ...results, message: `Executed ${results.executed} of ${statements.length} statements. Backfill ran.` });
+      }
+      case 'listUnverifiedStores': {
+        const items = await listUnverifiedStores(body.city || null);
+        return send(res, 200, { ok: true, items });
+      }
+      case 'verifyStore': {
+        const item = await verifyStore(body.id);
+        return send(res, 200, { ok: true, item });
+      }
+      case 'mergeStores': {
+        const result = await mergeStores(body.sourceId, body.targetId);
+        return send(res, 200, { ok: true, ...result });
+      }
+      case 'deleteStore': {
+        const result = await deleteStore(body.id);
+        return send(res, 200, { ok: true, ...result });
+      }
+      case 'searchStoresAdmin': {
+        const items = await searchStoresAdmin(body.query || '', body.city || null);
+        return send(res, 200, { ok: true, items });
       }
       default:
         return send(res, 400, { ok: false, error: 'UNKNOWN_ACTION' });

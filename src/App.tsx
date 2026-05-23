@@ -239,6 +239,29 @@ interface ReceiptLinkItem {
   pipeline_status: 'scanned' | 'failed' | 'unscanned';
 }
 
+interface StoreRecord {
+  id: string | null;
+  name: string;
+  name_ru?: string | null;
+  chain?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  address?: string | null;
+  city?: string | null;
+  times_submitted?: number;
+  verified?: boolean;
+  isNew?: boolean;
+  distance?: number | null;
+}
+
+interface ReportItem {
+  id: string;
+  product: Product | null;
+  productQuery: string;
+  price: string;
+  showDropdown: boolean;
+}
+
 function getWeekNumber(date: Date) {
   const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
   const dayNum = d.getUTCDay() || 7;
@@ -260,6 +283,214 @@ function FlyToView({ center, zoom, trigger }: { center: [number, number]; zoom: 
     map.flyTo(center, zoom, { duration: 0.8 });
   }, [map, center[0], center[1], zoom, trigger]);
   return null;
+}
+
+function StorePinPicker({ onPick }: { onPick: (lat: number, lng: number) => void }) {
+  useMapEvents({ click(e) { onPick(e.latlng.lat, e.latlng.lng); } });
+  return null;
+}
+
+interface StoreSelectorT {
+  storeSelectLabel: string;
+  storeSearchPlaceholder: string;
+  storeVerifiedGroup: string;
+  storeOtherGroup: string;
+  storeAddNew: string;
+  storeAddNewHint: string;
+  storeNewTitle: string;
+  storeNewName: string;
+  storeNewNamePlaceholder: string;
+  storePinHint: string;
+  storePinMissing: string;
+  storeConfirm: string;
+  storeBack: string;
+  storeSearching: string;
+  storeTypeToSearch: string;
+}
+
+function StoreSelector({
+  city, userLat, userLng, onStoreSelected, selectedStore, t,
+}: {
+  city: string;
+  userLat: number | null;
+  userLng: number | null;
+  onStoreSelected: (store: StoreRecord | null) => void;
+  selectedStore: StoreRecord | null;
+  t: StoreSelectorT;
+}) {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<StoreRecord[]>([]);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [showNewForm, setShowNewForm] = useState(false);
+  const [newStoreName, setNewStoreName] = useState('');
+  const [pinLat, setPinLat] = useState<number | null>(userLat);
+  const [pinLng, setPinLng] = useState<number | null>(userLng);
+  const [searching, setSearching] = useState(false);
+
+  useEffect(() => {
+    if (!showDropdown) return;
+    const timer = setTimeout(async () => {
+      setSearching(true);
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let q: any = supabase.from('stores').select('*').eq('city', city);
+        if (query.length >= 2) {
+          q = q.or(`name.ilike.%${query}%,address.ilike.%${query}%`);
+        } else if (userLat && userLng) {
+          q = q.eq('verified', true).limit(20);
+        } else {
+          setResults([]);
+          setSearching(false);
+          return;
+        }
+        const { data } = await q
+          .order('verified', { ascending: false })
+          .order('times_submitted', { ascending: false })
+          .limit(12);
+        let stores = (data || []) as StoreRecord[];
+        if (userLat && userLng) {
+          stores = stores
+            .map(s => ({
+              ...s,
+              distance: s.latitude != null && s.longitude != null
+                ? Math.round(haversineDistanceKm({ lat: userLat, lng: userLng }, { lat: s.latitude as number, lng: s.longitude as number }) * 1000)
+                : null,
+            }))
+            .sort((a, b) => {
+              if ((a.verified ? 1 : 0) !== (b.verified ? 1 : 0)) return (b.verified ? 1 : 0) - (a.verified ? 1 : 0);
+              if (a.distance != null && b.distance != null) return a.distance - b.distance;
+              return 0;
+            });
+        }
+        setResults(stores);
+      } finally {
+        setSearching(false);
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [query, showDropdown, city, userLat, userLng]);
+
+  const fmtDist = (m: number | null | undefined) => {
+    if (m == null) return '';
+    return m < 1000 ? `${m}m` : `${(m / 1000).toFixed(1)}km`;
+  };
+
+  if (showNewForm) {
+    return (
+      <div>
+        <div className="flex items-center gap-2 mb-3">
+          <button type="button" onClick={() => { setShowNewForm(false); setQuery(''); }} className="text-sm text-emerald-600 font-medium">← {t.storeBack}</button>
+          <span className="font-bold text-stone-900 text-sm">{t.storeNewTitle}</span>
+        </div>
+        <label className="block text-xs font-semibold text-stone-500 uppercase tracking-wider mb-1">{t.storeNewName}</label>
+        <input
+          autoFocus type="text" value={newStoreName}
+          onChange={e => setNewStoreName(e.target.value)}
+          placeholder={t.storeNewNamePlaceholder}
+          className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm mb-3 outline-none focus:ring-2 focus:ring-emerald-500"
+        />
+        <label className="block text-xs font-semibold text-stone-500 uppercase tracking-wider mb-1">{t.storePinHint}</label>
+        <div className="rounded-xl overflow-hidden border border-stone-200 mb-2" style={{ height: 180 }}>
+          <MapContainer center={[pinLat ?? 41.2995, pinLng ?? 69.2401]} zoom={14} style={{ height: '100%', width: '100%' }} zoomControl={false}>
+            <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+            <StorePinPicker onPick={(la, ln) => { setPinLat(la); setPinLng(ln); }} />
+            {pinLat != null && pinLng != null && (
+              <CircleMarker center={[pinLat, pinLng]} radius={10} fillColor="#16a34a" color="white" weight={2} fillOpacity={0.9} />
+            )}
+          </MapContainer>
+        </div>
+        {pinLat != null ? (
+          <p className="text-xs text-emerald-600 mb-3">✅ {pinLat.toFixed(4)}, {(pinLng as number).toFixed(4)}</p>
+        ) : (
+          <p className="text-xs text-amber-600 mb-3">⚠️ {t.storePinMissing}</p>
+        )}
+        <button
+          type="button" disabled={!newStoreName.trim()}
+          onClick={() => {
+            onStoreSelected({ id: null, name: newStoreName.trim(), latitude: pinLat, longitude: pinLng, city, isNew: true });
+            setShowNewForm(false);
+            setQuery(newStoreName.trim());
+          }}
+          className="w-full rounded-xl bg-emerald-600 py-3 text-sm font-semibold text-white disabled:opacity-50"
+        >
+          ✅ {t.storeConfirm}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative">
+      <div className="relative">
+        <input
+          type="text"
+          value={selectedStore && !showDropdown ? selectedStore.name : query}
+          placeholder={t.storeSearchPlaceholder}
+          className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-500"
+          onChange={e => { setQuery(e.target.value); if (selectedStore) onStoreSelected(null); }}
+          onFocus={() => setShowDropdown(true)}
+        />
+        {selectedStore && !showDropdown && (
+          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-base">{selectedStore.verified ? '✅' : '📍'}</span>
+        )}
+      </div>
+      {showDropdown && (
+        <>
+          <div className="absolute left-0 right-0 top-full mt-1 z-20 max-h-72 overflow-y-auto rounded-xl border border-stone-200 bg-white shadow-xl">
+            {searching && <div className="px-4 py-3 text-sm text-stone-400 text-center">{t.storeSearching}</div>}
+            {!searching && results.filter(s => s.verified).length > 0 && (
+              <>
+                <div className="px-4 pt-2 pb-1 text-[10px] font-bold text-stone-400 uppercase tracking-wider">{t.storeVerifiedGroup}</div>
+                {results.filter(s => s.verified).map(s => (
+                  <button key={s.id} type="button" className="w-full text-left px-4 py-3 hover:bg-emerald-50 border-b border-stone-100 last:border-0"
+                    onClick={() => { onStoreSelected(s); setShowDropdown(false); setQuery(''); }}>
+                    <div className="font-medium text-stone-900 text-sm">{s.name}</div>
+                    {(s.address || s.distance != null) && (
+                      <div className="flex gap-2 mt-0.5 text-xs">
+                        {s.address && <span className="text-stone-500 flex-1 truncate">{s.address}</span>}
+                        {s.distance != null && <span className="text-emerald-600 shrink-0">📍 {fmtDist(s.distance)}</span>}
+                      </div>
+                    )}
+                  </button>
+                ))}
+              </>
+            )}
+            {!searching && results.filter(s => !s.verified).length > 0 && (
+              <>
+                <div className="px-4 pt-2 pb-1 text-[10px] font-bold text-stone-400 uppercase tracking-wider">{t.storeOtherGroup}</div>
+                {results.filter(s => !s.verified).map(s => (
+                  <button key={s.id} type="button" className="w-full text-left px-4 py-3 hover:bg-stone-50 border-b border-stone-100 last:border-0"
+                    onClick={() => { onStoreSelected(s); setShowDropdown(false); setQuery(''); }}>
+                    <div className="font-medium text-stone-900 text-sm">{s.name}</div>
+                    {(s.address || s.distance != null) && (
+                      <div className="flex gap-2 mt-0.5 text-xs">
+                        {s.address && <span className="text-stone-500 flex-1 truncate">{s.address}</span>}
+                        {s.distance != null && <span className="text-emerald-600 shrink-0">📍 {fmtDist(s.distance)}</span>}
+                      </div>
+                    )}
+                  </button>
+                ))}
+              </>
+            )}
+            {query.length >= 2 && (
+              <button type="button" className="w-full text-left px-4 py-3 flex items-center gap-3 bg-emerald-50 hover:bg-emerald-100"
+                onClick={() => { setNewStoreName(query); setShowNewForm(true); setShowDropdown(false); }}>
+                <span className="text-lg">➕</span>
+                <div>
+                  <div className="text-sm font-medium text-emerald-700">"{query}" — {t.storeAddNew}</div>
+                  <div className="text-xs text-stone-500">{t.storeAddNewHint}</div>
+                </div>
+              </button>
+            )}
+            {!searching && results.length === 0 && query.length < 2 && (
+              <div className="px-4 py-3 text-sm text-stone-400 text-center">{t.storeTypeToSearch}</div>
+            )}
+          </div>
+          <div className="fixed inset-0 z-10" onClick={() => setShowDropdown(false)} />
+        </>
+      )}
+    </div>
+  );
 }
 
 function ReportMapPicker({ onPick }: { onPick: (lat: number, lng: number) => void }) {
@@ -286,7 +517,7 @@ export default function App() {
   const [moderationItems, setModerationItems] = useState<PendingModerationItem[]>([]);
   const [approvedItems, setApprovedItems] = useState<ApprovedModerationItem[]>([]);
   const [productAdminItems, setProductAdminItems] = useState<ProductAdminItem[]>([]);
-  const [moderationSection, setModerationSection] = useState<'prices' | 'products' | 'links' | 'messages'>('prices');
+  const [moderationSection, setModerationSection] = useState<'prices' | 'products' | 'links' | 'messages' | 'stores'>('prices');
   const [activeProductId, setActiveProductId] = useState<string | null>(null);
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
   const [productTablePage, setProductTablePage] = useState(0);
@@ -645,6 +876,33 @@ export default function App() {
         contactFormHint: 'Qisqa xabar qoldiring, biz siz bilan qayta bog‘lanamiz.',
         reportProductNameLabel: 'Mahsulot nomi',
         reportProductNamePlaceholder: 'Masalan: Shakar',
+        storeSelectLabel: 'Qayerdan?',
+        storeSearchPlaceholder: 'Do\'kon yoki bozor nomi...',
+        storeVerifiedGroup: '✅ Tasdiqlangan do\'konlar',
+        storeOtherGroup: '📍 Boshqa joylar',
+        storeAddNew: '— yangi joy sifatida qo\'shish',
+        storeAddNewHint: 'Xaritada joylashuvini belgilaysiz',
+        storeNewTitle: 'Yangi joy qo\'shish',
+        storeNewName: 'Joy nomi',
+        storeNewNamePlaceholder: 'Masalan: Chilonzor bozori',
+        storePinHint: 'Xaritada belgilang (ixtiyoriy)',
+        storePinMissing: 'Xaritaga bosib joyni belgilang',
+        storeConfirm: 'Tasdiqlash',
+        storeBack: 'Orqaga',
+        storeSearching: 'Qidirilmoqda...',
+        storeTypeToSearch: 'Nom yozing...',
+        addItemBtn: '+ Mahsulot qo\'shish',
+        itemsListLabel: 'Mahsulotlar va narxlar',
+        submitAllBtn: 'Yuborish',
+        storesTab: 'Do\'konlar',
+        storeVerify: 'Tasdiqlash',
+        storeMerge: 'Birlashtirish',
+        storeDelete: 'O\'chirish',
+        storeNoUnverified: 'Tasdiqlash kutayotgan do\'konlar yo\'q',
+        storeMergeSearchPlaceholder: 'Qaysi do\'konga birlashtirish?',
+        storeMergeConfirm: 'Birlashtirish',
+        storeMergeCancel: 'Bekor qilish',
+        storeTimesSubmitted: 'marta yuborilgan',
         tagline: 'Narxni bil, pulni teja',
         planTitle: '🛒 Xarid rejasi',
         planAddItem: 'Mahsulot qo\'shing',
@@ -983,6 +1241,33 @@ export default function App() {
         contactFormHint: 'Оставьте короткое сообщение, и мы свяжемся с вами.',
         reportProductNameLabel: 'Название товара',
         reportProductNamePlaceholder: 'Например: Сахар',
+        storeSelectLabel: 'Откуда?',
+        storeSearchPlaceholder: 'Магазин или рынок...',
+        storeVerifiedGroup: '✅ Проверенные магазины',
+        storeOtherGroup: '📍 Другие места',
+        storeAddNew: '— добавить как новое место',
+        storeAddNewHint: 'Отметите на карте',
+        storeNewTitle: 'Добавить новое место',
+        storeNewName: 'Название',
+        storeNewNamePlaceholder: 'Например: Чиланзарский рынок',
+        storePinHint: 'Отметьте на карте (необязательно)',
+        storePinMissing: 'Нажмите на карту чтобы отметить',
+        storeConfirm: 'Подтвердить',
+        storeBack: 'Назад',
+        storeSearching: 'Поиск...',
+        storeTypeToSearch: 'Начните вводить...',
+        addItemBtn: '+ Добавить товар',
+        itemsListLabel: 'Товары и цены',
+        submitAllBtn: 'Отправить',
+        storesTab: 'Магазины',
+        storeVerify: 'Подтвердить',
+        storeMerge: 'Объединить',
+        storeDelete: 'Удалить',
+        storeNoUnverified: 'Нет магазинов для проверки',
+        storeMergeSearchPlaceholder: 'В какой магазин объединить?',
+        storeMergeConfirm: 'Объединить',
+        storeMergeCancel: 'Отмена',
+        storeTimesSubmitted: 'раз отправлено',
         tagline: 'Знай цену, экономь деньги',
         planTitle: '🛒 План покупок',
         planAddItem: 'Добавьте товар',
@@ -1321,6 +1606,33 @@ export default function App() {
         contactFormHint: 'Leave a short message and we will contact you back.',
         reportProductNameLabel: 'Product name',
         reportProductNamePlaceholder: 'Example: Sugar',
+        storeSelectLabel: 'Where from?',
+        storeSearchPlaceholder: 'Store or market...',
+        storeVerifiedGroup: '✅ Verified stores',
+        storeOtherGroup: '📍 Other places',
+        storeAddNew: '— add as new place',
+        storeAddNewHint: 'You\'ll pin it on the map',
+        storeNewTitle: 'Add new place',
+        storeNewName: 'Place name',
+        storeNewNamePlaceholder: 'Example: Chilanzar market',
+        storePinHint: 'Pin on map (optional)',
+        storePinMissing: 'Tap map to set location',
+        storeConfirm: 'Confirm',
+        storeBack: 'Back',
+        storeSearching: 'Searching...',
+        storeTypeToSearch: 'Start typing...',
+        addItemBtn: '+ Add item',
+        itemsListLabel: 'Items and prices',
+        submitAllBtn: 'Submit',
+        storesTab: 'Stores',
+        storeVerify: 'Verify',
+        storeMerge: 'Merge',
+        storeDelete: 'Delete',
+        storeNoUnverified: 'No stores pending verification',
+        storeMergeSearchPlaceholder: 'Merge into which store?',
+        storeMergeConfirm: 'Merge',
+        storeMergeCancel: 'Cancel',
+        storeTimesSubmitted: 'times submitted',
         tagline: 'Know the price, save the money',
         planTitle: '🛒 Shopping plan',
         planAddItem: 'Add a product',
@@ -1411,6 +1723,13 @@ export default function App() {
   const [reportLocation, setReportLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [reportProofUrl, setReportProofUrl] = useState('');
+  const [selectedStore, setSelectedStore] = useState<StoreRecord | null>(null);
+  const [reportItems, setReportItems] = useState<ReportItem[]>([{ id: crypto.randomUUID(), product: null, productQuery: '', price: '', showDropdown: false }]);
+  const [adminStores, setAdminStores] = useState<StoreRecord[]>([]);
+  const [adminStoresLoading, setAdminStoresLoading] = useState(false);
+  const [storeMergeSourceId, setStoreMergeSourceId] = useState<string | null>(null);
+  const [storeMergeQuery, setStoreMergeQuery] = useState('');
+  const [storeMergeResults, setStoreMergeResults] = useState<StoreRecord[]>([]);
   const [reportEntryStep, setReportEntryStep] = useState<'entry' | 'manual' | 'loading' | 'result'>('entry');
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [scanUrlInput, setScanUrlInput] = useState('');
@@ -2130,6 +2449,52 @@ export default function App() {
     }
   };
 
+  const fetchAdminStores = async () => {
+    if (!isAdminUser || !telegramInitData) return;
+    setAdminStoresLoading(true);
+    try {
+      const result = await callModerationApi('listUnverifiedStores');
+      setAdminStores((result.items || []) as StoreRecord[]);
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } finally {
+      setAdminStoresLoading(false);
+    }
+  };
+
+  const handleVerifyStore = async (id: string) => {
+    await callModerationApi('verifyStore', { id });
+    setAdminStores(prev => prev.filter(s => s.id !== id));
+  };
+
+  const handleDeleteStore = async (id: string) => {
+    if (!window.Telegram?.WebApp?.showConfirm) {
+      await callModerationApi('deleteStore', { id });
+      setAdminStores(prev => prev.filter(s => s.id !== id));
+      return;
+    }
+    window.Telegram.WebApp.showConfirm('Delete this store?', async (ok: boolean) => {
+      if (!ok) return;
+      await callModerationApi('deleteStore', { id });
+      setAdminStores(prev => prev.filter(s => s.id !== id));
+    });
+  };
+
+  const searchMergeTargets = async (query: string) => {
+    setStoreMergeQuery(query);
+    if (query.length < 2) { setStoreMergeResults([]); return; }
+    const result = await callModerationApi('searchStoresAdmin', { query });
+    setStoreMergeResults((result.items || []) as StoreRecord[]);
+  };
+
+  const handleMergeStore = async (sourceId: string, targetId: string) => {
+    await callModerationApi('mergeStores', { sourceId, targetId });
+    setAdminStores(prev => prev.filter(s => s.id !== sourceId));
+    setStoreMergeSourceId(null);
+    setStoreMergeQuery('');
+    setStoreMergeResults([]);
+  };
+
   const fetchReceiptLinks = async () => {
     if (!isAdminUser || !telegramInitData) return;
     setLinksLoading(true);
@@ -2719,6 +3084,12 @@ export default function App() {
   useEffect(() => {
     if (mode === 'moderate' && isAdminUser && moderationSection === 'products') {
       fetchModerationProducts();
+    }
+  }, [mode, isAdminUser, moderationSection]);
+
+  useEffect(() => {
+    if (mode === 'moderate' && isAdminUser && moderationSection === 'stores') {
+      fetchAdminStores();
     }
   }, [mode, isAdminUser, moderationSection]);
 
@@ -3475,54 +3846,73 @@ export default function App() {
   }, [selectedCity, selectedProduct?.id, nearbyEnabled]);
 
   const handleReportSubmit = async () => {
-    if (!reportPrice || (!selectedProduct && !searchQuery.trim())) {
+    const validItems = reportItems.filter(it => it.price.trim() && (it.product || it.productQuery.trim()));
+    if (!selectedStore) {
       window.Telegram?.WebApp?.showAlert(t.alertFill);
       return;
     }
-
-    const parsedPrice = parseInt(reportPrice);
-    if (!parsedPrice || parsedPrice <= 0) {
-      window.Telegram?.WebApp?.showAlert(t.invalidPrice);
+    if (validItems.length === 0) {
+      window.Telegram?.WebApp?.showAlert(t.alertFill);
       return;
     }
-
-    if (!reportProofUrl.trim()) {
-      window.Telegram?.WebApp?.showAlert(t.proofRequired);
-      return;
+    for (const it of validItems) {
+      const p = parseInt(it.price);
+      if (!p || p <= 0) {
+        window.Telegram?.WebApp?.showAlert(t.invalidPrice);
+        return;
+      }
     }
 
     setSubmitting(true);
-    const manualName = selectedProduct ? getProductName(selectedProduct, lang) : searchQuery.trim();
-    const detectedStore = reportLocation ? identifyStoreByCoords(reportLocation.lat, reportLocation.lng) : null;
-    const { error } = await supabase.from('pending_prices').insert({
-      product_id: selectedProduct?.id || null,
-      product_name_raw: manualName || searchQuery.trim(),
-      match_confidence: selectedProduct ? 100 : 0,
-      status: 'pending',
-      price: parsedPrice,
-      quantity: 1,
-      unit_price: parsedPrice,
-      latitude: reportLocation?.lat ?? null,
-      longitude: reportLocation?.lng ?? null,
-      place_name: detectedStore || null,
-      city: selectedCity,
-      receipt_date: new Date().toISOString(),
-      receipt_url: reportProofUrl.trim(),
-      source: 'manual',
-      submitted_by: window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || 'unknown',
-      photo_url: reportProofUrl.trim(),
-    });
+    try {
+      // Create new store if needed
+      let storeId: string | null = selectedStore.id;
+      if (selectedStore.isNew) {
+        const { data: newStore, error: storeErr } = await supabase.from('stores').insert({
+          name: selectedStore.name,
+          latitude: selectedStore.latitude ?? null,
+          longitude: selectedStore.longitude ?? null,
+          city: selectedCity,
+          source: 'user_manual',
+          verified: false,
+          times_submitted: 1,
+        }).select('id').single();
+        if (storeErr) throw storeErr;
+        storeId = newStore.id;
+      } else if (storeId) {
+        await supabase.from('stores').update({ times_submitted: (selectedStore.times_submitted ?? 0) + validItems.length }).eq('id', storeId);
+      }
 
-    setSubmitting(false);
-    if (!error) {
+      const submittedBy = window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || 'unknown';
+      const rows = validItems.map(it => ({
+        product_id: it.product?.id || null,
+        product_name_raw: it.product ? getProductName(it.product, lang) : it.productQuery.trim(),
+        match_confidence: it.product ? 100 : 0,
+        status: 'pending',
+        price: parseInt(it.price),
+        quantity: 1,
+        unit_price: parseInt(it.price),
+        latitude: selectedStore.latitude ?? null,
+        longitude: selectedStore.longitude ?? null,
+        place_name: selectedStore.name,
+        city: selectedCity,
+        receipt_date: new Date().toISOString(),
+        source: 'manual',
+        submitted_by: submittedBy,
+        store_id: storeId,
+      }));
+
+      const { error } = await supabase.from('pending_prices').insert(rows);
+      if (error) throw error;
+
       window.Telegram?.WebApp?.showAlert(t.alertSuccess);
       setMode('find');
-      setReportPrice('');
-      setReportProofUrl('');
-      setSelectedProduct(null);
-      setSearchQuery('');
-    } else {
+      setSelectedStore(null);
+      setReportItems([{ id: crypto.randomUUID(), product: null, productQuery: '', price: '', showDropdown: false }]);
+    } catch {
       window.Telegram?.WebApp?.showAlert(t.alertError);
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -3585,6 +3975,8 @@ export default function App() {
     setScanResult(null);
     setScanLogs([]);
     setScanApiResponse(null);
+    setSelectedStore(null);
+    setReportItems([{ id: crypto.randomUUID(), product: null, productQuery: '', price: '', showDropdown: false }]);
   };
 
   const goToReportHome = () => {
@@ -5097,147 +5489,94 @@ export default function App() {
 
             {reportEntryStep === 'manual' && (
               <>
-                <section className="bg-white p-6 rounded-2xl border border-stone-200 shadow-sm space-y-4">
-                  <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
+                <section className="bg-white p-6 rounded-2xl border border-stone-200 shadow-sm space-y-5">
+                  {/* City */}
+                  <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-3">
                     <div className="text-xs font-semibold uppercase tracking-wider text-emerald-700">{t.cityLabel}</div>
-                    <div className="mt-1 text-lg font-bold text-emerald-900">{selectedCityLabel}</div>
-                    <div className="mt-1 text-xs text-emerald-700">{t.reportCityConfirm}</div>
+                    <div className="mt-0.5 text-base font-bold text-emerald-900">{selectedCityLabel}</div>
+                  </div>
 
-                    <div className="mt-4 relative">
-                      <label className="block text-xs font-semibold text-emerald-700 uppercase tracking-wider mb-2">{t.reportProductNameLabel}</label>
-                      <input
-                        type="text"
-                        placeholder={t.reportProductNamePlaceholder}
-                        className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-3 pr-10 text-sm text-stone-900 outline-none focus:ring-2 focus:ring-emerald-500"
-                        value={searchQuery}
-                        onChange={(e) => {
-                          setSearchQuery(e.target.value);
-                          setSelectedProduct(null);
-                          setShowDropdown(true);
-                        }}
-                        onFocus={() => setShowDropdown(true)}
-                      />
-                      {searchQuery.trim().length > 0 && (
-                        <button
-                          title="Clear"
-                          onClick={() => {
-                            setSearchQuery('');
-                            setSelectedProduct(null);
-                            setShowDropdown(false);
-                          }}
-                          className="absolute right-3 top-[43px] -translate-y-1/2 rounded-full bg-stone-100 p-1 text-stone-500 hover:bg-stone-200"
-                        >
-                          <X className="h-4 w-4" />
-                        </button>
-                      )}
+                  {/* Store selector */}
+                  <div>
+                    <label className="block text-xs font-semibold text-stone-500 uppercase tracking-wider mb-2">{t.storeSelectLabel}</label>
+                    <StoreSelector
+                      city={selectedCity}
+                      userLat={userLocation?.lat ?? null}
+                      userLng={userLocation?.lng ?? null}
+                      onStoreSelected={setSelectedStore}
+                      selectedStore={selectedStore}
+                      t={t}
+                    />
+                  </div>
 
-                      {showDropdown && filteredProducts.length > 0 && (
-                        <div className="absolute top-full left-0 right-0 mt-2 max-h-56 overflow-y-auto rounded-xl border border-stone-200 bg-white shadow-xl z-50">
-                          {filteredProducts.map((p) => (
-                            <button
-                              key={p.id}
-                              onClick={() => handleProductSelect(p)}
-                              className="w-full border-b border-stone-100 px-4 py-3 text-left last:border-none hover:bg-stone-50"
-                            >
-                              <div className="text-sm font-medium text-stone-900">{getProductName(p, lang)}</div>
-                              <div className="text-xs text-stone-500">{getProductSecondary(p, lang)}</div>
+                  {/* Items list */}
+                  <div>
+                    <label className="block text-xs font-semibold text-stone-500 uppercase tracking-wider mb-2">{t.itemsListLabel}</label>
+                    <div className="space-y-3">
+                      {reportItems.map((item) => (
+                        <div key={item.id} className="flex gap-2 items-start">
+                          {/* Product selector */}
+                          <div className="flex-1 relative">
+                            <input
+                              type="text"
+                              value={item.product ? getProductName(item.product, lang) : item.productQuery}
+                              placeholder={t.reportProductNamePlaceholder}
+                              className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
+                              onChange={e => {
+                                const q = e.target.value;
+                                setReportItems(items => items.map(it => it.id === item.id ? { ...it, productQuery: q, product: null, showDropdown: true } : it));
+                              }}
+                              onFocus={() => setReportItems(items => items.map(it => it.id === item.id ? { ...it, showDropdown: true } : it))}
+                              onBlur={() => setTimeout(() => setReportItems(items => items.map(it => it.id === item.id ? { ...it, showDropdown: false } : it)), 150)}
+                            />
+                            {item.showDropdown && item.productQuery.trim() && (() => {
+                              const q = normalizeProductNameKey(item.productQuery);
+                              const hits = products.filter(p => normalizeProductNameKey([p.name_uz, p.name_ru, p.name_en, p.search_text].join(' ')).includes(q)).slice(0, 8);
+                              return hits.length > 0 ? (
+                                <div className="absolute left-0 right-0 top-full mt-1 z-50 max-h-48 overflow-y-auto rounded-xl border border-stone-200 bg-white shadow-xl">
+                                  {hits.map(p => (
+                                    <button key={p.id} type="button"
+                                      className="w-full text-left px-3 py-2.5 hover:bg-stone-50 border-b border-stone-100 last:border-0"
+                                      onMouseDown={e => { e.preventDefault(); setReportItems(items => items.map(it => it.id === item.id ? { ...it, product: p, productQuery: getProductName(p, lang), showDropdown: false } : it)); }}>
+                                      <div className="text-sm font-medium text-stone-900">{getProductName(p, lang)}</div>
+                                      <div className="text-xs text-stone-400">{getProductSecondary(p, lang)}</div>
+                                    </button>
+                                  ))}
+                                </div>
+                              ) : null;
+                            })()}
+                          </div>
+                          {/* Price */}
+                          <input
+                            type="number"
+                            value={item.price}
+                            placeholder={t.pricePlaceholder}
+                            className="w-24 rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-500"
+                            onChange={e => setReportItems(items => items.map(it => it.id === item.id ? { ...it, price: e.target.value } : it))}
+                          />
+                          {/* Remove button */}
+                          {reportItems.length > 1 && (
+                            <button type="button" className="py-2.5 px-1.5 text-stone-300 hover:text-rose-500"
+                              onClick={() => setReportItems(items => items.filter(it => it.id !== item.id))}>
+                              <X className="h-4 w-4" />
                             </button>
-                          ))}
-                          {productsLoading && (
-                            <div className="px-4 py-2 text-xs text-center text-stone-400 italic">Loading more products...</div>
                           )}
                         </div>
-                      )}
+                      ))}
                     </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-stone-500 uppercase tracking-wider mb-2">{t.priceLabel}</label>
-                    <input
-                      type="number"
-                      placeholder={t.pricePlaceholder}
-                      className="w-full bg-stone-50 border border-stone-200 rounded-xl py-3 px-4 text-lg font-bold focus:ring-2 focus:ring-emerald-500 outline-none"
-                      value={reportPrice}
-                      onChange={(e) => setReportPrice(e.target.value)}
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-stone-500 uppercase tracking-wider mb-2">{t.locationLabel}</label>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={getCurrentLocation}
-                        className={cn(
-                          "flex-1 flex items-center justify-center gap-2 py-3 rounded-xl border transition-all",
-                          reportLocation ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-stone-50 border-stone-200 text-stone-600"
-                        )}
-                      >
-                        {reportLocation ? <Check className="w-4 h-4" /> : <Navigation className="w-4 h-4" />}
-                        GPS
-                      </button>
-                      <button className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl border border-stone-200 bg-stone-50 text-stone-600">
-                        <MapPin className="w-4 h-4" />
-                        {t.mapPick}
-                      </button>
-                    </div>
-                    {geoError && (
-                      <div className="mt-2 text-xs font-medium text-rose-600">{geoError}</div>
-                    )}
-                    <div className="mt-3 h-50 rounded-xl overflow-hidden border border-stone-200 relative">
-                      <MapContainer
-                        center={reportLocation ? [reportLocation.lat, reportLocation.lng] : selectedCityOption.center}
-                        zoom={reportLocation ? 15 : selectedCityOption.zoom}
-                        style={{ height: '100%', width: '100%' }}
-                        zoomControl={false}
-                      >
-                        <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-                        <ChangeView center={reportLocation ? [reportLocation.lat, reportLocation.lng] : selectedCityOption.center} zoom={reportLocation ? 15 : selectedCityOption.zoom} />
-                        <ReportMapPicker
-                          onPick={(lat, lng) => {
-                            setReportLocation({ lat, lng });
-                          }}
-                        />
-                        {reportLocation && (
-                          <CircleMarker
-                            center={[reportLocation.lat, reportLocation.lng]}
-                            radius={10}
-                            fillColor="#22c55e"
-                            color="white"
-                            weight={2}
-                            fillOpacity={0.9}
-                          />
-                        )}
-                      </MapContainer>
-                      {!reportLocation && (
-                        <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-stone-500 bg-white/70">
-                          {t.locationHint}
-                        </div>
-                      )}
-                    </div>
-                    {reportLocation && (
-                      <div className="mt-2 text-xs text-stone-500">
-                        {reportLocation.lat.toFixed(5)}, {reportLocation.lng.toFixed(5)}
-                      </div>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-stone-500 uppercase tracking-wider mb-2">{t.proofLabel}</label>
-                    <input
-                      type="url"
-                      placeholder={t.proofPlaceholder}
-                      value={reportProofUrl}
-                      onChange={(e) => setReportProofUrl(e.target.value)}
-                      className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
-                    />
+                    <button type="button"
+                      onClick={() => setReportItems(items => [...items, { id: crypto.randomUUID(), product: null, productQuery: '', price: '', showDropdown: false }])}
+                      className="mt-3 flex items-center gap-1.5 text-sm font-semibold text-emerald-600 hover:text-emerald-700">
+                      <Plus className="h-4 w-4" /> {t.addItemBtn}
+                    </button>
                   </div>
 
                   <button
-                    disabled={submitting || !reportPrice || (!selectedProduct && !searchQuery.trim())}
+                    disabled={submitting || !selectedStore || reportItems.every(it => !it.price || (!it.product && !it.productQuery.trim()))}
                     onClick={handleReportSubmit}
                     className="w-full bg-emerald-600 text-white py-4 rounded-xl font-bold text-lg shadow-lg shadow-emerald-200 active:scale-95 transition-all disabled:opacity-50 disabled:shadow-none"
                   >
-                    {submitting ? t.submitting : t.submit}
+                    {submitting ? t.submitting : `${t.submitAllBtn} (${reportItems.filter(it => it.price && (it.product || it.productQuery.trim())).length})`}
                   </button>
                 </section>
 
@@ -5268,7 +5607,9 @@ export default function App() {
                       ? t.productsTitle
                       : moderationSection === 'links'
                         ? t.linksTitle
-                        : t.messagesTitle
+                        : moderationSection === 'stores'
+                          ? t.storesTab
+                          : t.messagesTitle
                 }
               </h2>
               <div className="flex items-center gap-1">
@@ -5309,6 +5650,15 @@ export default function App() {
                   {t.messagesTab}
                 </button>
                 <button
+                  onClick={() => setModerationSection('stores')}
+                  className={cn(
+                    'rounded-lg px-3 py-1.5 text-xs font-semibold',
+                    moderationSection === 'stores' ? 'bg-emerald-600 text-white' : 'border border-stone-200 bg-white text-stone-600'
+                  )}
+                >
+                  {t.storesTab}
+                </button>
+                <button
                   onClick={
                     moderationSection === 'prices'
                       ? fetchModerationItems
@@ -5316,7 +5666,9 @@ export default function App() {
                         ? fetchModerationProducts
                         : moderationSection === 'links'
                           ? fetchReceiptLinks
-                          : fetchModerationMessages
+                          : moderationSection === 'stores'
+                            ? fetchAdminStores
+                            : fetchModerationMessages
                   }
                   className="rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-stone-600"
                 >
@@ -6132,6 +6484,70 @@ export default function App() {
                   </div>
                 )}
               </div>
+            ) : moderationSection === 'stores' ? (
+              <div className="space-y-3">
+                {adminStoresLoading ? (
+                  <div className="animate-pulse space-y-3">
+                    {[1, 2, 3].map(i => <div key={i} className="h-24 bg-stone-200 rounded-xl" />)}
+                  </div>
+                ) : adminStores.length === 0 ? (
+                  <div className="rounded-2xl border border-stone-200 bg-white p-8 text-center text-stone-500">
+                    {t.storeNoUnverified}
+                  </div>
+                ) : (
+                  adminStores.map(store => (
+                    <div key={store.id} className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="font-semibold text-stone-900 text-sm truncate">{store.name}</div>
+                          {store.address && <div className="text-xs text-stone-500 truncate">{store.address}</div>}
+                          <div className="flex gap-2 mt-1 text-xs text-stone-400">
+                            {store.city && <span>{store.city}</span>}
+                            {store.times_submitted != null && <span>· {store.times_submitted} {t.storeTimesSubmitted}</span>}
+                            {store.latitude != null && <span>· 📍 {(store.latitude as number).toFixed(4)}, {(store.longitude as number).toFixed(4)}</span>}
+                          </div>
+                        </div>
+                        <div className="flex gap-1 shrink-0">
+                          <button onClick={() => handleVerifyStore(store.id as string)}
+                            className="rounded-lg bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700">
+                            ✅ {t.storeVerify}
+                          </button>
+                          <button onClick={() => { setStoreMergeSourceId(storeMergeSourceId === store.id ? null : store.id as string); setStoreMergeQuery(''); setStoreMergeResults([]); }}
+                            className="rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-stone-700 hover:bg-stone-50">
+                            🔀 {t.storeMerge}
+                          </button>
+                          <button onClick={() => handleDeleteStore(store.id as string)}
+                            className="rounded-lg border border-rose-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-rose-600 hover:bg-rose-50">
+                            🗑 {t.storeDelete}
+                          </button>
+                        </div>
+                      </div>
+                      {storeMergeSourceId === store.id && (
+                        <div className="mt-3 border-t border-stone-100 pt-3">
+                          <input type="text" value={storeMergeQuery}
+                            placeholder={t.storeMergeSearchPlaceholder}
+                            className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
+                            onChange={e => searchMergeTargets(e.target.value)}
+                          />
+                          {storeMergeResults.filter(r => r.id !== store.id).length > 0 && (
+                            <div className="mt-2 space-y-1">
+                              {storeMergeResults.filter(r => r.id !== store.id).map(target => (
+                                <div key={target.id} className="flex items-center justify-between gap-2 rounded-xl border border-stone-200 bg-stone-50 px-3 py-2">
+                                  <div className="text-sm text-stone-900">{target.name} {target.verified && '✅'}</div>
+                                  <button onClick={() => handleMergeStore(store.id as string, target.id as string)}
+                                    className="rounded-lg bg-amber-500 px-2.5 py-1 text-xs font-semibold text-white">
+                                    {t.storeMergeConfirm}
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
             ) : (
               <div className="space-y-4">
                 {messagesLoading ? (
@@ -6141,6 +6557,7 @@ export default function App() {
                 ) : contactMessages.length === 0 ? (
                   <div className="rounded-2xl border border-stone-200 bg-white p-8 text-center text-stone-500">
                     {t.messagesEmpty}
+
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -6222,6 +6639,7 @@ declare global {
         openLink?: (url: string) => void;
         showScanQrPopup?: (params: { text?: string }, callback: (scannedText: string) => boolean) => void;
         closeScanQrPopup?: () => void;
+        showConfirm?: (message: string, callback: (ok: boolean) => void) => void;
         initData: string;
         initDataUnsafe: {
           user?: {
