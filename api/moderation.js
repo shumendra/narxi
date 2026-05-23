@@ -2526,6 +2526,13 @@ async function purgeAllProductsData() {
   const { error: alErr } = await supabase.from('product_aliases').delete().neq('id', '');
   if (alErr) throw alErr;
 
+  // Detach product_views FK (RESTRICT by default) — same step done in deleteProduct/deleteProductsMany.
+  const { error: viewsErr } = await supabase
+    .from('product_views')
+    .update({ product_id: null })
+    .neq('id', '');
+  if (viewsErr && !isMissingRelationError(viewsErr)) throw viewsErr;
+
   // Null out store_products FK before deleting products (FK is RESTRICT by default).
   const { error: spErr } = await supabase
     .from('store_products')

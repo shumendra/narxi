@@ -3865,6 +3865,13 @@ export default function App() {
 
     setSubmitting(true);
     try {
+      // Helper: detect Supabase "table/column does not exist" errors so we can
+      // degrade gracefully when the stores migration hasn't been run yet.
+      const isMissingSchema = (err: unknown): boolean => {
+        const msg = String((err as any)?.message || '').toLowerCase();
+        return msg.includes('does not exist') || msg.includes('relation') || msg.includes('schema cache');
+      };
+
       // Create new store if needed
       let storeId: string | null = selectedStore.id;
       if (selectedStore.isNew) {
@@ -3877,10 +3884,19 @@ export default function App() {
           verified: false,
           times_submitted: 1,
         }).select('id').single();
-        if (storeErr) throw storeErr;
-        storeId = newStore.id;
+        if (storeErr) {
+          if (isMissingSchema(storeErr)) {
+            // stores table not yet created — proceed without store_id
+            storeId = null;
+          } else {
+            throw storeErr;
+          }
+        } else {
+          storeId = newStore.id;
+        }
       } else if (storeId) {
-        await supabase.from('stores').update({ times_submitted: (selectedStore.times_submitted ?? 0) + validItems.length }).eq('id', storeId);
+        const { error: updateErr } = await supabase.from('stores').update({ times_submitted: (selectedStore.times_submitted ?? 0) + validItems.length }).eq('id', storeId);
+        if (updateErr && !isMissingSchema(updateErr)) throw updateErr;
       }
 
       const submittedBy = window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || 'unknown';
@@ -3899,7 +3915,8 @@ export default function App() {
         receipt_date: new Date().toISOString(),
         source: 'manual',
         submitted_by: submittedBy,
-        store_id: storeId,
+        // Only include store_id if the stores migration has been run (storeId is a real UUID)
+        ...(storeId != null ? { store_id: storeId } : {}),
       }));
 
       const { error } = await supabase.from('pending_prices').insert(rows);

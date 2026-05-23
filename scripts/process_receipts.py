@@ -418,24 +418,24 @@ def mark_queue_status(queue_id: str, status: str, error_message: str | None = No
 
 
 def item_exists_already(payload: dict) -> bool:
+    """Check whether this receipt line item is already in pending_prices or prices.
+
+    We key on (receipt_url, product_name_raw, unit_price) — the minimal stable
+    triple that uniquely identifies an item on a given receipt.  Broader fields
+    like place_name / place_address are intentionally excluded because they can
+    change between runs when brand-name resolution is updated, which would cause
+    false "not found" results and duplicate rows.
+    """
     receipt_url = payload.get('receipt_url')
     product_name_raw = payload.get('product_name_raw')
-    place_name = payload.get('place_name')
-    place_address = payload.get('place_address')
-    receipt_date = payload.get('receipt_date')
     unit_price = payload.get('unit_price')
-    city = payload.get('city')
 
     pending_query = (
         supabase.table('pending_prices')
         .select('id')
         .eq('receipt_url', receipt_url)
         .eq('product_name_raw', product_name_raw)
-        .eq('place_name', place_name)
-        .eq('place_address', place_address)
-        .eq('receipt_date', receipt_date)
         .eq('unit_price', unit_price)
-        .eq('city', city)
         .limit(1)
         .execute()
     )
@@ -445,12 +445,9 @@ def item_exists_already(payload: dict) -> bool:
     approved_query = (
         supabase.table('prices')
         .select('id')
+        .eq('receipt_url', receipt_url)
         .eq('product_name_raw', product_name_raw)
-        .eq('place_name', place_name)
-        .eq('place_address', place_address)
-        .eq('receipt_date', receipt_date)
         .eq('price', unit_price)
-        .eq('city', city)
         .limit(1)
         .execute()
     )
