@@ -425,11 +425,19 @@ def item_exists_already(payload: dict) -> bool:
     like place_name / place_address are intentionally excluded because they can
     change between runs when brand-name resolution is updated, which would cause
     false "not found" results and duplicate rows.
+
+    pending_prices is checked across ALL statuses (not just 'pending') so that
+    already-approved rows also block re-insertion.
+
+    The prices table does not have a receipt_url column, so we fall back to
+    product_name_raw + receipt_date + price for the approved-row check.
     """
     receipt_url = payload.get('receipt_url')
     product_name_raw = payload.get('product_name_raw')
     unit_price = payload.get('unit_price')
+    receipt_date = payload.get('receipt_date')
 
+    # Check pending_prices (any status) — covers items already submitted or approved.
     pending_query = (
         supabase.table('pending_prices')
         .select('id')
@@ -442,11 +450,12 @@ def item_exists_already(payload: dict) -> bool:
     if pending_query.data:
         return True
 
+    # Check prices (approved rows) — prices table has no receipt_url column.
     approved_query = (
         supabase.table('prices')
         .select('id')
-        .eq('receipt_url', receipt_url)
         .eq('product_name_raw', product_name_raw)
+        .eq('receipt_date', receipt_date)
         .eq('price', unit_price)
         .limit(1)
         .execute()
