@@ -2647,8 +2647,11 @@ async function approvePending(id) {
 
     const context = await resolvePendingStoreContext(target, receiptCache);
 
-    // Directly create product and insert into prices — no normalization queue
-    const productId = await ensureProductForName(target.product_name_raw, context.city);
+    // Prefer the product_id already matched by the Python worker (fuzzy match).
+    // Only fall back to ensureProductForName when no match was set — this prevents
+    // creating raw-name duplicate products and ensures prices link to canonical ones.
+    const matchedProductId = normalizeMaybeText(String(target.product_id || '').trim());
+    const productId = matchedProductId || await ensureProductForName(target.product_name_raw, context.city);
     if (productId) {
       await insertApprovedPriceRow({ pending: target, productId, context });
     }
