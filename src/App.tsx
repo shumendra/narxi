@@ -121,7 +121,7 @@ function identifyStoreByCoords(lat: number, lng: number, knownStores?: Array<{ n
 
 // Types
 interface Product {
-  id: string;
+  id: string | null;      // null for raw-name results (no canonical product yet)
   name_uz: string;
   name_ru: string;
   name_en?: string | null;
@@ -129,6 +129,7 @@ interface Product {
   category: string;
   unit?: string | null;
   available_cities?: string[] | null;
+  isRaw?: boolean;        // true when this is a raw product_name_raw from prices (no canonical)
 }
 
 interface PriceRecord {
@@ -512,9 +513,13 @@ export default function App() {
   const [lang, setLang] = useState<'uz' | 'ru' | 'en'>('uz');
   const [searchQuery, setSearchQuery] = useState('');
   const [products, setProducts] = useState<Product[]>([]);
+  const [rawSearchResults, setRawSearchResults] = useState<Product[]>([]);   // Layer 2: raw names from prices
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [prices, setPrices] = useState<PriceRecord[]>([]);
   const [moderationItems, setModerationItems] = useState<PendingModerationItem[]>([]);
+  // Maps pending item id → { id, name } of the canonical product admin selected for it
+  const [pendingProductPicker, setPendingProductPicker] = useState<Record<string, { id: string; name: string } | null>>({});
+  const [pendingProductSearch, setPendingProductSearch] = useState<Record<string, string>>({});
   const [approvedItems, setApprovedItems] = useState<ApprovedModerationItem[]>([]);
   const [productAdminItems, setProductAdminItems] = useState<ProductAdminItem[]>([]);
   const [moderationSection, setModerationSection] = useState<'prices' | 'products' | 'links' | 'messages' | 'stores'>('prices');
@@ -1908,13 +1913,29 @@ export default function App() {
     return requestPromise;
   };
 
-  const loadPricesForProduct = async (productId: string) => {
+  const loadPricesForProduct = async (product: Product) => {
     setLoading(true);
+    if (product.isRaw || !product.id) {
+      // Raw product: fetch prices directly by product_name_raw
+      const { data } = await supabase
+        .from('prices')
+        .select('*')
+        .eq('product_name_raw', product.name_uz)
+        .eq('city', selectedCity)
+        .not('source', 'like', 'history_%')
+        .order('price', { ascending: true })
+        .limit(200);
+      setPrices((data || []) as PriceRecord[]);
+      setLoading(false);
+      return;
+    }
+
+    // Canonical product: fetch by product_id (existing behaviour)
     const [pricesResult, aliasesResult] = await Promise.all([
       supabase
         .from('prices')
         .select('*')
-        .eq('product_id', productId)
+        .eq('product_id', product.id)
         .eq('city', selectedCity)
         .not('source', 'like', 'history_%')
         .order('price', { ascending: true })
@@ -1922,15 +1943,14 @@ export default function App() {
       supabase
         .from('product_aliases')
         .select('alias_text')
-        .eq('product_id', productId),
+        .eq('product_id', product.id),
     ]);
 
-    const product = products.find(item => item.id === productId) || null;
     const knownNameKeys = new Set([
       normalizeProductNameKey(product?.name_uz),
       normalizeProductNameKey(product?.name_ru),
       normalizeProductNameKey(product?.name_en || ''),
-      ...((aliasesResult.data || []).map(alias => normalizeProductNameKey(alias.alias_text))),
+      ...((aliasesResult.data || []).map((alias: { alias_text: string }) => normalizeProductNameKey(alias.alias_text))),
     ].filter(Boolean));
 
     const filtered = (pricesResult.data || []).filter(row => {
@@ -2660,6 +2680,7 @@ export default function App() {
   const approveModerationItem = async (item: PendingModerationItem) => {
     setModerationSavingId(item.id);
     try {
+      const selectedProductForItem = pendingProductPicker[item.id];
       await callModerationApi('update', {
         id: item.id,
         changes: {
@@ -2673,6 +2694,8 @@ export default function App() {
           latitude: typeof item.latitude === 'number' ? item.latitude : undefined,
           longitude: typeof item.longitude === 'number' ? item.longitude : undefined,
           price_scope: item.price_scope ?? 'location',
+          // Persist the admin's canonical product selection (if any)
+          ...(selectedProductForItem ? { product_id: selectedProductForItem.id } : {}),
         },
       });
       const result = await callModerationApi('approve', { id: item.id });
@@ -2783,8 +2806,8 @@ export default function App() {
     try {
       await callModerationApi('deleteApproved', { id: item.id });
       await fetchModerationItems();
-      if (selectedProduct?.id === item.product_id) {
-        await loadPricesForProduct(item.product_id);
+      if (selectedProduct && selectedProduct.id === item.product_id) {
+        await loadPricesForProduct(selectedProduct);
       }
       window.Telegram?.WebApp?.showAlert(t.moderationDeleted);
     } catch {
@@ -3132,7 +3155,7 @@ export default function App() {
 
   useEffect(() => {
     if (mode === 'find' && selectedProduct) {
-      loadPricesForProduct(selectedProduct.id);
+      loadPricesForProduct(selectedProduct);
     }
   }, [mode, selectedProduct, selectedCity]);
 
@@ -3150,8 +3173,8 @@ export default function App() {
 
     const refreshFindData = () => {
       fetchProducts();
-      if (selectedProduct?.id) {
-        loadPricesForProduct(selectedProduct.id);
+      if (selectedProduct) {
+        loadPricesForProduct(selectedProduct);
       }
     };
 
@@ -3181,15 +3204,53 @@ export default function App() {
     });
   }, [products, selectedCity]);
 
-  const filteredProducts = useMemo(() => {
+  // Layer 1: canonical products matching the search query
+  const canonicalFiltered = useMemo(() => {
     if (!searchQuery) return [];
-    return cityProducts.filter(p => 
-      p.name_uz.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      p.name_ru.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (p.name_en || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (p.search_text || '').toLowerCase().includes(searchQuery.toLowerCase())
+    const q = searchQuery.toLowerCase();
+    return cityProducts.filter(p =>
+      p.name_uz.toLowerCase().includes(q) ||
+      p.name_ru.toLowerCase().includes(q) ||
+      (p.name_en || '').toLowerCase().includes(q) ||
+      (p.search_text || '').toLowerCase().includes(q)
     );
   }, [searchQuery, cityProducts]);
+
+  // Combined Layer 1 + Layer 2 (raw names deduplicated against canonical results)
+  const filteredProducts = useMemo(() => {
+    if (!searchQuery) return [];
+    const canonicalNames = new Set(canonicalFiltered.map(p => p.name_uz.toLowerCase()));
+    const rawFiltered = rawSearchResults.filter(r => !canonicalNames.has(r.name_uz.toLowerCase()));
+    return [...canonicalFiltered, ...rawFiltered];
+  }, [searchQuery, canonicalFiltered, rawSearchResults]);
+
+  // Debounced effect: fetch raw product_name_raw results from prices (Layer 2)
+  useEffect(() => {
+    if (!searchQuery || searchQuery.length < 2 || mode !== 'find') {
+      setRawSearchResults([]);
+      return;
+    }
+    const timer = window.setTimeout(async () => {
+      const { data } = await supabase
+        .from('prices')
+        .select('product_name_raw')
+        .is('product_id', null)
+        .eq('city', selectedCity)
+        .eq('status', 'approved')
+        .ilike('product_name_raw', `%${searchQuery}%`)
+        .limit(20);
+      const uniqueNames = [...new Set((data || []).map((r: { product_name_raw: string }) => r.product_name_raw))].slice(0, 5);
+      setRawSearchResults(uniqueNames.map(name => ({
+        id: null,
+        name_uz: name,
+        name_ru: name,
+        name_en: null,
+        category: '',
+        isRaw: true,
+      })));
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery, selectedCity, mode]);
 
   const planFilteredProducts = useMemo(() => {
     if (!planSearchQuery || planSearchQuery.length < 2) return [];
@@ -3276,6 +3337,13 @@ export default function App() {
     setSearchQuery(getProductName(product, lang));
     setShowDropdown(false);
 
+    // Raw products have no canonical product_id — skip analytics and load by raw name
+    if (product.isRaw || !product.id) {
+      setSelectedProductWeeklyViews(0);
+      await loadPricesForProduct(product);
+      return;
+    }
+
     const now = new Date();
     const weekNumber = getWeekNumber(now);
     const year = now.getFullYear();
@@ -3299,6 +3367,7 @@ export default function App() {
       .eq('year', year);
 
     setSelectedProductWeeklyViews(Number(count || 0));
+    await loadPricesForProduct(product);
   };
 
   const sortedPrices = useMemo(() => {
@@ -3313,14 +3382,17 @@ export default function App() {
     const chainPrices = prices.filter(p => p.price_scope === 'chain' && p.latitude == null && p.longitude == null);
     const locationPrices = prices.filter(p => !(p.price_scope === 'chain' && p.latitude == null && p.longitude == null));
 
-    // Dedup location prices by rounded lat/lng cluster or place key, keeping highest priority
+    // Dedup location prices by rounded lat/lng cluster or place key, keeping highest priority.
+    // For raw prices (product_id=null) include product_name_raw in the key so different raw items
+    // at the same location are not collapsed into one.
     const priceByKey = new Map<string, PriceRecord>();
     for (const price of locationPrices) {
       const latR = price.latitude != null ? Math.round(price.latitude * 1000) / 1000 : null;
       const lngR = price.longitude != null ? Math.round(price.longitude * 1000) / 1000 : null;
+      const idPart = price.product_id ?? (price.product_name_raw || '').trim().toLowerCase();
       const key = latR != null
-        ? `${latR},${lngR}|${price.product_id}`
-        : `${(price.place_name || '').trim().toLowerCase()}|${(price.place_address || '').trim().toLowerCase()}|${(price.city || '').trim().toLowerCase()}|${price.product_id}`;
+        ? `${latR},${lngR}|${idPart}`
+        : `${(price.place_name || '').trim().toLowerCase()}|${(price.place_address || '').trim().toLowerCase()}|${(price.city || '').trim().toLowerCase()}|${idPart}`;
 
       const existing = priceByKey.get(key);
       if (!existing) { priceByKey.set(key, price); continue; }
@@ -3343,7 +3415,8 @@ export default function App() {
 
       if (matchingBranches.length === 0) {
         // No known branches — show as a plain entry without coordinates
-        const fallbackKey = `chain_${chainName}|${chainPrice.product_id}`;
+        const chainIdPart = chainPrice.product_id ?? (chainPrice.product_name_raw || '').trim().toLowerCase();
+        const fallbackKey = `chain_${chainName}|${chainIdPart}`;
         if (!priceByKey.has(fallbackKey)) priceByKey.set(fallbackKey, chainPrice);
         continue;
       }
@@ -3351,7 +3424,8 @@ export default function App() {
       for (const branch of matchingBranches) {
         const latR = Math.round(branch.lat * 1000) / 1000;
         const lngR = Math.round(branch.lng * 1000) / 1000;
-        const locKey = `${latR},${lngR}|${chainPrice.product_id}`;
+        const chainIdPart = chainPrice.product_id ?? (chainPrice.product_name_raw || '').trim().toLowerCase();
+        const locKey = `${latR},${lngR}|${chainIdPart}`;
         // Only use chain price here if no receipt/location-specific price is already set
         if (!priceByKey.has(locKey)) {
           priceByKey.set(locKey, { ...chainPrice, latitude: branch.lat, longitude: branch.lng });
@@ -4725,13 +4799,16 @@ export default function App() {
             <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-stone-200 rounded-xl shadow-xl max-h-60 overflow-y-auto z-50">
               {filteredProducts.map(p => (
                 <button
-                  key={p.id}
+                  key={p.id ?? `raw:${p.name_uz}`}
                   onClick={() => handleProductSelect(p)}
                   className="w-full text-left px-4 py-3 hover:bg-stone-50 border-b border-stone-100 last:border-none flex items-center justify-between"
                 >
                   <div>
-                    <div className="text-sm font-medium">{getProductName(p, lang)}</div>
-                    <div className="text-xs text-stone-400">{getProductSecondary(p, lang)}</div>
+                    <div className={cn('text-sm font-medium', p.isRaw && 'text-stone-500 italic')}>{getProductName(p, lang)}</div>
+                    {p.isRaw
+                      ? <div className="text-xs text-stone-300">Receipt data</div>
+                      : <div className="text-xs text-stone-400">{getProductSecondary(p, lang)}</div>
+                    }
                   </div>
                   <ChevronRight className="w-4 h-4 text-stone-300" />
                 </button>
@@ -5981,6 +6058,62 @@ export default function App() {
                           className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm"
                         />
                       </div>
+                    </div>
+
+                    {/* Canonical product picker — admin selects which product this maps to */}
+                    <div className="border-t border-stone-100 pt-3">
+                      <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">
+                        Canonical product (optional)
+                      </label>
+                      {pendingProductPicker[item.id] ? (
+                        <div className="flex items-center gap-2 rounded-xl bg-emerald-50 px-3 py-2 text-sm">
+                          <span className="flex-1 font-medium text-emerald-800">{pendingProductPicker[item.id]!.name}</span>
+                          <button
+                            type="button"
+                            onClick={() => setPendingProductPicker(p => ({ ...p, [item.id]: null }))}
+                            className="text-emerald-600 hover:text-emerald-800"
+                          >✕</button>
+                        </div>
+                      ) : (
+                        <div className="relative">
+                          <input
+                            value={pendingProductSearch[item.id] ?? ''}
+                            onChange={(e) => setPendingProductSearch(p => ({ ...p, [item.id]: e.target.value }))}
+                            placeholder="Search canonical product…"
+                            className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-2.5 text-sm"
+                          />
+                          {(pendingProductSearch[item.id] || '').length >= 2 && (
+                            <div className="absolute left-0 right-0 top-full z-20 mt-1 max-h-48 overflow-y-auto rounded-xl border border-stone-200 bg-white shadow-lg">
+                              {products
+                                .filter(p => p.id && (
+                                  p.name_uz.toLowerCase().includes((pendingProductSearch[item.id] || '').toLowerCase()) ||
+                                  p.name_ru.toLowerCase().includes((pendingProductSearch[item.id] || '').toLowerCase())
+                                ))
+                                .slice(0, 8)
+                                .map(p => (
+                                  <button
+                                    key={p.id}
+                                    type="button"
+                                    onClick={() => {
+                                      setPendingProductPicker(prev => ({ ...prev, [item.id]: { id: p.id!, name: p.name_uz } }));
+                                      setPendingProductSearch(prev => ({ ...prev, [item.id]: '' }));
+                                    }}
+                                    className="block w-full px-4 py-2 text-left text-sm hover:bg-stone-50"
+                                  >
+                                    <span className="font-medium">{p.name_uz}</span>
+                                    {p.name_ru !== p.name_uz && <span className="ml-2 text-stone-400">{p.name_ru}</span>}
+                                  </button>
+                                ))}
+                              {products.filter(p => p.id && (
+                                p.name_uz.toLowerCase().includes((pendingProductSearch[item.id] || '').toLowerCase()) ||
+                                p.name_ru.toLowerCase().includes((pendingProductSearch[item.id] || '').toLowerCase())
+                              )).length === 0 && (
+                                <div className="px-4 py-2 text-xs text-stone-400">No match — will approve with raw name as identity</div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     <div className="grid grid-cols-3 gap-2">

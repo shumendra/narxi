@@ -938,39 +938,6 @@ async function syncProductAvailableCities(productId, city) {
   if (updateError) throw updateError;
 }
 
-async function ensureProductForName(rawName, city) {
-  const normalizedName = String(rawName || '').trim();
-  if (!normalizedName) return null;
-
-  const { data: existingProduct } = await supabase
-    .from('products')
-    .select('id')
-    .eq('name_uz', normalizedName)
-    .maybeSingle();
-
-  if (existingProduct?.id) {
-    await syncProductAvailableCities(existingProduct.id, city);
-    return existingProduct.id;
-  }
-
-  const { data: created, error: createError } = await supabase
-    .from('products')
-    .insert({
-      name_uz: normalizedName,
-      name_ru: normalizedName,
-      name_en: normalizedName,
-      search_text: normalizedName,
-      category: 'Boshqa',
-      unit: 'dona',
-      available_cities: city ? [city] : [],
-    })
-    .select('id')
-    .single();
-
-  if (createError) throw createError;
-  return created?.id || null;
-}
-
 function normalizeAliasKey(value) {
   return String(value || '').trim().toLowerCase();
 }
@@ -1299,7 +1266,7 @@ async function insertApprovedPriceRow({ pending, productId, context }) {
   const { data: existingExactPrice, error: findExistingError } = await supabase
     .from('prices')
     .select('id')
-    .eq('product_id', productId)
+    .eq(productId ? 'product_id' : 'product_name_raw', productId ?? (pending?.product_name_raw || ''))
     .eq('city', city)
     .eq('place_name', placeName)
     .eq('place_address', placeAddress)
@@ -1315,8 +1282,11 @@ async function insertApprovedPriceRow({ pending, productId, context }) {
     if (insertError) throw insertError;
   }
 
-  await syncProductAvailableCities(productId, city);
-  await upsertProductAlias(productId, pending?.product_name_raw, placeName || null);
+  // Only update canonical product metadata when a product is linked.
+  if (productId) {
+    await syncProductAvailableCities(productId, city);
+    await upsertProductAlias(productId, pending?.product_name_raw, placeName || null);
+  }
 }
 
 async function exportNormalizationQueue({ onlyNonNormalized = false } = {}) {
@@ -2647,14 +2617,12 @@ async function approvePending(id) {
 
     const context = await resolvePendingStoreContext(target, receiptCache);
 
-    // Prefer the product_id already matched by the Python worker (fuzzy match).
-    // Only fall back to ensureProductForName when no match was set — this prevents
-    // creating raw-name duplicate products and ensures prices link to canonical ones.
-    const matchedProductId = normalizeMaybeText(String(target.product_id || '').trim());
-    const productId = matchedProductId || await ensureProductForName(target.product_name_raw, context.city);
-    if (productId) {
-      await insertApprovedPriceRow({ pending: target, productId, context });
-    }
+    // Use the product_id the admin selected (set via the moderation UI).
+    // If no product was assigned, insert the price with product_id=null —
+    // the raw name IS the product identity for unmatched manual entries.
+    const productId = normalizeMaybeText(String(target.product_id || '').trim()) || null;
+
+    await insertApprovedPriceRow({ pending: target, productId, context });
 
     const { error: updateError } = await supabase
       .from('pending_prices')

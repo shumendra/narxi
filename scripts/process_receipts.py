@@ -10,7 +10,6 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from playwright.async_api import async_playwright
 from supabase import create_client
-from thefuzz import fuzz
 
 load_dotenv()
 
@@ -281,112 +280,40 @@ def parse_receipt_html(html_content: str) -> dict:
     }
 
 
-def get_all_products() -> list[dict]:
+def is_valid_product_item(item: dict) -> bool:
+    """Return True only for real purchasable items (not fees, taxes, totals, etc.)."""
+    SKIP_WORDS = [
+        'пакет', 'bag', 'chegirma', 'skidka', 'discount',
+        'xizmat', 'obslujivanie', 'service', 'qqs', 'nds',
+        'ндс', 'jami', 'итого', 'total', 'bonus', 'ball', 'aksiya',
+    ]
+    name = (item.get('name') or '').lower().strip()
+    if not name or len(name) < 3:
+        return False
+    price = item.get('price', 0)
+    if price <= 0 or price > 10_000_000:
+        return False
+    if any(w in name for w in SKIP_WORDS):
+        return False
+    return True
+
+
+def receipt_item_exists(product_name_raw: str, place_name: str | None, city: str, receipt_date: str) -> bool:
+    """Dedup check: skip if an identical line item is already in prices."""
     try:
-        result = supabase.table('products').select('id, name_uz, name_ru, name_en, search_text').execute()
-        return result.data or []
-    except Exception as error:
-        # Backward compatibility for DBs that have not run data-foundation migration yet.
-        if 'search_text' in str(error):
-            fallback = supabase.table('products').select('id, name_uz, name_ru, name_en').execute()
-            return fallback.data or []
-        raise
-
-
-def get_all_aliases() -> list[dict]:
-    try:
-        result = supabase.table('product_aliases').select('product_id, alias_text, store_name').execute()
-        return result.data or []
-    except Exception as error:
-        # Alias table is optional until migration is applied.
-        if 'product_aliases' in str(error):
-            return []
-        raise
-
-
-def alias_exact_match(raw_name: str, store_name: str | None, aliases: list[dict]) -> str | None:
-    normalized_raw = (raw_name or '').strip().lower()
-    normalized_store = (store_name or '').strip().lower()
-    if not normalized_raw:
-        return None
-
-    # Prefer store-specific aliases first.
-    for alias in aliases:
-        if (alias.get('store_name') or '').strip().lower() != normalized_store:
-            continue
-        if (alias.get('alias_text') or '').strip().lower() == normalized_raw:
-            return alias.get('product_id')
-
-    # Fall back to global aliases.
-    for alias in aliases:
-        if alias.get('store_name'):
-            continue
-        if (alias.get('alias_text') or '').strip().lower() == normalized_raw:
-            return alias.get('product_id')
-
-    return None
-
-
-def upsert_product_alias(product_id: str | None, alias_text: str, store_name: str | None = None):
-    if not product_id or not alias_text.strip():
-        return
-
-    normalized_alias = alias_text.strip()
-    normalized_store = (store_name or '').strip() or None
-
-    try:
-        existing = (
-            supabase.table('product_aliases')
-            .select('id,times_seen')
-            .eq('product_id', product_id)
-            .ilike('alias_text', normalized_alias)
-            .is_('store_name', normalized_store)
+        q = (
+            supabase.table('prices')
+            .select('id')
+            .eq('product_name_raw', product_name_raw)
+            .eq('city', city)
+            .eq('receipt_date', receipt_date)
+            .eq('source', 'soliq_qr')
             .limit(1)
             .execute()
         )
-    except Exception as error:
-        if 'product_aliases' in str(error):
-            return
-        raise
-
-    rows = existing.data or []
-    if rows:
-        alias_id = rows[0].get('id')
-        times_seen = int(rows[0].get('times_seen') or 1)
-        supabase.table('product_aliases').update({'times_seen': times_seen + 1}).eq('id', alias_id).execute()
-        return
-
-    language = 'ru' if re.search(r'[\u0400-\u04FF]', normalized_alias) else 'uz'
-    try:
-        supabase.table('product_aliases').insert({
-            'product_id': product_id,
-            'alias_text': normalized_alias,
-            'language': language,
-            'store_name': normalized_store,
-            'times_seen': 1,
-        }).execute()
-    except Exception as error:
-        if 'product_aliases' in str(error):
-            return
-        raise
-
-
-def fuzzy_match(raw_name: str, products: list[dict]) -> tuple[dict | None, int]:
-    best_match = None
-    best_score = 0
-    lower_raw = (raw_name or '').lower()
-
-    for product in products:
-        for field in ['name_uz', 'name_ru', 'name_en']:
-            target = (product.get(field) or '').lower()
-            if not target:
-                continue
-            score = fuzz.partial_ratio(lower_raw, target)
-            if score > best_score:
-                best_score = score
-                best_match = product
-
-    return best_match, best_score
+        return bool(q.data)
+    except Exception:
+        return False
 
 
 def mark_queue_status(queue_id: str, status: str, error_message: str | None = None):
@@ -417,53 +344,7 @@ def mark_queue_status(queue_id: str, status: str, error_message: str | None = No
     supabase.table('receipt_queue').update(payload).eq('id', queue_id).execute()
 
 
-def item_exists_already(payload: dict) -> bool:
-    """Check whether this receipt line item is already in pending_prices or prices.
-
-    We key on (receipt_url, product_name_raw, unit_price) — the minimal stable
-    triple that uniquely identifies an item on a given receipt.  Broader fields
-    like place_name / place_address are intentionally excluded because they can
-    change between runs when brand-name resolution is updated, which would cause
-    false "not found" results and duplicate rows.
-
-    pending_prices is checked across ALL statuses (not just 'pending') so that
-    already-approved rows also block re-insertion.
-
-    The prices table does not have a receipt_url column, so we fall back to
-    product_name_raw + receipt_date + price for the approved-row check.
-    """
-    receipt_url = payload.get('receipt_url')
-    product_name_raw = payload.get('product_name_raw')
-    unit_price = payload.get('unit_price')
-    receipt_date = payload.get('receipt_date')
-
-    # Check pending_prices (any status) — covers items already submitted or approved.
-    pending_query = (
-        supabase.table('pending_prices')
-        .select('id')
-        .eq('receipt_url', receipt_url)
-        .eq('product_name_raw', product_name_raw)
-        .eq('unit_price', unit_price)
-        .limit(1)
-        .execute()
-    )
-    if pending_query.data:
-        return True
-
-    # Check prices (approved rows) — prices table has no receipt_url column.
-    approved_query = (
-        supabase.table('prices')
-        .select('id')
-        .eq('product_name_raw', product_name_raw)
-        .eq('receipt_date', receipt_date)
-        .eq('price', unit_price)
-        .limit(1)
-        .execute()
-    )
-    return bool(approved_query.data)
-
-
-async def process_single_receipt(context, queue_item: dict, products: list[dict], aliases: list[dict]) -> bool:
+async def process_single_receipt(context, queue_item: dict) -> bool:
     url = queue_item.get('receipt_url')
     queue_id = queue_item.get('id')
     telegram_id = queue_item.get('telegram_id') or 'anonymous'
@@ -491,48 +372,43 @@ async def process_single_receipt(context, queue_item: dict, products: list[dict]
         longitude = receipt.get('longitude')
         if latitude is None or longitude is None:
             latitude, longitude = geocode_address(receipt.get('store_address'), city)
+
+        receipt_date = normalize_receipt_date(receipt.get('receipt_date'))
+        place_name = receipt.get('store_name') or "Noma'lum do'kon"
+        place_address = receipt.get('store_address') or ''
+
         inserted = 0
 
-        product_by_id = {p.get('id'): p for p in products}
-
         for item in items:
-            matched_product = None
-            confidence = 0
+            if not is_valid_product_item(item):
+                continue
 
-            alias_product_id = alias_exact_match(item['name'], receipt.get('store_name'), aliases)
-            if alias_product_id and alias_product_id in product_by_id:
-                matched_product = product_by_id[alias_product_id]
-                confidence = 100
-            else:
-                matched_product, confidence = fuzzy_match(item['name'], products)
+            product_name_raw = item['name'].strip()
+
+            if receipt_item_exists(product_name_raw, place_name, city, receipt_date):
+                continue
 
             payload = {
-                'product_name_raw': item['name'],
-                'product_id': matched_product['id'] if matched_product and confidence >= 60 else None,
-                'match_confidence': confidence,
+                'product_name_raw': product_name_raw,
+                'product_id': None,          # intentionally null — raw receipt data
                 'price': item['price'],
                 'quantity': item['quantity'],
                 'unit_price': item['unit_price'],
-                'place_name': receipt.get('store_name') or "Noma'lum do'kon",
-                'place_address': receipt.get('store_address') or '',
+                'place_name': place_name,
+                'place_address': place_address,
                 'receipt_url': url,
-                'receipt_date': normalize_receipt_date(receipt.get('receipt_date')),
+                'receipt_date': receipt_date,
                 'source': 'soliq_qr',
                 'submitted_by': telegram_id,
                 'city': city,
                 'latitude': latitude,
                 'longitude': longitude,
-                'status': 'pending',
+                'status': 'approved',
             }
 
-            if item_exists_already(payload):
-                continue
-
-            result = supabase.table('pending_prices').insert(payload).execute()
+            result = supabase.table('prices').insert(payload).execute()
             if result.data:
                 inserted += 1
-                if payload.get('product_id'):
-                    upsert_product_alias(payload.get('product_id'), item['name'], receipt.get('store_name'))
 
         mark_queue_status(queue_id, 'processed')
         print(f"  ✓ Saved {inserted}/{len(items)} items")
@@ -567,10 +443,6 @@ async def main():
         return
 
     print(f"→ Found {len(queue_items)} pending receipts")
-    products = get_all_products()
-    aliases = get_all_aliases()
-    print(f"→ Loaded {len(products)} products")
-    print(f"→ Loaded {len(aliases)} product aliases")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False)
@@ -586,7 +458,7 @@ async def main():
         for queue_item in queue_items:
             try:
                 is_ok = await asyncio.wait_for(
-                    process_single_receipt(context, queue_item, products, aliases),
+                    process_single_receipt(context, queue_item),
                     timeout=120,
                 )
             except asyncio.TimeoutError:
