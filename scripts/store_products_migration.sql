@@ -50,6 +50,10 @@ CREATE INDEX IF NOT EXISTS store_products_canonical_product_id_idx
 -- 3. Add store_product_id reference to prices table
 ALTER TABLE prices ADD COLUMN IF NOT EXISTS store_product_id UUID REFERENCES store_products(id);
 
+-- 3b. Keep receipt link field available for workers/admin tooling.
+-- Some environments recreate prices without this column.
+ALTER TABLE prices ADD COLUMN IF NOT EXISTS receipt_url TEXT;
+
 -- 4. Add token_sorted_text to existing product_aliases for better matching
 ALTER TABLE product_aliases ADD COLUMN IF NOT EXISTS token_sorted_text TEXT;
 

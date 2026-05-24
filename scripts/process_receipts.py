@@ -62,10 +62,34 @@ STORE_BRANDS = {
 }
 
 _GEOCODE_CACHE: dict[str, tuple[float | None, float | None]] = {}
+_PRICES_HAS_RECEIPT_URL: bool | None = None
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def prices_has_receipt_url_column() -> bool:
+    """Check once whether prices.receipt_url exists in current schema."""
+    global _PRICES_HAS_RECEIPT_URL
+    if _PRICES_HAS_RECEIPT_URL is not None:
+        return _PRICES_HAS_RECEIPT_URL
+
+    try:
+        # limit(0) avoids fetching row data; this only validates column presence.
+        supabase.table('prices').select('receipt_url').limit(0).execute()
+        _PRICES_HAS_RECEIPT_URL = True
+    except Exception as error:
+        message = str(error)
+        if 'PGRST204' in message or "'receipt_url' column" in message:
+            _PRICES_HAS_RECEIPT_URL = False
+            print('! prices.receipt_url column not found; inserts will continue without receipt_url')
+        else:
+            # If the probe fails for another reason, keep behavior safe and skip optional field.
+            _PRICES_HAS_RECEIPT_URL = False
+            print(f'! Could not verify prices.receipt_url column ({message}); continuing without receipt_url')
+
+    return _PRICES_HAS_RECEIPT_URL
 
 
 def normalize_receipt_date(raw_value: str | None) -> str:
@@ -378,6 +402,7 @@ async def process_single_receipt(context, queue_item: dict) -> bool:
         place_address = receipt.get('store_address') or ''
 
         inserted = 0
+        include_receipt_url = prices_has_receipt_url_column()
 
         for item in items:
             if not is_valid_product_item(item):
@@ -396,7 +421,6 @@ async def process_single_receipt(context, queue_item: dict) -> bool:
                 'unit_price': item['unit_price'],
                 'place_name': place_name,
                 'place_address': place_address,
-                'receipt_url': url,
                 'receipt_date': receipt_date,
                 'source': 'soliq_qr',
                 'submitted_by': telegram_id,
@@ -405,6 +429,8 @@ async def process_single_receipt(context, queue_item: dict) -> bool:
                 'longitude': longitude,
                 'status': 'approved',
             }
+            if include_receipt_url:
+                payload['receipt_url'] = url
 
             result = supabase.table('prices').insert(payload).execute()
             if result.data:
