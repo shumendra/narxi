@@ -62,34 +62,47 @@ STORE_BRANDS = {
 }
 
 _GEOCODE_CACHE: dict[str, tuple[float | None, float | None]] = {}
-_PRICES_HAS_RECEIPT_URL: bool | None = None
+# Columns confirmed absent from the live prices schema (populated lazily).
+_PRICES_MISSING_COLS: set[str] = set()
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def prices_has_receipt_url_column() -> bool:
-    """Check once whether prices.receipt_url exists in current schema."""
-    global _PRICES_HAS_RECEIPT_URL
-    if _PRICES_HAS_RECEIPT_URL is not None:
-        return _PRICES_HAS_RECEIPT_URL
+def _extract_missing_col(error_message: str) -> str | None:
+    """Return the column name from a PGRST204 'column not found' message, or None."""
+    match = re.search(r"Could not find the '([^']+)' column of 'prices'", error_message)
+    return match.group(1) if match else None
 
-    try:
-        # limit(0) avoids fetching row data; this only validates column presence.
-        supabase.table('prices').select('receipt_url').limit(0).execute()
-        _PRICES_HAS_RECEIPT_URL = True
-    except Exception as error:
-        message = str(error)
-        if 'PGRST204' in message or "'receipt_url' column" in message:
-            _PRICES_HAS_RECEIPT_URL = False
-            print('! prices.receipt_url column not found; inserts will continue without receipt_url')
-        else:
-            # If the probe fails for another reason, keep behavior safe and skip optional field.
-            _PRICES_HAS_RECEIPT_URL = False
-            print(f'! Could not verify prices.receipt_url column ({message}); continuing without receipt_url')
 
-    return _PRICES_HAS_RECEIPT_URL
+def insert_price_row(payload: dict) -> bool:
+    """
+    Insert a row into prices, automatically dropping columns that the current
+    schema does not have (PGRST204).  Unknown columns are remembered for the
+    rest of the run so subsequent rows don't waste a round-trip.
+    Returns True if a row was actually inserted.
+    """
+    # Drop any columns already known to be absent.
+    current = {k: v for k, v in payload.items() if k not in _PRICES_MISSING_COLS}
+
+    # Allow up to len(payload) retries (one column removed per attempt).
+    for _ in range(len(payload) + 1):
+        try:
+            result = supabase.table('prices').insert(current).execute()
+            return bool(result.data)
+        except Exception as error:
+            msg = str(error)
+            col = _extract_missing_col(msg)
+            if col and col in current:
+                print(f'  ! prices.{col} column missing from schema — skipping for this run')
+                _PRICES_MISSING_COLS.add(col)
+                del current[col]
+                continue
+            # Not a schema error — re-raise so the caller logs it properly.
+            raise
+
+    return False
 
 
 def normalize_receipt_date(raw_value: str | None) -> str:
@@ -402,7 +415,6 @@ async def process_single_receipt(context, queue_item: dict) -> bool:
         place_address = receipt.get('store_address') or ''
 
         inserted = 0
-        include_receipt_url = prices_has_receipt_url_column()
 
         for item in items:
             if not is_valid_product_item(item):
@@ -421,6 +433,7 @@ async def process_single_receipt(context, queue_item: dict) -> bool:
                 'unit_price': item['unit_price'],
                 'place_name': place_name,
                 'place_address': place_address,
+                'receipt_url': url,
                 'receipt_date': receipt_date,
                 'source': 'soliq_qr',
                 'submitted_by': telegram_id,
@@ -429,11 +442,8 @@ async def process_single_receipt(context, queue_item: dict) -> bool:
                 'longitude': longitude,
                 'status': 'approved',
             }
-            if include_receipt_url:
-                payload['receipt_url'] = url
 
-            result = supabase.table('prices').insert(payload).execute()
-            if result.data:
+            if insert_price_row(payload):
                 inserted += 1
 
         mark_queue_status(queue_id, 'processed')
