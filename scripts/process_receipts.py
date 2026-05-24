@@ -53,7 +53,7 @@ CITY_CENTERS = {
 }
 
 STORE_BRANDS = {
-    'Korzinka': ['korzinka', 'korzинка'],
+    'Korzinka': ['korzinka', 'korzинка', 'xalq retail'],
     'Makro': ['makro'],
     'Yaponamama': ['yaponamama', 'японамама'],
     'Havas': ['havas'],
@@ -216,20 +216,50 @@ def parse_receipt_html(html_content: str) -> dict:
     receipt_date = ''
     items = []
 
-    for tag in soup.find_all(['b', 'strong']):
-        text = tag.get_text(strip=True)
-        if 5 < len(text) < 200:
-            store_name = text
-            break
+    # Priority 1: <h3 style="font-weight: bold"> — official Soliq company name field.
+    bold_h3 = soup.find('h3', style=lambda s: bool(s and 'bold' in s.lower()))
+    if bold_h3:
+        store_name = bold_h3.get_text(strip=True)
+        parent_td = bold_h3.find_parent('td')
+        if parent_td:
+            raw_addr = parent_td.get_text(separator=' ', strip=True)
+            raw_addr = raw_addr.replace(store_name, '').strip()
+            # Strip 9-digit INN/TIN numbers that appear inline
+            raw_addr = re.sub(r'\b\d{9}\b', '', raw_addr).strip()
+            if len(raw_addr) > 5:
+                store_address = raw_addr
+
+    # Priority 2: any <h3> that isn't the receipt-type header.
+    if not store_name:
+        for h3 in soup.find_all('h3'):
+            text = h3.get_text(strip=True)
+            if text and len(text) > 5 and not any(
+                kw in text.lower() for kw in ['savdo cheki', 'sotuv', 'tovar cheki']
+            ):
+                store_name = text
+                break
+
+    # Fallback: first <b>/<strong> that is not a receipt-number code
+    # (receipt numbers are uppercase alphanumeric only, e.g. LG420230642268).
+    if not store_name:
+        for tag in soup.find_all(['b', 'strong']):
+            text = tag.get_text(strip=True)
+            if 5 < len(text) < 200 and not re.fullmatch(r'[A-Z0-9]+', text):
+                store_name = text
+                break
 
     body_text = soup.get_text(separator='\n')
-    for line in body_text.split('\n'):
-        value = line.strip()
-        if len(value) < 10:
-            continue
-        if any(kw in value.lower() for kw in ["ko'cha", 'тумани', 'улица', 'район', 'mfy', 'мфй', 'shahri']):
-            store_address = value
-            break
+    if not store_address:
+        for line in body_text.split('\n'):
+            value = line.strip()
+            if len(value) < 10:
+                continue
+            if any(kw in value.lower() for kw in [
+                "ko'cha", 'тумани', 'улица', 'район', 'mfy', 'мфй', 'shahri',
+                'кв.', ' дом ', 'ул.', 'кўча', 'mavzesi',
+            ]):
+                store_address = value
+                break
 
     date_match = re.search(r'(\d{2}\.\d{2}\.\d{4},\s*\d{2}:\d{2})', body_text)
     if not date_match:
