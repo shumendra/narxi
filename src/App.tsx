@@ -263,6 +263,23 @@ interface ReportItem {
   showDropdown: boolean;
 }
 
+interface ReceiptModerationRow {
+  id: string;
+  product_name_raw?: string | null;
+  price?: number | null;
+  unit_price?: number | null;
+  quantity?: number | null;
+  place_name?: string | null;
+  place_address?: string | null;
+  city?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  receipt_url?: string | null;
+  receipt_date?: string | null;
+  source?: string | null;
+  created_at?: string | null;
+}
+
 function getWeekNumber(date: Date) {
   const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
   const dayNum = d.getUTCDay() || 7;
@@ -522,7 +539,7 @@ export default function App() {
   const [pendingProductSearch, setPendingProductSearch] = useState<Record<string, string>>({});
   const [approvedItems, setApprovedItems] = useState<ApprovedModerationItem[]>([]);
   const [productAdminItems, setProductAdminItems] = useState<ProductAdminItem[]>([]);
-  const [moderationSection, setModerationSection] = useState<'prices' | 'products' | 'links' | 'messages' | 'stores'>('prices');
+  const [moderationSection, setModerationSection] = useState<'prices' | 'products' | 'links' | 'messages' | 'stores' | 'receipts'>('prices');
   const [activeProductId, setActiveProductId] = useState<string | null>(null);
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
   const [productTablePage, setProductTablePage] = useState(0);
@@ -1732,6 +1749,10 @@ export default function App() {
   const [reportItems, setReportItems] = useState<ReportItem[]>([{ id: crypto.randomUUID(), product: null, productQuery: '', price: '', showDropdown: false }]);
   const [adminStores, setAdminStores] = useState<StoreRecord[]>([]);
   const [adminStoresLoading, setAdminStoresLoading] = useState(false);
+  const [pendingReceipts, setPendingReceipts] = useState<ReceiptModerationRow[]>([]);
+  const [pendingReceiptsLoading, setPendingReceiptsLoading] = useState(false);
+  const [receiptEdits, setReceiptEdits] = useState<Record<string, Partial<ReceiptModerationRow>>>({});
+  const [receiptStoreEdits, setReceiptStoreEdits] = useState<Record<string, { place_name?: string; place_address?: string; city?: string }>>({});
   const [storeMergeSourceId, setStoreMergeSourceId] = useState<string | null>(null);
   const [storeMergeQuery, setStoreMergeQuery] = useState('');
   const [storeMergeResults, setStoreMergeResults] = useState<StoreRecord[]>([]);
@@ -2482,6 +2503,103 @@ export default function App() {
     }
   };
 
+  const fetchPendingReceipts = async () => {
+    if (!isAdminUser || !telegramInitData) return;
+    setPendingReceiptsLoading(true);
+    try {
+      const result = await callModerationApi('listPendingReceipts');
+      setPendingReceipts((result.items || []) as ReceiptModerationRow[]);
+      setReceiptEdits({});
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } finally {
+      setPendingReceiptsLoading(false);
+    }
+  };
+
+  const handleReceiptFieldChange = (id: string, field: keyof ReceiptModerationRow, value: string) => {
+    setReceiptEdits(prev => ({
+      ...prev,
+      [id]: { ...prev[id], [field]: value },
+    }));
+  };
+
+  const handleSaveReceiptRow = async (id: string) => {
+    const edits = receiptEdits[id];
+    if (!edits || Object.keys(edits).length === 0) return;
+    const changes: Record<string, unknown> = {};
+    if (edits.product_name_raw !== undefined) changes.product_name_raw = String(edits.product_name_raw);
+    if (edits.place_name !== undefined) changes.place_name = String(edits.place_name);
+    if (edits.place_address !== undefined) changes.place_address = String(edits.place_address);
+    if (edits.city !== undefined) changes.city = String(edits.city);
+    if (edits.price !== undefined) changes.price = Number(edits.price);
+    if (edits.quantity !== undefined) changes.quantity = Number(edits.quantity);
+    try {
+      const result = await callModerationApi('updateReceiptRow', { id, changes });
+      const updated = result.item as ReceiptModerationRow;
+      setPendingReceipts(prev => prev.map(r => (r.id === id ? { ...r, ...updated } : r)));
+      setReceiptEdits(prev => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    }
+  };
+
+  const handleReceiptStoreFieldChange = (groupKey: string, field: 'place_name' | 'place_address' | 'city', value: string) => {
+    setReceiptStoreEdits(prev => ({
+      ...prev,
+      [groupKey]: { ...prev[groupKey], [field]: value },
+    }));
+  };
+
+  const handleSaveReceiptStore = async (groupKey: string, ids: string[]) => {
+    const edits = receiptStoreEdits[groupKey];
+    if (!edits || Object.keys(edits).length === 0) return;
+    try {
+      for (const id of ids) {
+        await callModerationApi('updateReceiptRow', { id, changes: edits });
+      }
+      setPendingReceipts(prev => prev.map(r => (ids.includes(r.id) ? { ...r, ...edits } : r)));
+      setReceiptStoreEdits(prev => {
+        const next = { ...prev };
+        delete next[groupKey];
+        return next;
+      });
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    }
+  };
+
+  const handleApproveReceipts = async (ids: string[]) => {
+    if (ids.length === 0) return;
+    try {
+      await callModerationApi('approveReceiptRows', { ids });
+      setPendingReceipts(prev => prev.filter(r => !ids.includes(r.id)));
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    }
+  };
+
+  const handleRejectReceipts = async (ids: string[]) => {
+    if (ids.length === 0) return;
+    const doReject = async () => {
+      try {
+        await callModerationApi('rejectReceiptRows', { ids });
+        setPendingReceipts(prev => prev.filter(r => !ids.includes(r.id)));
+      } catch {
+        window.Telegram?.WebApp?.showAlert(t.moderationError);
+      }
+    };
+    if (window.Telegram?.WebApp?.showConfirm) {
+      window.Telegram.WebApp.showConfirm('Reject these item(s)?', (ok: boolean) => { if (ok) doReject(); });
+    } else {
+      await doReject();
+    }
+  };
+
   const handleVerifyStore = async (id: string) => {
     await callModerationApi('verifyStore', { id });
     setAdminStores(prev => prev.filter(s => s.id !== id));
@@ -3113,6 +3231,12 @@ export default function App() {
   useEffect(() => {
     if (mode === 'moderate' && isAdminUser && moderationSection === 'stores') {
       fetchAdminStores();
+    }
+  }, [mode, isAdminUser, moderationSection]);
+
+  useEffect(() => {
+    if (mode === 'moderate' && isAdminUser && moderationSection === 'receipts') {
+      fetchPendingReceipts();
     }
   }, [mode, isAdminUser, moderationSection]);
 
@@ -5703,7 +5827,9 @@ export default function App() {
                         ? t.linksTitle
                         : moderationSection === 'stores'
                           ? t.storesTab
-                          : t.messagesTitle
+                          : moderationSection === 'receipts'
+                            ? 'Receipts'
+                            : t.messagesTitle
                 }
               </h2>
               <div className="flex items-center gap-1">
@@ -5753,6 +5879,15 @@ export default function App() {
                   {t.storesTab}
                 </button>
                 <button
+                  onClick={() => setModerationSection('receipts')}
+                  className={cn(
+                    'rounded-lg px-3 py-1.5 text-xs font-semibold',
+                    moderationSection === 'receipts' ? 'bg-emerald-600 text-white' : 'border border-stone-200 bg-white text-stone-600'
+                  )}
+                >
+                  Receipts
+                </button>
+                <button
                   onClick={
                     moderationSection === 'prices'
                       ? fetchModerationItems
@@ -5762,7 +5897,9 @@ export default function App() {
                           ? fetchReceiptLinks
                           : moderationSection === 'stores'
                             ? fetchAdminStores
-                            : fetchModerationMessages
+                            : moderationSection === 'receipts'
+                              ? fetchPendingReceipts
+                              : fetchModerationMessages
                   }
                   className="rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-stone-600"
                 >
@@ -6696,6 +6833,112 @@ export default function App() {
                       )}
                     </div>
                   ))
+                )}
+              </div>
+            ) : moderationSection === 'receipts' ? (
+              <div className="space-y-4">
+                {pendingReceiptsLoading ? (
+                  <div className="animate-pulse space-y-3">
+                    {[1, 2, 3].map(i => <div key={i} className="h-24 bg-stone-200 rounded-xl" />)}
+                  </div>
+                ) : pendingReceipts.length === 0 ? (
+                  <div className="rounded-2xl border border-stone-200 bg-white p-8 text-center text-stone-500">
+                    No pending receipt items.
+                  </div>
+                ) : (
+                  (() => {
+                    const groups = new Map<string, ReceiptModerationRow[]>();
+                    for (const row of pendingReceipts) {
+                      const key = row.receipt_url || `nogroup-${row.id}`;
+                      if (!groups.has(key)) groups.set(key, []);
+                      groups.get(key)!.push(row);
+                    }
+                    return Array.from(groups.entries()).map(([groupKey, rows]) => {
+                      const first = rows[0];
+                      const ids = rows.map(r => r.id);
+                      const storeEdit = receiptStoreEdits[groupKey] || {};
+                      const storeDirty = Object.keys(storeEdit).length > 0;
+                      return (
+                        <div key={groupKey} className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm space-y-3">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex-1 space-y-1">
+                              <input
+                                value={storeEdit.place_name !== undefined ? storeEdit.place_name : (first.place_name || '')}
+                                onChange={e => handleReceiptStoreFieldChange(groupKey, 'place_name', e.target.value)}
+                                className="w-full rounded-lg border border-stone-200 px-2 py-1.5 text-sm font-semibold"
+                                placeholder="Store name"
+                              />
+                              <input
+                                value={storeEdit.place_address !== undefined ? storeEdit.place_address : (first.place_address || '')}
+                                onChange={e => handleReceiptStoreFieldChange(groupKey, 'place_address', e.target.value)}
+                                className="w-full rounded-lg border border-stone-200 px-2 py-1.5 text-xs"
+                                placeholder="Address"
+                              />
+                              <div className="flex gap-2">
+                                <input
+                                  value={storeEdit.city !== undefined ? storeEdit.city : (first.city || '')}
+                                  onChange={e => handleReceiptStoreFieldChange(groupKey, 'city', e.target.value)}
+                                  className="w-32 rounded-lg border border-stone-200 px-2 py-1.5 text-xs"
+                                  placeholder="City"
+                                />
+                                <span className="text-xs text-stone-400 self-center">
+                                  {first.receipt_date ? new Date(first.receipt_date).toLocaleDateString() : '-'} · {rows.length} item(s)
+                                </span>
+                              </div>
+                            </div>
+                            <div className="flex flex-col gap-1 shrink-0">
+                              {storeDirty && (
+                                <button onClick={() => handleSaveReceiptStore(groupKey, ids)} className="rounded-lg bg-stone-700 px-3 py-1.5 text-xs font-semibold text-white">Save store</button>
+                              )}
+                              <button onClick={() => handleApproveReceipts(ids)} className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white">Approve all</button>
+                              <button onClick={() => handleRejectReceipts(ids)} className="rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-rose-600">Reject all</button>
+                            </div>
+                          </div>
+                          {first.receipt_url && (
+                            <a href={first.receipt_url} target="_blank" rel="noreferrer" className="block text-xs text-emerald-600 underline break-all">{first.receipt_url}</a>
+                          )}
+                          <div className="space-y-2">
+                            {rows.map(row => {
+                              const edit = receiptEdits[row.id] || {};
+                              const dirty = Object.keys(edit).length > 0;
+                              return (
+                                <div key={row.id} className="rounded-xl border border-stone-100 bg-stone-50 p-3 space-y-2">
+                                  <input
+                                    value={edit.product_name_raw !== undefined ? String(edit.product_name_raw) : (row.product_name_raw || '')}
+                                    onChange={e => handleReceiptFieldChange(row.id, 'product_name_raw', e.target.value)}
+                                    className="w-full rounded-lg border border-stone-200 px-2 py-1.5 text-sm"
+                                    placeholder="Product name"
+                                  />
+                                  <div className="flex items-center gap-2">
+                                    <input
+                                      type="number"
+                                      value={edit.price !== undefined ? String(edit.price) : (row.price ?? '')}
+                                      onChange={e => handleReceiptFieldChange(row.id, 'price', e.target.value)}
+                                      className="w-28 rounded-lg border border-stone-200 px-2 py-1.5 text-sm"
+                                      placeholder="Price"
+                                    />
+                                    <input
+                                      type="number"
+                                      value={edit.quantity !== undefined ? String(edit.quantity) : (row.quantity ?? '')}
+                                      onChange={e => handleReceiptFieldChange(row.id, 'quantity', e.target.value)}
+                                      className="w-20 rounded-lg border border-stone-200 px-2 py-1.5 text-sm"
+                                      placeholder="Qty"
+                                    />
+                                    <div className="flex-1" />
+                                    {dirty && (
+                                      <button onClick={() => handleSaveReceiptRow(row.id)} className="rounded-lg bg-stone-700 px-3 py-1.5 text-xs font-semibold text-white">Save</button>
+                                    )}
+                                    <button onClick={() => handleApproveReceipts([row.id])} className="rounded-lg bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white">✓</button>
+                                    <button onClick={() => handleRejectReceipts([row.id])} className="rounded-lg border border-rose-200 px-2.5 py-1.5 text-xs font-semibold text-rose-600">✕</button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    });
+                  })()
                 )}
               </div>
             ) : (

@@ -514,7 +514,10 @@ async def process_single_receipt(context, queue_item: dict) -> bool:
                 'city': city,
                 'latitude': latitude,
                 'longitude': longitude,
-                'status': 'approved',
+                # Receipt items land in moderation first. Admin reviews the
+                # store name / price, then approval flips status to 'approved'
+                # which makes the row findable to users.
+                'status': 'pending',
             }
 
             if insert_price_row(payload):

@@ -149,7 +149,14 @@ const CHAIN_REPRESENTATIVE_STORES = {
 };
 
 // Thresholds are now in api/utils/matcher.js
-const HTTP_CONCURRENCY = 8;
+// HTTP_CONCURRENCY drives Makro/Yandex catalog fetches. These public APIs
+// tolerated 15+ parallel requests cleanly in testing, so 16 is safe and faster.
+const HTTP_CONCURRENCY = 16;
+// Korzinka scans ~660 category IDs. Testing showed its server is the bottleneck:
+// raising concurrency 15→30 did NOT reduce the ~16s fetch, so 20 is a safe ceiling
+// (more just hammers their API for no gain). The real fix for the ~23k-row scrape
+// is to run it from the local/cron worker, not a time-limited serverless function.
+const KORZINKA_CONCURRENCY = 20;
 const DB_CHUNK_SIZE = 250;
 
 function chunkArray(values, size) {
@@ -446,7 +453,7 @@ async function scrapeKorzinka() {
   const KORZINKA_SCAN_END = 1410;
   const ids = Array.from({ length: KORZINKA_SCAN_END - KORZINKA_SCAN_START + 1 }, (_, i) => KORZINKA_SCAN_START + i);
 
-  const categoryRows = await runWithConcurrency(ids, 15, async (ccid) => {
+  const categoryRows = await runWithConcurrency(ids, KORZINKA_CONCURRENCY, async (ccid) => {
     const res = await fetch('https://catalog.korzinka.uz/api/mobile/catalogs/category/products', {
       method: 'POST',
       headers: { ...KORZINKA_HEADERS, 'Content-Type': 'application/json' },

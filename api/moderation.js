@@ -2239,6 +2239,84 @@ async function searchStoresAdmin(query, city = null) {
 
 // ─── /Store management ────────────────────────────────────────────────────
 
+// ─── Receipt moderation (raw rows in `prices`, product_id NULL, status pending) ──
+// Receipt-scanned items are inserted straight into `prices` with status='pending'.
+// Admin reviews the store name / price here, then approval flips status to
+// 'approved' which makes the row findable to users (frontend filters on it).
+
+const RECEIPT_EDITABLE_FIELDS = new Set([
+  'product_name_raw', 'price', 'unit_price', 'quantity',
+  'place_name', 'place_address', 'city',
+]);
+
+async function listPendingReceipts(city = null) {
+  let q = supabase
+    .from('prices')
+    .select('id, product_name_raw, price, unit_price, quantity, place_name, place_address, city, latitude, longitude, receipt_url, receipt_date, source, submitted_by, created_at')
+    .is('product_id', null)
+    .eq('status', 'pending')
+    .order('receipt_date', { ascending: false })
+    .limit(1000);
+  if (city) q = q.eq('city', city);
+  const { data, error } = await q;
+  if (error) throw error;
+  return data || [];
+}
+
+async function updateReceiptRow(id, changes = {}) {
+  if (!id) throw new Error('id is required');
+  const clean = {};
+  for (const [key, value] of Object.entries(changes || {})) {
+    if (RECEIPT_EDITABLE_FIELDS.has(key)) clean[key] = value;
+  }
+  if (Object.keys(clean).length === 0) throw new Error('No editable fields provided');
+  const { data, error } = await supabase
+    .from('prices')
+    .update(clean)
+    .eq('id', id)
+    .is('product_id', null)
+    .select('*')
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function approveReceiptRows(ids = []) {
+  const list = Array.from(new Set((ids || []).filter(Boolean)));
+  if (list.length === 0) throw new Error('ids are required');
+  let approved = 0;
+  for (const chunk of chunkArray(list, 200)) {
+    const { data, error } = await supabase
+      .from('prices')
+      .update({ status: 'approved' })
+      .in('id', chunk)
+      .is('product_id', null)
+      .select('id');
+    if (error) throw error;
+    approved += Array.isArray(data) ? data.length : 0;
+  }
+  return { approved };
+}
+
+async function rejectReceiptRows(ids = []) {
+  const list = Array.from(new Set((ids || []).filter(Boolean)));
+  if (list.length === 0) throw new Error('ids are required');
+  let rejected = 0;
+  for (const chunk of chunkArray(list, 200)) {
+    const { data, error } = await supabase
+      .from('prices')
+      .update({ status: 'rejected' })
+      .in('id', chunk)
+      .is('product_id', null)
+      .select('id');
+    if (error) throw error;
+    rejected += Array.isArray(data) ? data.length : 0;
+  }
+  return { rejected };
+}
+
+// ─── /Receipt moderation ──────────────────────────────────────────────────
+
 async function listContactMessages() {
   try {
     const { data, error } = await supabase
@@ -2987,6 +3065,22 @@ export default async function moderation(req, res) {
       case 'searchStoresAdmin': {
         const items = await searchStoresAdmin(body.query || '', body.city || null);
         return send(res, 200, { ok: true, items });
+      }
+      case 'listPendingReceipts': {
+        const items = await listPendingReceipts(body.city || null);
+        return send(res, 200, { ok: true, items });
+      }
+      case 'updateReceiptRow': {
+        const item = await updateReceiptRow(body.id, body.changes || {});
+        return send(res, 200, { ok: true, item });
+      }
+      case 'approveReceiptRows': {
+        const result = await approveReceiptRows(body.ids || []);
+        return send(res, 200, { ok: true, ...result });
+      }
+      case 'rejectReceiptRows': {
+        const result = await rejectReceiptRows(body.ids || []);
+        return send(res, 200, { ok: true, ...result });
       }
       default:
         return send(res, 400, { ok: false, error: 'UNKNOWN_ACTION' });
