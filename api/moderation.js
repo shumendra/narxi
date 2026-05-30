@@ -2317,6 +2317,117 @@ async function rejectReceiptRows(ids = []) {
 
 // ─── /Receipt moderation ──────────────────────────────────────────────────
 
+// ─── Approved price rows (the data users can find) + brand management ───────
+
+const PRICE_EDITABLE_FIELDS = new Set([
+  'product_name_raw', 'price', 'unit_price', 'quantity',
+  'place_name', 'place_address', 'city',
+]);
+
+async function listApprovedPrices({ page = 0, pageSize = 50, query = '', city = null } = {}) {
+  const size = Math.min(Math.max(Number(pageSize) || 50, 1), 200);
+  const from = Math.max(Number(page) || 0, 0) * size;
+  const to = from + size - 1;
+
+  let q = supabase
+    .from('prices')
+    .select('id, product_name_raw, price, unit_price, quantity, place_name, place_address, city, product_id, source, receipt_date, created_at', { count: 'exact' })
+    .eq('status', 'approved')
+    .order('created_at', { ascending: false })
+    .range(from, to);
+
+  const search = String(query || '').trim();
+  if (search) q = q.ilike('product_name_raw', `%${search}%`);
+  if (city) q = q.eq('city', city);
+
+  const { data, error, count } = await q;
+  if (error) throw error;
+  return { items: data || [], total: count || 0, page: Number(page) || 0, pageSize: size };
+}
+
+async function updatePriceRow(id, changes = {}) {
+  if (!id) throw new Error('id is required');
+  const clean = {};
+  for (const [key, value] of Object.entries(changes || {})) {
+    if (PRICE_EDITABLE_FIELDS.has(key)) clean[key] = value;
+  }
+  if (Object.keys(clean).length === 0) throw new Error('No editable fields provided');
+  const { data, error } = await supabase
+    .from('prices')
+    .update(clean)
+    .eq('id', id)
+    .select('*')
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function deletePriceRow(id) {
+  if (!id) throw new Error('id is required');
+  const { error } = await supabase.from('prices').delete().eq('id', id);
+  if (error) throw error;
+  return { deleted: 1 };
+}
+
+// Brand / store management derived from the prices table (no `stores` table needed).
+// Groups approved + pending price rows by place_name and lets admin rename a brand
+// so every matching price row is updated (reflecting in product/price info).
+async function listBrandsFromPrices(city = null) {
+  const rows = await fetchAllPages((from, to) => {
+    let q = supabase
+      .from('prices')
+      .select('place_name, city')
+      .not('place_name', 'is', null)
+      .range(from, to);
+    if (city) q = q.eq('city', city);
+    return q;
+  });
+
+  const map = new Map();
+  for (const row of rows) {
+    const name = normalizeMaybeText(row?.place_name);
+    if (!name) continue;
+    const key = name;
+    if (!map.has(key)) map.set(key, { place_name: name, count: 0, cities: new Set() });
+    const entry = map.get(key);
+    entry.count += 1;
+    if (row?.city) entry.cities.add(row.city);
+  }
+
+  return Array.from(map.values())
+    .map(e => ({ place_name: e.place_name, count: e.count, cities: Array.from(e.cities) }))
+    .sort((a, b) => b.count - a.count);
+}
+
+async function renameBrandInPrices(oldName, newName) {
+  const from = normalizeMaybeText(oldName);
+  const to = normalizeMaybeText(newName);
+  if (!from) throw new Error('oldName is required');
+  if (!to) throw new Error('newName is required');
+  if (from === to) return { updated: 0 };
+
+  let updated = 0;
+  // Update prices.place_name across all matching rows.
+  const { data, error } = await supabase
+    .from('prices')
+    .update({ place_name: to })
+    .eq('place_name', from)
+    .select('id');
+  if (error) throw error;
+  updated += Array.isArray(data) ? data.length : 0;
+
+  // Also propagate to pending_prices so future approvals carry the new name.
+  const { error: pendingError } = await supabase
+    .from('pending_prices')
+    .update({ place_name: to })
+    .eq('place_name', from);
+  if (pendingError && pendingError.code !== 'PGRST116') throw pendingError;
+
+  return { updated };
+}
+
+// ─── /Approved prices + brands ─────────────────────────────────────────────
+
 async function listContactMessages() {
   try {
     const { data, error } = await supabase
@@ -3080,6 +3191,31 @@ export default async function moderation(req, res) {
       }
       case 'rejectReceiptRows': {
         const result = await rejectReceiptRows(body.ids || []);
+        return send(res, 200, { ok: true, ...result });
+      }
+      case 'listApprovedPrices': {
+        const result = await listApprovedPrices({
+          page: body.page || 0,
+          pageSize: body.pageSize || 50,
+          query: body.query || '',
+          city: body.city || null,
+        });
+        return send(res, 200, { ok: true, ...result });
+      }
+      case 'updatePriceRow': {
+        const item = await updatePriceRow(body.id, body.changes || {});
+        return send(res, 200, { ok: true, item });
+      }
+      case 'deletePriceRow': {
+        const result = await deletePriceRow(body.id);
+        return send(res, 200, { ok: true, ...result });
+      }
+      case 'listBrandsFromPrices': {
+        const items = await listBrandsFromPrices(body.city || null);
+        return send(res, 200, { ok: true, items });
+      }
+      case 'renameBrandInPrices': {
+        const result = await renameBrandInPrices(body.oldName, body.newName);
         return send(res, 200, { ok: true, ...result });
       }
       default:

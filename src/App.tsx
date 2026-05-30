@@ -280,6 +280,27 @@ interface ReceiptModerationRow {
   created_at?: string | null;
 }
 
+interface ApprovedPriceRow {
+  id: string;
+  product_name_raw?: string | null;
+  price?: number | null;
+  unit_price?: number | null;
+  quantity?: number | null;
+  place_name?: string | null;
+  place_address?: string | null;
+  city?: string | null;
+  product_id?: string | null;
+  source?: string | null;
+  receipt_date?: string | null;
+  created_at?: string | null;
+}
+
+interface BrandRow {
+  place_name: string;
+  count: number;
+  cities: string[];
+}
+
 function getWeekNumber(date: Date) {
   const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
   const dayNum = d.getUTCDay() || 7;
@@ -539,7 +560,7 @@ export default function App() {
   const [pendingProductSearch, setPendingProductSearch] = useState<Record<string, string>>({});
   const [approvedItems, setApprovedItems] = useState<ApprovedModerationItem[]>([]);
   const [productAdminItems, setProductAdminItems] = useState<ProductAdminItem[]>([]);
-  const [moderationSection, setModerationSection] = useState<'prices' | 'products' | 'links' | 'messages' | 'stores' | 'receipts'>('prices');
+  const [moderationSection, setModerationSection] = useState<'prices' | 'products' | 'links' | 'messages' | 'stores' | 'receipts' | 'storesUnverified'>('receipts');
   const [activeProductId, setActiveProductId] = useState<string | null>(null);
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
   const [productTablePage, setProductTablePage] = useState(0);
@@ -1753,6 +1774,18 @@ export default function App() {
   const [pendingReceiptsLoading, setPendingReceiptsLoading] = useState(false);
   const [receiptEdits, setReceiptEdits] = useState<Record<string, Partial<ReceiptModerationRow>>>({});
   const [receiptStoreEdits, setReceiptStoreEdits] = useState<Record<string, { place_name?: string; place_address?: string; city?: string }>>({});
+  const [receiptSelectedIds, setReceiptSelectedIds] = useState<string[]>([]);
+  // Approved price rows (the data users can find) — paginated DB browser
+  const [approvedPrices, setApprovedPrices] = useState<ApprovedPriceRow[]>([]);
+  const [approvedPricesTotal, setApprovedPricesTotal] = useState(0);
+  const [approvedPricesPage, setApprovedPricesPage] = useState(0);
+  const [approvedPricesQuery, setApprovedPricesQuery] = useState('');
+  const [approvedPricesLoading, setApprovedPricesLoading] = useState(false);
+  const [priceRowEdits, setPriceRowEdits] = useState<Record<string, { product_name_raw?: string; price?: string }>>({});
+  // Brands derived from price data
+  const [brandRows, setBrandRows] = useState<BrandRow[]>([]);
+  const [brandsLoading, setBrandsLoading] = useState(false);
+  const [brandEdits, setBrandEdits] = useState<Record<string, string>>({});
   const [storeMergeSourceId, setStoreMergeSourceId] = useState<string | null>(null);
   const [storeMergeQuery, setStoreMergeQuery] = useState('');
   const [storeMergeResults, setStoreMergeResults] = useState<StoreRecord[]>([]);
@@ -2507,9 +2540,14 @@ export default function App() {
     if (!isAdminUser || !telegramInitData) return;
     setPendingReceiptsLoading(true);
     try {
-      const result = await callModerationApi('listPendingReceipts');
-      setPendingReceipts((result.items || []) as ReceiptModerationRow[]);
+      const [receipts, manual] = await Promise.all([
+        callModerationApi('listPendingReceipts'),
+        callModerationApi('list'),
+      ]);
+      setPendingReceipts((receipts.items || []) as ReceiptModerationRow[]);
+      setModerationItems((manual.items || []) as PendingModerationItem[]);
       setReceiptEdits({});
+      setReceiptSelectedIds([]);
     } catch {
       window.Telegram?.WebApp?.showAlert(t.moderationError);
     } finally {
@@ -2578,6 +2616,7 @@ export default function App() {
     try {
       await callModerationApi('approveReceiptRows', { ids });
       setPendingReceipts(prev => prev.filter(r => !ids.includes(r.id)));
+      setReceiptSelectedIds(prev => prev.filter(id => !ids.includes(id)));
     } catch {
       window.Telegram?.WebApp?.showAlert(t.moderationError);
     }
@@ -2589,6 +2628,7 @@ export default function App() {
       try {
         await callModerationApi('rejectReceiptRows', { ids });
         setPendingReceipts(prev => prev.filter(r => !ids.includes(r.id)));
+        setReceiptSelectedIds(prev => prev.filter(id => !ids.includes(id)));
       } catch {
         window.Telegram?.WebApp?.showAlert(t.moderationError);
       }
@@ -2597,6 +2637,155 @@ export default function App() {
       window.Telegram.WebApp.showConfirm('Reject these item(s)?', (ok: boolean) => { if (ok) doReject(); });
     } else {
       await doReject();
+    }
+  };
+
+  const toggleReceiptSelect = (id: string) => {
+    setReceiptSelectedIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
+  };
+
+  const toggleReceiptGroupSelect = (ids: string[]) => {
+    setReceiptSelectedIds(prev => {
+      const allSelected = ids.every(id => prev.includes(id));
+      return allSelected ? prev.filter(id => !ids.includes(id)) : Array.from(new Set([...prev, ...ids]));
+    });
+  };
+
+  const selectAllReceipts = () => setReceiptSelectedIds(pendingReceipts.map(r => r.id));
+  const clearReceiptSelection = () => setReceiptSelectedIds([]);
+
+  // Approve everything currently pending: both receipt-scan rows and manual reports.
+  const approveAllPending = async () => {
+    const receiptIds = pendingReceipts.map(r => r.id);
+    const manualIds = moderationItems.map(m => m.id);
+    if (receiptIds.length === 0 && manualIds.length === 0) return;
+    const run = async () => {
+      try {
+        if (receiptIds.length > 0) await callModerationApi('approveReceiptRows', { ids: receiptIds });
+        if (manualIds.length > 0) await callModerationApi('approveMany', { ids: manualIds });
+        setPendingReceipts([]);
+        setModerationItems([]);
+        setReceiptSelectedIds([]);
+      } catch {
+        window.Telegram?.WebApp?.showAlert(t.moderationError);
+      }
+    };
+    if (window.Telegram?.WebApp?.showConfirm) {
+      window.Telegram.WebApp.showConfirm(`Approve all ${receiptIds.length + manualIds.length} pending item(s)?`, (ok: boolean) => { if (ok) run(); });
+    } else {
+      await run();
+    }
+  };
+
+  const approveManualReport = async (id: string) => {
+    try {
+      await callModerationApi('approve', { id });
+      setModerationItems(prev => prev.filter(m => m.id !== id));
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    }
+  };
+
+  const rejectManualReport = async (id: string) => {
+    try {
+      await callModerationApi('reject', { id });
+      setModerationItems(prev => prev.filter(m => m.id !== id));
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    }
+  };
+
+  // ─── Approved price rows (Products tab DB browser) ──────────────────────
+  const fetchApprovedPrices = async (page = approvedPricesPage, query = approvedPricesQuery) => {
+    if (!isAdminUser || !telegramInitData) return;
+    setApprovedPricesLoading(true);
+    try {
+      const result = await callModerationApi('listApprovedPrices', { page, query, pageSize: 50 });
+      setApprovedPrices((result.items || []) as ApprovedPriceRow[]);
+      setApprovedPricesTotal(Number(result.total) || 0);
+      setApprovedPricesPage(Number(result.page) || 0);
+      setPriceRowEdits({});
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } finally {
+      setApprovedPricesLoading(false);
+    }
+  };
+
+  const handlePriceRowFieldChange = (id: string, field: 'product_name_raw' | 'price', value: string) => {
+    setPriceRowEdits(prev => ({ ...prev, [id]: { ...prev[id], [field]: value } }));
+  };
+
+  const handleSavePriceRow = async (id: string) => {
+    const edits = priceRowEdits[id];
+    if (!edits || Object.keys(edits).length === 0) return;
+    const changes: Record<string, unknown> = {};
+    if (edits.product_name_raw !== undefined) changes.product_name_raw = String(edits.product_name_raw);
+    if (edits.price !== undefined) changes.price = Number(edits.price);
+    try {
+      const result = await callModerationApi('updatePriceRow', { id, changes });
+      const updated = result.item as ApprovedPriceRow;
+      setApprovedPrices(prev => prev.map(r => (r.id === id ? { ...r, ...updated } : r)));
+      setPriceRowEdits(prev => { const next = { ...prev }; delete next[id]; return next; });
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    }
+  };
+
+  const handleDeletePriceRow = async (id: string) => {
+    const run = async () => {
+      try {
+        await callModerationApi('deletePriceRow', { id });
+        setApprovedPrices(prev => prev.filter(r => r.id !== id));
+        setApprovedPricesTotal(prev => Math.max(0, prev - 1));
+      } catch {
+        window.Telegram?.WebApp?.showAlert(t.moderationError);
+      }
+    };
+    if (window.Telegram?.WebApp?.showConfirm) {
+      window.Telegram.WebApp.showConfirm('Delete this item from the database?', (ok: boolean) => { if (ok) run(); });
+    } else {
+      await run();
+    }
+  };
+
+  // ─── Brands derived from price data (Stores tab) ────────────────────────
+  const fetchBrands = async () => {
+    if (!isAdminUser || !telegramInitData) return;
+    setBrandsLoading(true);
+    try {
+      const result = await callModerationApi('listBrandsFromPrices');
+      setBrandRows((result.items || []) as BrandRow[]);
+      setBrandEdits({});
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } finally {
+      setBrandsLoading(false);
+    }
+  };
+
+  const handleBrandEditChange = (oldName: string, value: string) => {
+    setBrandEdits(prev => ({ ...prev, [oldName]: value }));
+  };
+
+  const handleRenameBrand = async (oldName: string) => {
+    const newName = (brandEdits[oldName] || '').trim();
+    if (!newName || newName === oldName) return;
+    try {
+      const result = await callModerationApi('renameBrandInPrices', { oldName, newName });
+      setBrandRows(prev => {
+        const moved = prev.find(b => b.place_name === oldName);
+        const rest = prev.filter(b => b.place_name !== oldName && b.place_name !== newName);
+        const existingTarget = prev.find(b => b.place_name === newName);
+        const mergedCount = (existingTarget?.count || 0) + (moved?.count || 0);
+        const mergedCities = Array.from(new Set([...(existingTarget?.cities || []), ...(moved?.cities || [])]));
+        return [{ place_name: newName, count: mergedCount || Number(result.updated) || 0, cities: mergedCities }, ...rest]
+          .sort((a, b) => b.count - a.count);
+      });
+      setBrandEdits(prev => { const next = { ...prev }; delete next[oldName]; return next; });
+      window.Telegram?.WebApp?.showAlert(`Renamed across ${Number(result.updated) || 0} price row(s).`);
+    } catch {
+      window.Telegram?.WebApp?.showAlert(t.moderationError);
     }
   };
 
@@ -3224,13 +3413,13 @@ export default function App() {
 
   useEffect(() => {
     if (mode === 'moderate' && isAdminUser && moderationSection === 'products') {
-      fetchModerationProducts();
+      fetchApprovedPrices(0, '');
     }
   }, [mode, isAdminUser, moderationSection]);
 
   useEffect(() => {
     if (mode === 'moderate' && isAdminUser && moderationSection === 'stores') {
-      fetchAdminStores();
+      fetchBrands();
     }
   }, [mode, isAdminUser, moderationSection]);
 
@@ -5819,28 +6008,26 @@ export default function App() {
             <div className="flex items-center justify-between gap-2">
               <h2 className="text-lg font-semibold whitespace-nowrap">
                 {
-                  moderationSection === 'prices'
-                    ? t.moderationTitle
-                    : moderationSection === 'products'
-                      ? t.productsTitle
-                      : moderationSection === 'links'
-                        ? t.linksTitle
-                        : moderationSection === 'stores'
-                          ? t.storesTab
-                          : moderationSection === 'receipts'
-                            ? 'Receipts'
-                            : t.messagesTitle
+                  moderationSection === 'products'
+                    ? t.productsTitle
+                    : moderationSection === 'links'
+                      ? t.linksTitle
+                      : moderationSection === 'stores'
+                        ? t.storesTab
+                        : moderationSection === 'receipts'
+                          ? 'Receipts'
+                          : t.messagesTitle
                 }
               </h2>
               <div className="flex items-center gap-1">
                 <button
-                  onClick={() => setModerationSection('prices')}
+                  onClick={() => setModerationSection('receipts')}
                   className={cn(
                     'rounded-lg px-3 py-1.5 text-xs font-semibold',
-                    moderationSection === 'prices' ? 'bg-emerald-600 text-white' : 'border border-stone-200 bg-white text-stone-600'
+                    moderationSection === 'receipts' ? 'bg-emerald-600 text-white' : 'border border-stone-200 bg-white text-stone-600'
                   )}
                 >
-                  {t.pricesTab}
+                  Receipts
                 </button>
                 <button
                   onClick={() => setModerationSection('products')}
@@ -5879,27 +6066,16 @@ export default function App() {
                   {t.storesTab}
                 </button>
                 <button
-                  onClick={() => setModerationSection('receipts')}
-                  className={cn(
-                    'rounded-lg px-3 py-1.5 text-xs font-semibold',
-                    moderationSection === 'receipts' ? 'bg-emerald-600 text-white' : 'border border-stone-200 bg-white text-stone-600'
-                  )}
-                >
-                  Receipts
-                </button>
-                <button
                   onClick={
-                    moderationSection === 'prices'
-                      ? fetchModerationItems
-                      : moderationSection === 'products'
-                        ? fetchModerationProducts
-                        : moderationSection === 'links'
-                          ? fetchReceiptLinks
-                          : moderationSection === 'stores'
-                            ? fetchAdminStores
-                            : moderationSection === 'receipts'
-                              ? fetchPendingReceipts
-                              : fetchModerationMessages
+                    moderationSection === 'products'
+                      ? fetchApprovedPrices
+                      : moderationSection === 'links'
+                        ? fetchReceiptLinks
+                        : moderationSection === 'stores'
+                          ? fetchBrands
+                          : moderationSection === 'receipts'
+                            ? fetchPendingReceipts
+                            : fetchModerationMessages
                   }
                   className="rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-stone-600"
                 >
@@ -5908,29 +6084,8 @@ export default function App() {
               </div>
             </div>
 
-            {/* Row 2: Bulk actions (prices only) */}
-            {moderationSection === 'prices' && selectedModerationIds.length > 0 && (
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-xs font-medium text-stone-500">{selectedModerationIds.length} selected:</span>
-                <button
-                  onClick={approveSelectedModerationItems}
-                  disabled={moderationSavingId === 'bulk-approve'}
-                  className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
-                >
-                  ✓ {t.moderationApproveSelected}
-                </button>
-                <button
-                  onClick={rejectSelectedModerationItems}
-                  disabled={moderationSavingId === 'bulk-reject'}
-                  className="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
-                >
-                  ✕ {t.moderationRejectSelected}
-                </button>
-              </div>
-            )}
-
-            {/* Row 3: Tools (prices only) */}
-            {moderationSection === 'prices' && (
+            {/* Row 3: Tools (receipts only) — scrape + queue APIs */}
+            {moderationSection === 'receipts' && (
               <div className="space-y-2">
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <button
@@ -6009,7 +6164,97 @@ export default function App() {
               </div>
             )}
 
-            {moderationSection === 'prices' ? (
+            {moderationSection === 'products' ? (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    value={approvedPricesQuery}
+                    onChange={(e) => setApprovedPricesQuery(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') fetchApprovedPrices(0, approvedPricesQuery); }}
+                    placeholder="Search product name…"
+                    className="flex-1 min-w-40 rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm"
+                  />
+                  <button onClick={() => fetchApprovedPrices(0, approvedPricesQuery)} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white">Search</button>
+                  {approvedPricesQuery && (
+                    <button onClick={() => { setApprovedPricesQuery(''); fetchApprovedPrices(0, ''); }} className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-xs font-medium text-stone-600">Clear</button>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between text-xs text-stone-500">
+                  <span>{approvedPricesTotal} approved item(s)</span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      disabled={approvedPricesPage <= 0 || approvedPricesLoading}
+                      onClick={() => fetchApprovedPrices(approvedPricesPage - 1, approvedPricesQuery)}
+                      className="rounded-lg border border-stone-200 bg-white px-2.5 py-1 font-medium text-stone-600 disabled:opacity-40"
+                    >← Prev</button>
+                    <span>Page {approvedPricesPage + 1} / {Math.max(1, Math.ceil(approvedPricesTotal / 50))}</span>
+                    <button
+                      disabled={(approvedPricesPage + 1) * 50 >= approvedPricesTotal || approvedPricesLoading}
+                      onClick={() => fetchApprovedPrices(approvedPricesPage + 1, approvedPricesQuery)}
+                      className="rounded-lg border border-stone-200 bg-white px-2.5 py-1 font-medium text-stone-600 disabled:opacity-40"
+                    >Next →</button>
+                  </div>
+                </div>
+
+                {approvedPricesLoading ? (
+                  <div className="animate-pulse space-y-2">
+                    {[1, 2, 3, 4, 5].map(i => <div key={i} className="h-8 bg-stone-200 rounded" />)}
+                  </div>
+                ) : approvedPrices.length === 0 ? (
+                  <div className="rounded-2xl border border-stone-200 bg-white p-8 text-center text-stone-500">No approved items found.</div>
+                ) : (
+                  <div className="overflow-x-auto rounded-xl border border-stone-200">
+                    <table className="w-full text-xs">
+                      <thead className="bg-stone-50 text-stone-500">
+                        <tr>
+                          <th className="px-2 py-2 text-left font-semibold">Product</th>
+                          <th className="px-2 py-2 text-right font-semibold">Price</th>
+                          <th className="px-2 py-2 text-left font-semibold">Store</th>
+                          <th className="px-2 py-2 text-left font-semibold">City</th>
+                          <th className="px-2 py-2 text-left font-semibold">Date</th>
+                          <th className="px-2 py-2 text-right font-semibold">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {approvedPrices.map(row => {
+                          const edit = priceRowEdits[row.id] || {};
+                          const dirty = Object.keys(edit).length > 0;
+                          return (
+                            <tr key={row.id} className="border-t border-stone-100">
+                              <td className="px-2 py-1.5">
+                                <input
+                                  value={edit.product_name_raw !== undefined ? edit.product_name_raw : (row.product_name_raw || '')}
+                                  onChange={(e) => handlePriceRowFieldChange(row.id, 'product_name_raw', e.target.value)}
+                                  className="w-full min-w-40 rounded border border-transparent bg-transparent px-1 py-0.5 hover:border-stone-200 focus:border-emerald-400 focus:bg-white"
+                                />
+                              </td>
+                              <td className="px-2 py-1.5 text-right">
+                                <input
+                                  type="number"
+                                  value={edit.price !== undefined ? edit.price : (row.price ?? '')}
+                                  onChange={(e) => handlePriceRowFieldChange(row.id, 'price', e.target.value)}
+                                  className="w-20 rounded border border-transparent bg-transparent px-1 py-0.5 text-right hover:border-stone-200 focus:border-emerald-400 focus:bg-white"
+                                />
+                              </td>
+                              <td className="px-2 py-1.5 text-stone-600">{row.place_name || '-'}</td>
+                              <td className="px-2 py-1.5 text-stone-600">{row.city || '-'}</td>
+                              <td className="px-2 py-1.5 text-stone-500">{row.receipt_date ? new Date(row.receipt_date).toLocaleDateString() : '-'}</td>
+                              <td className="px-2 py-1.5 text-right whitespace-nowrap">
+                                {dirty && (
+                                  <button onClick={() => handleSavePriceRow(row.id)} className="mr-1 rounded bg-stone-700 px-2 py-1 font-semibold text-white">Save</button>
+                                )}
+                                <button onClick={() => handleDeletePriceRow(row.id)} className="rounded border border-rose-200 px-2 py-1 font-semibold text-rose-600">✕</button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            ) : moderationSection === 'prices' ? (
               <>
                 {moderationItems.length > 0 && (
                   <div className="flex items-center gap-2">
@@ -6773,6 +7018,42 @@ export default function App() {
               </div>
             ) : moderationSection === 'stores' ? (
               <div className="space-y-3">
+                <p className="text-xs text-stone-500">
+                  Store/brand names from your price data. Renaming updates every matching price row (and pending reports), so it reflects in product info.
+                </p>
+                {brandsLoading ? (
+                  <div className="animate-pulse space-y-2">
+                    {[1, 2, 3, 4, 5].map(i => <div key={i} className="h-12 bg-stone-200 rounded-xl" />)}
+                  </div>
+                ) : brandRows.length === 0 ? (
+                  <div className="rounded-2xl border border-stone-200 bg-white p-8 text-center text-stone-500">No store data yet.</div>
+                ) : (
+                  brandRows.map(brand => {
+                    const editValue = brandEdits[brand.place_name];
+                    const dirty = editValue !== undefined && editValue.trim() !== '' && editValue.trim() !== brand.place_name;
+                    return (
+                      <div key={brand.place_name} className="rounded-xl border border-stone-200 bg-white p-3 shadow-sm">
+                        <div className="flex items-center gap-2">
+                          <input
+                            value={editValue !== undefined ? editValue : brand.place_name}
+                            onChange={(e) => handleBrandEditChange(brand.place_name, e.target.value)}
+                            className="flex-1 rounded-lg border border-stone-200 px-2 py-1.5 text-sm font-medium"
+                          />
+                          <span className="shrink-0 rounded-full bg-stone-100 px-2 py-1 text-xs font-semibold text-stone-500">{brand.count}</span>
+                          {dirty && (
+                            <button onClick={() => handleRenameBrand(brand.place_name)} className="shrink-0 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white">Rename</button>
+                          )}
+                        </div>
+                        {brand.cities.length > 0 && (
+                          <div className="mt-1 text-[11px] text-stone-400">{brand.cities.join(', ')}</div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            ) : moderationSection === 'storesUnverified' ? (
+              <div className="space-y-3">
                 {adminStoresLoading ? (
                   <div className="animate-pulse space-y-3">
                     {[1, 2, 3].map(i => <div key={i} className="h-24 bg-stone-200 rounded-xl" />)}
@@ -6837,16 +7118,31 @@ export default function App() {
               </div>
             ) : moderationSection === 'receipts' ? (
               <div className="space-y-4">
+                {(pendingReceipts.length > 0 || moderationItems.length > 0) && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button onClick={selectAllReceipts} className="rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-stone-600">Select all</button>
+                    <button onClick={clearReceiptSelection} className="rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-stone-600">Clear</button>
+                    {receiptSelectedIds.length > 0 && (
+                      <>
+                        <button onClick={() => handleApproveReceipts(receiptSelectedIds)} className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white">✓ Approve {receiptSelectedIds.length}</button>
+                        <button onClick={() => handleRejectReceipts(receiptSelectedIds)} className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white">✕ Reject {receiptSelectedIds.length}</button>
+                      </>
+                    )}
+                    <div className="flex-1" />
+                    <button onClick={approveAllPending} className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white">Approve ALL ({pendingReceipts.length + moderationItems.length})</button>
+                  </div>
+                )}
                 {pendingReceiptsLoading ? (
                   <div className="animate-pulse space-y-3">
                     {[1, 2, 3].map(i => <div key={i} className="h-24 bg-stone-200 rounded-xl" />)}
                   </div>
-                ) : pendingReceipts.length === 0 ? (
+                ) : (pendingReceipts.length === 0 && moderationItems.length === 0) ? (
                   <div className="rounded-2xl border border-stone-200 bg-white p-8 text-center text-stone-500">
-                    No pending receipt items.
+                    No pending items.
                   </div>
                 ) : (
-                  (() => {
+                  <>
+                  {pendingReceipts.length > 0 && (() => {
                     const groups = new Map<string, ReceiptModerationRow[]>();
                     for (const row of pendingReceipts) {
                       const key = row.receipt_url || `nogroup-${row.id}`;
@@ -6861,6 +7157,12 @@ export default function App() {
                       return (
                         <div key={groupKey} className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm space-y-3">
                           <div className="flex items-start justify-between gap-2">
+                            <input
+                              type="checkbox"
+                              checked={ids.every(id => receiptSelectedIds.includes(id))}
+                              onChange={() => toggleReceiptGroupSelect(ids)}
+                              className="mt-1 h-4 w-4 shrink-0"
+                            />
                             <div className="flex-1 space-y-1">
                               <input
                                 value={storeEdit.place_name !== undefined ? storeEdit.place_name : (first.place_name || '')}
@@ -6903,12 +7205,20 @@ export default function App() {
                               const dirty = Object.keys(edit).length > 0;
                               return (
                                 <div key={row.id} className="rounded-xl border border-stone-100 bg-stone-50 p-3 space-y-2">
-                                  <input
-                                    value={edit.product_name_raw !== undefined ? String(edit.product_name_raw) : (row.product_name_raw || '')}
-                                    onChange={e => handleReceiptFieldChange(row.id, 'product_name_raw', e.target.value)}
-                                    className="w-full rounded-lg border border-stone-200 px-2 py-1.5 text-sm"
-                                    placeholder="Product name"
-                                  />
+                                  <div className="flex items-center gap-2">
+                                    <input
+                                      type="checkbox"
+                                      checked={receiptSelectedIds.includes(row.id)}
+                                      onChange={() => toggleReceiptSelect(row.id)}
+                                      className="h-4 w-4 shrink-0"
+                                    />
+                                    <input
+                                      value={edit.product_name_raw !== undefined ? String(edit.product_name_raw) : (row.product_name_raw || '')}
+                                      onChange={e => handleReceiptFieldChange(row.id, 'product_name_raw', e.target.value)}
+                                      className="flex-1 rounded-lg border border-stone-200 px-2 py-1.5 text-sm"
+                                      placeholder="Product name"
+                                    />
+                                  </div>
                                   <div className="flex items-center gap-2">
                                     <input
                                       type="number"
@@ -6938,7 +7248,26 @@ export default function App() {
                         </div>
                       );
                     });
-                  })()
+                  })()}
+                  {moderationItems.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-stone-400">Manual reports</div>
+                      {moderationItems.map(item => (
+                        <div key={item.id} className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+                          <div className="text-sm font-semibold text-stone-800">{item.product_name_raw || '-'}</div>
+                          <div className="mt-1 flex items-center gap-3 text-xs text-stone-600">
+                            <span>{item.price != null ? String(item.price) : '-'}</span>
+                            <span>{item.place_name || '-'}</span>
+                            <span>{item.city || '-'}</span>
+                            <div className="flex-1" />
+                            <button onClick={() => approveManualReport(item.id)} className="rounded-lg bg-emerald-600 px-2.5 py-1.5 font-semibold text-white">✓</button>
+                            <button onClick={() => rejectManualReport(item.id)} className="rounded-lg border border-rose-200 px-2.5 py-1.5 font-semibold text-rose-600">✕</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  </>
                 )}
               </div>
             ) : (
