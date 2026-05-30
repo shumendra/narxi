@@ -53,13 +53,38 @@ CITY_CENTERS = {
 }
 
 STORE_BRANDS = {
+    # Korzinka — operated by XALQ RETAIL
     'Korzinka': ['korzinka', 'korzинка', 'xalq retail'],
-    'Makro': ['makro'],
+    # Makro — operated by ANGLESEY FOOD
+    'Makro': ['makro', 'anglesey food'],
+    # Magnit — operated by MAGNIT SREDNYAYA AZIYA
+    'Magnit': ['magnit', 'магнит'],
+    # Bulmart
+    'Bulmart': ['bulmart', 'булмарт'],
     'Yaponamama': ['yaponamama', 'японамама'],
     'Havas': ['havas'],
     'Baraka Market': ['baraka'],
     'Carrefour': ['carrefour'],
+    'Cheese Day': ['cheese day'],
+    'Sushi Moon': ['sushi moon'],
+    'Evos': ['evos'],
+    'Oqtepa Lavash': ['oqtepa', 'октепа'],
+    'Les Ailes': ['les ailes'],
+    'KFC': ['kfc'],
+    'MAXWAY': ['maxway', 'max way'],
 }
+
+# Legal-entity suffixes/noise removed from unmapped store names for display.
+_LEGAL_SUFFIX_PATTERNS = [
+    r"mas['`’]?uliyati cheklangan jamiyat",
+    r'xorijiy korxona',
+    r"qo['`’]?shma korxona",
+    r'\bmchj\b',
+    r'\bxk\b',
+    r'\byatt\b',
+    r'\booo\b',
+    r'\bооо\b',
+]
 
 _GEOCODE_CACHE: dict[str, tuple[float | None, float | None]] = {}
 # Columns confirmed absent from the live prices schema (populated lazily).
@@ -81,16 +106,20 @@ def insert_price_row(payload: dict) -> bool:
     Insert a row into prices, automatically dropping columns that the current
     schema does not have (PGRST204).  Unknown columns are remembered for the
     rest of the run so subsequent rows don't waste a round-trip.
-    Returns True if a row was actually inserted.
+    Returns True if the row was inserted (no exception raised).
     """
     # Drop any columns already known to be absent.
     current = {k: v for k, v in payload.items() if k not in _PRICES_MISSING_COLS}
 
     # Allow up to len(payload) retries (one column removed per attempt).
     for _ in range(len(payload) + 1):
+        if not current:
+            return False
         try:
-            result = supabase.table('prices').insert(current).execute()
-            return bool(result.data)
+            # supabase-py returns empty data[] by default (minimal preference);
+            # treat absence of exception as success rather than checking result.data.
+            supabase.table('prices').insert(current).execute()
+            return True
         except Exception as error:
             msg = str(error)
             col = _extract_missing_col(msg)
@@ -205,7 +234,22 @@ def normalize_store_name(raw_name: str | None, raw_address: str | None) -> str:
     for brand, keywords in STORE_BRANDS.items():
         if any(keyword in combined for keyword in keywords):
             return brand
-    return (raw_name or "Noma'lum do'kon").strip() or "Noma'lum do'kon"
+
+    # Unmapped: strip legal-entity boilerplate and surrounding quotes for a
+    # cleaner display name (e.g. '"URBAN RETAIL" MCHJ XK' -> 'Urban Retail').
+    name = (raw_name or '').strip()
+    if not name:
+        return "Noma'lum do'kon"
+
+    cleaned = name
+    for pattern in _LEGAL_SUFFIX_PATTERNS:
+        cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.strip(' "“”«»`\'’,').strip()
+
+    if len(cleaned) >= 3:
+        # Title-case ALL-CAPS names; leave mixed-case names as-is.
+        return cleaned.title() if cleaned.isupper() else cleaned
+    return name
 
 
 def parse_receipt_html(html_content: str) -> dict:
@@ -486,7 +530,11 @@ async def process_single_receipt(context, queue_item: dict) -> bool:
         return False
     finally:
         if page is not None:
-            await page.close()
+            # Best-effort close; never let a slow/failed close abort the batch.
+            try:
+                await page.close()
+            except BaseException:
+                pass
 
 
 async def main():
@@ -523,13 +571,14 @@ async def main():
 
         for queue_item in queue_items:
             try:
-                is_ok = await asyncio.wait_for(
-                    process_single_receipt(context, queue_item),
-                    timeout=120,
-                )
-            except asyncio.TimeoutError:
-                mark_queue_status(queue_item.get('id'), 'failed', 'Processing timeout (120s)')
-                print(f"→ Processing {queue_item.get('receipt_url')}\n  ✗ Error: Processing timeout (120s)")
+                # Playwright operations have their own timeouts (goto=45s),
+                # so we don't wrap in asyncio.wait_for — doing so cancels the
+                # task mid-operation and corrupts the Playwright connection.
+                is_ok = await process_single_receipt(context, queue_item)
+            except Exception as error:
+                # Never let a single receipt abort the batch.
+                mark_queue_status(queue_item.get('id'), 'failed', str(error))
+                print(f"→ Processing {queue_item.get('receipt_url')}\n  ✗ Error: {error}")
                 is_ok = False
 
             if is_ok:
