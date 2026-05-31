@@ -592,6 +592,8 @@ export default function App() {
   const [scrapeResult, setScrapeResult] = useState<string | null>(null);
   const [queueSyncing, setQueueSyncing] = useState(false);
   const [queueStatus, setQueueStatus] = useState<string | null>(null);
+  const [nonNormBatch, setNonNormBatch] = useState(1);
+  const [nonNormBatchSize, setNonNormBatchSize] = useState(1500);
   const [flushingLimbo, setFlushingLimbo] = useState(false);
   const [matchingStats, setMatchingStats] = useState<Record<string, number> | null>(null);
   const [matchingStatsLoading, setMatchingStatsLoading] = useState(false);
@@ -2135,19 +2137,34 @@ export default function App() {
     setQueueSyncing(true);
     setQueueStatus(null);
     try {
-      const result = await callModerationApi('downloadNormalizationQueue', { onlyNonNormalized: true });
-      const payload = { products: Array.isArray(result?.products) ? result.products : [] };
+      const batch = nonNormBatch;
+      const result = await callModerationApi('downloadUnmatchedQueue', { batch, batchSize: nonNormBatchSize });
+      const products = Array.isArray(result?.products) ? result.products : [];
+      const totalBatches = Number(result?.totalBatches) || 1;
+      const totalGroups = Number(result?.totalGroups) || 0;
+      const hasMore = Boolean(result?.hasMore);
+
+      if (products.length === 0 && totalGroups === 0) {
+        setQueueStatus('No non-normalized products found.');
+        return;
+      }
+
+      const payload = { products };
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `narxi-normalization-non-normalized-${new Date().toISOString().slice(0, 10)}.json`;
+      a.download = `narxi-non-normalized-batch${batch}of${totalBatches}-${new Date().toISOString().slice(0, 10)}.json`;
       a.click();
       URL.revokeObjectURL(url);
 
-      const groupedProducts = Number(result?.groupedProductCount) || 0;
-      const exportedProductCount = Number(result?.exportedProductCount) || 0;
-      setQueueStatus(`Non-normalized export: ${exportedProductCount} of ${groupedProducts} groups`);
+      // Advance to the next batch (wrap back to 1 once the last batch is downloaded).
+      const next = hasMore ? batch + 1 : 1;
+      setNonNormBatch(next);
+      setQueueStatus(
+        `Batch ${batch}/${totalBatches} downloaded · ${products.length} product group(s) · ${totalGroups} total`
+        + (hasMore ? ` · click again for batch ${next}` : ' · all batches downloaded')
+      );
     } catch {
       window.Telegram?.WebApp?.showAlert(t.moderationError);
     } finally {
@@ -6309,8 +6326,21 @@ export default function App() {
                     disabled={queueSyncing}
                     className="rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-1.5 text-xs font-semibold text-cyan-700 disabled:opacity-50"
                   >
-                    <span className="inline-flex items-center gap-1"><Download className="h-3.5 w-3.5" /> {t.queueDownloadNonNormalized}</span>
+                    <span className="inline-flex items-center gap-1"><Download className="h-3.5 w-3.5" /> {t.queueDownloadNonNormalized}{nonNormBatch > 1 ? ` (#${nonNormBatch})` : ''}</span>
                   </button>
+                  <label className="inline-flex items-center gap-1 text-xs text-stone-500">
+                    <span>/ batch</span>
+                    <input
+                      type="number"
+                      min={100}
+                      max={20000}
+                      step={100}
+                      value={nonNormBatchSize}
+                      onChange={(e) => { setNonNormBatchSize(Math.max(100, Math.min(20000, Number(e.target.value) || 1500))); setNonNormBatch(1); }}
+                      disabled={queueSyncing}
+                      className="w-20 rounded-lg border border-stone-200 bg-white px-2 py-1 text-xs disabled:opacity-50"
+                    />
+                  </label>
                   <label className={cn("rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 cursor-pointer", queueSyncing && "opacity-50 pointer-events-none")}>
                     <span className="inline-flex items-center gap-1"><Upload className="h-3.5 w-3.5" /> {queueSyncing ? t.queueUploading : t.queueUpload}</span>
                     <input

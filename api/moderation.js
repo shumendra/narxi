@@ -1319,6 +1319,56 @@ async function exportNormalizationQueue({ onlyNonNormalized = false } = {}) {
   };
 }
 
+// Export non-normalised products sourced from store_products (canonical_product_id IS
+// NULL). The blanket-chain scraper records every unmatched product here, so this is the
+// real backlog the admin needs to normalise (the legacy limbo/pending_prices queue is
+// empty in the chain model). Output is grouped in the SAME shape as the normalisation
+// queue, so the existing upload path round-trips unchanged.
+//
+// Supports batching so the file stays small enough for an AI to process: products are
+// grouped, sorted deterministically, then sliced into `batchSize` groups per `batch`.
+async function exportUnmatchedStoreProductsQueue({ batch = 1, batchSize = 1500 } = {}) {
+  const safeBatchSize = Math.max(1, Math.min(Number(batchSize) || 1500, 20000));
+  const safeBatch = Math.max(1, Number(batch) || 1);
+
+  const unmatchedRows = await fetchAllPages((from, to) => (
+    supabase
+      .from('store_products')
+      .select('original_name, normalised_name, source, store_name, times_seen, first_seen')
+      .is('canonical_product_id', null)
+      .order('first_seen', { ascending: true })
+      .range(from, to)
+  ));
+
+  // Map store_products rows to the item shape buildNormalizationQueueProducts expects.
+  const items = unmatchedRows.map((row) => ({
+    product_name_raw: row.original_name,
+    place_name: row.store_name || row.source || null,
+  }));
+
+  const { keyToProductIds, productById } = await buildProductNameIndex();
+  const allGroups = buildNormalizationQueueProducts(items, { keyToProductIds, productById });
+  // Only products that are NOT already normalised in the DB.
+  const nonNormalized = allGroups.filter((item) => item?.normalized_in_db !== true);
+
+  const totalGroups = nonNormalized.length;
+  const totalBatches = Math.max(1, Math.ceil(totalGroups / safeBatchSize));
+  const start = (safeBatch - 1) * safeBatchSize;
+  const pageGroups = nonNormalized.slice(start, start + safeBatchSize);
+
+  return {
+    products: pageGroups,
+    batch: safeBatch,
+    batchSize: safeBatchSize,
+    totalGroups,
+    totalBatches,
+    exportedProductCount: pageGroups.length,
+    unmatchedRowCount: unmatchedRows.length,
+    hasMore: safeBatch < totalBatches,
+    nextBatch: safeBatch < totalBatches ? safeBatch + 1 : null,
+  };
+}
+
 async function importNormalizationQueue(productsInput) {
   const normalizedProducts = Array.isArray(productsInput) ? productsInput : [];
   if (normalizedProducts.length === 0) {
@@ -3382,6 +3432,13 @@ export default async function moderation(req, res) {
       }
       case 'downloadNonNormalizedQueue': {
         const result = await exportNormalizationQueue({ onlyNonNormalized: true });
+        return send(res, 200, { ok: true, ...result });
+      }
+      case 'downloadUnmatchedQueue': {
+        const result = await exportUnmatchedStoreProductsQueue({
+          batch: body.batch,
+          batchSize: body.batchSize,
+        });
         return send(res, 200, { ok: true, ...result });
       }
       case 'importNormalizationQueue': {
