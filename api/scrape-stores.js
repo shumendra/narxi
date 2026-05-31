@@ -643,14 +643,16 @@ export default async function handler(req, res) {
     const sourceTag = `store_api_${store}`;
     const { data: currentApiRows } = await supabase
       .from('prices')
-      .select('id,product_id,price,city,place_name,place_address')
+      .select('id,product_id,product_name_raw,price,city,place_name,place_address')
       .eq('source', sourceTag);
 
     const currentExactSet = new Set();
     const currentByBranchKey = new Map();
     for (const row of currentApiRows || []) {
+      // Unmatched rows have product_id = null; identify them by raw name so they don't collide.
+      const keyId = row.product_id || `raw:${normalizeProductNameKey(row.product_name_raw)}`;
       const exactKey = buildStoreExactKey({
-        productId: row.product_id,
+        productId: keyId,
         price: row.price,
         city: row.city,
         placeName: row.place_name,
@@ -659,7 +661,7 @@ export default async function handler(req, res) {
       currentExactSet.add(exactKey);
 
       const branchKey = buildStoreBranchKey({
-        productId: row.product_id,
+        productId: keyId,
         city: row.city,
         placeName: row.place_name,
         placeAddress: row.place_address,
@@ -712,14 +714,13 @@ export default async function handler(req, res) {
         canonicalProductsCache,
       });
 
-      if (!matchResult.canonical_product_id) {
-        // Level 6: queued as unmatched in store_products; price will be inserted after normalisation
-        unmatched += 1;
-        continue;
-      }
-
-      const matchedProductId = matchResult.canonical_product_id;
+      // Approach A: even when a product has no canonical match, still write the price
+      // row (product_id = null) so it becomes findable. Unmatched rows are deduped by
+      // raw name instead of product id.
+      const matchedProductId = matchResult.canonical_product_id || null;
       const storeProductId = matchResult.store_product_id;
+      if (!matchedProductId) unmatched += 1;
+      const dedupId = matchedProductId || `raw:${normalizeProductNameKey(rawName)}`;
 
       // Queue inserts for every branch — API prices are chain-wide.
       let queuedThisProduct = false;
@@ -729,7 +730,7 @@ export default async function handler(req, res) {
         const city = normalizeStoreCity(branch.city, placeAddress || '');
 
         const branchKey = buildStoreBranchKey({
-          productId: matchedProductId,
+          productId: dedupId,
           city,
           placeName,
           placeAddress,
@@ -741,7 +742,7 @@ export default async function handler(req, res) {
         processedBranchKeys.add(branchKey);
 
         const exactKey = buildStoreExactKey({
-          productId: matchedProductId,
+          productId: dedupId,
           price: sp.price,
           city,
           placeName,
@@ -768,6 +769,7 @@ export default async function handler(req, res) {
           place_address: placeAddress,
           receipt_date: now,
           source: sourceTag,
+          status: 'approved',
           submitted_by: String(admin_id),
           latitude: Number.isFinite(Number(branch.lat)) ? Number(branch.lat) : null,
           longitude: Number.isFinite(Number(branch.lng)) ? Number(branch.lng) : null,
@@ -777,7 +779,7 @@ export default async function handler(req, res) {
         queuedThisProduct = true;
       }
 
-      if (queuedThisProduct) {
+      if (queuedThisProduct && matchedProductId) {
         const aliasKey = `${matchedProductId}|${normalizeAliasKey(rawName)}|${normalizeAliasKey(storeBrand)}`;
         if (!aliasRowsByKey.has(aliasKey)) {
           aliasRowsByKey.set(aliasKey, {
@@ -816,7 +818,7 @@ export default async function handler(req, res) {
       queued: rowsToInsert.length,
       durationMs,
       errors: errors.length > 0 ? errors.slice(0, 10) : undefined,
-      message: `Scraped ${storeProducts.length} products × ${stores.length} branches from ${store}: ${inserted} prices written (${matched} matched products, ${unmatched} unmatched/queued for normalisation), ${skippedDup} unchanged duplicates skipped in ${Math.round(durationMs / 1000)}s.`,
+      message: `Scraped ${storeProducts.length} products × ${stores.length} branches from ${store}: ${inserted} prices written (${matched} matched to canonical products, ${unmatched} stored unmatched), ${skippedDup} unchanged duplicates skipped in ${Math.round(durationMs / 1000)}s.`,
     });
   } catch (err) {
     console.error('scrape-stores error:', err);

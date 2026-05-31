@@ -297,8 +297,11 @@ interface ApprovedPriceRow {
 
 interface BrandRow {
   place_name: string;
+  place_address?: string | null;
   count: number;
   cities: string[];
+  latitude?: number | null;
+  longitude?: number | null;
 }
 
 function getWeekNumber(date: Date) {
@@ -1781,11 +1784,12 @@ export default function App() {
   const [approvedPricesPage, setApprovedPricesPage] = useState(0);
   const [approvedPricesQuery, setApprovedPricesQuery] = useState('');
   const [approvedPricesLoading, setApprovedPricesLoading] = useState(false);
-  const [priceRowEdits, setPriceRowEdits] = useState<Record<string, { product_name_raw?: string; price?: string }>>({});
+  const [priceRowEdits, setPriceRowEdits] = useState<Record<string, { product_name_raw?: string; price?: string; unit_price?: string; quantity?: string; place_name?: string; place_address?: string; city?: string }>>({});
+  const [expandedPriceRowId, setExpandedPriceRowId] = useState<string | null>(null);
   // Brands derived from price data
   const [brandRows, setBrandRows] = useState<BrandRow[]>([]);
   const [brandsLoading, setBrandsLoading] = useState(false);
-  const [brandEdits, setBrandEdits] = useState<Record<string, string>>({});
+  const [brandEdits, setBrandEdits] = useState<Record<string, { name?: string; latitude?: string; longitude?: string }>>({});
   const [storeMergeSourceId, setStoreMergeSourceId] = useState<string | null>(null);
   const [storeMergeQuery, setStoreMergeQuery] = useState('');
   const [storeMergeResults, setStoreMergeResults] = useState<StoreRecord[]>([]);
@@ -1825,6 +1829,10 @@ export default function App() {
   const findMapSectionRef = useRef<HTMLElement | null>(null);
   const productsCacheRef = useRef<{ timestamp: number; data: Product[] } | null>(null);
   const productsFetchPromiseRef = useRef<Promise<Product[]> | null>(null);
+  // Monotonic counter so only the latest loadPricesForProduct response is applied.
+  // Prevents a slow in-flight request (e.g. previous product, or a 10s interval/focus
+  // refresh) from overwriting the prices/location of the product the user just selected.
+  const priceRequestSeqRef = useRef(0);
   const [productsLoading, setProductsLoading] = useState(false);
   const [knownStores, setKnownStores] = useState<Array<{ name: string; lat: number; lng: number }>>(KNOWN_STORES_FALLBACK);
 
@@ -1968,6 +1976,7 @@ export default function App() {
   };
 
   const loadPricesForProduct = async (product: Product) => {
+    const reqId = ++priceRequestSeqRef.current;
     setLoading(true);
     if (product.isRaw || !product.id) {
       // Raw product: fetch prices directly by product_name_raw
@@ -1979,6 +1988,7 @@ export default function App() {
         .not('source', 'like', 'history_%')
         .order('price', { ascending: true })
         .limit(200);
+      if (reqId !== priceRequestSeqRef.current) return; // a newer selection superseded this one
       setPrices((data || []) as PriceRecord[]);
       setLoading(false);
       return;
@@ -1999,6 +2009,8 @@ export default function App() {
         .select('alias_text')
         .eq('product_id', product.id),
     ]);
+
+    if (reqId !== priceRequestSeqRef.current) return; // a newer selection superseded this one
 
     const knownNameKeys = new Set([
       normalizeProductNameKey(product?.name_uz),
@@ -2712,7 +2724,7 @@ export default function App() {
     }
   };
 
-  const handlePriceRowFieldChange = (id: string, field: 'product_name_raw' | 'price', value: string) => {
+  const handlePriceRowFieldChange = (id: string, field: 'product_name_raw' | 'price' | 'unit_price' | 'quantity' | 'place_name' | 'place_address' | 'city', value: string) => {
     setPriceRowEdits(prev => ({ ...prev, [id]: { ...prev[id], [field]: value } }));
   };
 
@@ -2722,6 +2734,11 @@ export default function App() {
     const changes: Record<string, unknown> = {};
     if (edits.product_name_raw !== undefined) changes.product_name_raw = String(edits.product_name_raw);
     if (edits.price !== undefined) changes.price = Number(edits.price);
+    if (edits.unit_price !== undefined) changes.unit_price = Number(edits.unit_price);
+    if (edits.quantity !== undefined) changes.quantity = Number(edits.quantity);
+    if (edits.place_name !== undefined) changes.place_name = String(edits.place_name);
+    if (edits.place_address !== undefined) changes.place_address = String(edits.place_address);
+    if (edits.city !== undefined) changes.city = String(edits.city);
     try {
       const result = await callModerationApi('updatePriceRow', { id, changes });
       const updated = result.item as ApprovedPriceRow;
@@ -2764,26 +2781,42 @@ export default function App() {
     }
   };
 
-  const handleBrandEditChange = (oldName: string, value: string) => {
-    setBrandEdits(prev => ({ ...prev, [oldName]: value }));
+  const handleBrandEditChange = (oldName: string, field: 'name' | 'latitude' | 'longitude', value: string) => {
+    setBrandEdits(prev => ({ ...prev, [oldName]: { ...prev[oldName], [field]: value } }));
   };
 
-  const handleRenameBrand = async (oldName: string) => {
-    const newName = (brandEdits[oldName] || '').trim();
-    if (!newName || newName === oldName) return;
+  const handleSaveBrand = async (brand: BrandRow) => {
+    const oldName = brand.place_name;
+    const edit = brandEdits[oldName] || {};
+    const changes: { newName?: string; latitude?: string | null; longitude?: string | null } = {};
+    const trimmedName = (edit.name ?? '').trim();
+    if (edit.name !== undefined && trimmedName && trimmedName !== oldName) changes.newName = trimmedName;
+    if (edit.latitude !== undefined) changes.latitude = edit.latitude.trim() === '' ? null : edit.latitude.trim();
+    if (edit.longitude !== undefined) changes.longitude = edit.longitude.trim() === '' ? null : edit.longitude.trim();
+    if (Object.keys(changes).length === 0) return;
     try {
-      const result = await callModerationApi('renameBrandInPrices', { oldName, newName });
+      const result = await callModerationApi('updateBrandInPrices', { oldName, changes });
+      const finalName = (result.place_name as string) || changes.newName || oldName;
       setBrandRows(prev => {
         const moved = prev.find(b => b.place_name === oldName);
-        const rest = prev.filter(b => b.place_name !== oldName && b.place_name !== newName);
-        const existingTarget = prev.find(b => b.place_name === newName);
-        const mergedCount = (existingTarget?.count || 0) + (moved?.count || 0);
-        const mergedCities = Array.from(new Set([...(existingTarget?.cities || []), ...(moved?.cities || [])]));
-        return [{ place_name: newName, count: mergedCount || Number(result.updated) || 0, cities: mergedCities }, ...rest]
-          .sort((a, b) => b.count - a.count);
+        if (!moved) return prev;
+        const updatedBrand: BrandRow = {
+          ...moved,
+          place_name: finalName,
+          latitude: changes.latitude !== undefined ? (changes.latitude === null ? null : Number(changes.latitude)) : moved.latitude,
+          longitude: changes.longitude !== undefined ? (changes.longitude === null ? null : Number(changes.longitude)) : moved.longitude,
+        };
+        // Merge if renamed onto an existing brand.
+        const existingTarget = prev.find(b => b.place_name === finalName && b.place_name !== oldName);
+        const rest = prev.filter(b => b.place_name !== oldName && b.place_name !== finalName);
+        if (existingTarget) {
+          updatedBrand.count = existingTarget.count + moved.count;
+          updatedBrand.cities = Array.from(new Set([...existingTarget.cities, ...moved.cities]));
+        }
+        return [updatedBrand, ...rest].sort((a, b) => b.count - a.count);
       });
       setBrandEdits(prev => { const next = { ...prev }; delete next[oldName]; return next; });
-      window.Telegram?.WebApp?.showAlert(`Renamed across ${Number(result.updated) || 0} price row(s).`);
+      window.Telegram?.WebApp?.showAlert(`Updated ${Number(result.updated) || 0} price row(s).`);
     } catch {
       window.Telegram?.WebApp?.showAlert(t.moderationError);
     }
@@ -6220,8 +6253,10 @@ export default function App() {
                         {approvedPrices.map(row => {
                           const edit = priceRowEdits[row.id] || {};
                           const dirty = Object.keys(edit).length > 0;
+                          const expanded = expandedPriceRowId === row.id;
                           return (
-                            <tr key={row.id} className="border-t border-stone-100">
+                            <React.Fragment key={row.id}>
+                            <tr className="border-t border-stone-100">
                               <td className="px-2 py-1.5">
                                 <input
                                   value={edit.product_name_raw !== undefined ? edit.product_name_raw : (row.product_name_raw || '')}
@@ -6241,12 +6276,46 @@ export default function App() {
                               <td className="px-2 py-1.5 text-stone-600">{row.city || '-'}</td>
                               <td className="px-2 py-1.5 text-stone-500">{row.receipt_date ? new Date(row.receipt_date).toLocaleDateString() : '-'}</td>
                               <td className="px-2 py-1.5 text-right whitespace-nowrap">
+                                <button onClick={() => setExpandedPriceRowId(expanded ? null : row.id)} className="mr-1 rounded border border-stone-200 px-2 py-1 font-semibold text-stone-600">{expanded ? '▲' : 'Edit'}</button>
                                 {dirty && (
                                   <button onClick={() => handleSavePriceRow(row.id)} className="mr-1 rounded bg-stone-700 px-2 py-1 font-semibold text-white">Save</button>
                                 )}
                                 <button onClick={() => handleDeletePriceRow(row.id)} className="rounded border border-rose-200 px-2 py-1 font-semibold text-rose-600">✕</button>
                               </td>
                             </tr>
+                            {expanded && (
+                              <tr className="border-t border-stone-100 bg-stone-50">
+                                <td colSpan={6} className="px-3 py-3">
+                                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                                    <label className="flex flex-col gap-0.5 text-[11px] text-stone-500">Product name
+                                      <input value={edit.product_name_raw !== undefined ? edit.product_name_raw : (row.product_name_raw || '')} onChange={(e) => handlePriceRowFieldChange(row.id, 'product_name_raw', e.target.value)} className="rounded border border-stone-200 px-2 py-1 text-xs text-stone-800" />
+                                    </label>
+                                    <label className="flex flex-col gap-0.5 text-[11px] text-stone-500">Price
+                                      <input type="number" value={edit.price !== undefined ? edit.price : (row.price ?? '')} onChange={(e) => handlePriceRowFieldChange(row.id, 'price', e.target.value)} className="rounded border border-stone-200 px-2 py-1 text-xs text-stone-800" />
+                                    </label>
+                                    <label className="flex flex-col gap-0.5 text-[11px] text-stone-500">Unit price
+                                      <input type="number" value={edit.unit_price !== undefined ? edit.unit_price : (row.unit_price ?? '')} onChange={(e) => handlePriceRowFieldChange(row.id, 'unit_price', e.target.value)} className="rounded border border-stone-200 px-2 py-1 text-xs text-stone-800" />
+                                    </label>
+                                    <label className="flex flex-col gap-0.5 text-[11px] text-stone-500">Quantity
+                                      <input type="number" value={edit.quantity !== undefined ? edit.quantity : (row.quantity ?? '')} onChange={(e) => handlePriceRowFieldChange(row.id, 'quantity', e.target.value)} className="rounded border border-stone-200 px-2 py-1 text-xs text-stone-800" />
+                                    </label>
+                                    <label className="flex flex-col gap-0.5 text-[11px] text-stone-500">Store / brand
+                                      <input value={edit.place_name !== undefined ? edit.place_name : (row.place_name || '')} onChange={(e) => handlePriceRowFieldChange(row.id, 'place_name', e.target.value)} className="rounded border border-stone-200 px-2 py-1 text-xs text-stone-800" />
+                                    </label>
+                                    <label className="flex flex-col gap-0.5 text-[11px] text-stone-500">City
+                                      <input value={edit.city !== undefined ? edit.city : (row.city || '')} onChange={(e) => handlePriceRowFieldChange(row.id, 'city', e.target.value)} className="rounded border border-stone-200 px-2 py-1 text-xs text-stone-800" />
+                                    </label>
+                                    <label className="col-span-2 flex flex-col gap-0.5 text-[11px] text-stone-500 sm:col-span-3">Address
+                                      <input value={edit.place_address !== undefined ? edit.place_address : (row.place_address || '')} onChange={(e) => handlePriceRowFieldChange(row.id, 'place_address', e.target.value)} className="rounded border border-stone-200 px-2 py-1 text-xs text-stone-800" />
+                                    </label>
+                                  </div>
+                                  <div className="mt-2 flex justify-end gap-2">
+                                    <button onClick={() => { handleSavePriceRow(row.id); setExpandedPriceRowId(null); }} className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white">Save changes</button>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                            </React.Fragment>
                           );
                         })}
                       </tbody>
@@ -7019,33 +7088,63 @@ export default function App() {
             ) : moderationSection === 'stores' ? (
               <div className="space-y-3">
                 <p className="text-xs text-stone-500">
-                  Store/brand names from your price data. Renaming updates every matching price row (and pending reports), so it reflects in product info.
+                  Stores from your price data. The grey name is what appears on receipts (company name). Edit the brand name and/or coordinates — changes propagate to every matching price row and pending report.
                 </p>
                 {brandsLoading ? (
                   <div className="animate-pulse space-y-2">
-                    {[1, 2, 3, 4, 5].map(i => <div key={i} className="h-12 bg-stone-200 rounded-xl" />)}
+                    {[1, 2, 3, 4, 5].map(i => <div key={i} className="h-20 bg-stone-200 rounded-xl" />)}
                   </div>
                 ) : brandRows.length === 0 ? (
                   <div className="rounded-2xl border border-stone-200 bg-white p-8 text-center text-stone-500">No store data yet.</div>
                 ) : (
                   brandRows.map(brand => {
-                    const editValue = brandEdits[brand.place_name];
-                    const dirty = editValue !== undefined && editValue.trim() !== '' && editValue.trim() !== brand.place_name;
+                    const edit = brandEdits[brand.place_name] || {};
+                    const nameVal = edit.name !== undefined ? edit.name : brand.place_name;
+                    const latVal = edit.latitude !== undefined ? edit.latitude : (brand.latitude != null ? String(brand.latitude) : '');
+                    const lngVal = edit.longitude !== undefined ? edit.longitude : (brand.longitude != null ? String(brand.longitude) : '');
+                    const nameChanged = edit.name !== undefined && edit.name.trim() !== '' && edit.name.trim() !== brand.place_name;
+                    const latChanged = edit.latitude !== undefined && edit.latitude !== (brand.latitude != null ? String(brand.latitude) : '');
+                    const lngChanged = edit.longitude !== undefined && edit.longitude !== (brand.longitude != null ? String(brand.longitude) : '');
+                    const dirty = nameChanged || latChanged || lngChanged;
                     return (
-                      <div key={brand.place_name} className="rounded-xl border border-stone-200 bg-white p-3 shadow-sm">
+                      <div key={brand.place_name} className="rounded-xl border border-stone-200 bg-white p-3 shadow-sm space-y-2">
+                        <div className="text-[11px] text-stone-400">On receipts: <span className="font-medium text-stone-500">{brand.place_name}</span></div>
                         <div className="flex items-center gap-2">
                           <input
-                            value={editValue !== undefined ? editValue : brand.place_name}
-                            onChange={(e) => handleBrandEditChange(brand.place_name, e.target.value)}
+                            value={nameVal}
+                            onChange={(e) => handleBrandEditChange(brand.place_name, 'name', e.target.value)}
                             className="flex-1 rounded-lg border border-stone-200 px-2 py-1.5 text-sm font-medium"
+                            placeholder="Brand name"
                           />
                           <span className="shrink-0 rounded-full bg-stone-100 px-2 py-1 text-xs font-semibold text-stone-500">{brand.count}</span>
-                          {dirty && (
-                            <button onClick={() => handleRenameBrand(brand.place_name)} className="shrink-0 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white">Rename</button>
-                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <label className="flex flex-1 flex-col gap-0.5 text-[11px] text-stone-500">Latitude
+                            <input
+                              value={latVal}
+                              onChange={(e) => handleBrandEditChange(brand.place_name, 'latitude', e.target.value)}
+                              className="rounded-lg border border-stone-200 px-2 py-1.5 text-xs text-stone-800"
+                              placeholder="41.3..."
+                              inputMode="decimal"
+                            />
+                          </label>
+                          <label className="flex flex-1 flex-col gap-0.5 text-[11px] text-stone-500">Longitude
+                            <input
+                              value={lngVal}
+                              onChange={(e) => handleBrandEditChange(brand.place_name, 'longitude', e.target.value)}
+                              className="rounded-lg border border-stone-200 px-2 py-1.5 text-xs text-stone-800"
+                              placeholder="69.2..."
+                              inputMode="decimal"
+                            />
+                          </label>
                         </div>
                         {brand.cities.length > 0 && (
-                          <div className="mt-1 text-[11px] text-stone-400">{brand.cities.join(', ')}</div>
+                          <div className="text-[11px] text-stone-400">{brand.cities.join(', ')}</div>
+                        )}
+                        {dirty && (
+                          <div className="flex justify-end">
+                            <button onClick={() => handleSaveBrand(brand)} className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white">Save</button>
+                          </div>
                         )}
                       </div>
                     );

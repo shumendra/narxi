@@ -2376,7 +2376,7 @@ async function listBrandsFromPrices(city = null) {
   const rows = await fetchAllPages((from, to) => {
     let q = supabase
       .from('prices')
-      .select('place_name, city')
+      .select('place_name, place_address, city, latitude, longitude')
       .not('place_name', 'is', null)
       .range(from, to);
     if (city) q = q.eq('city', city);
@@ -2388,14 +2388,34 @@ async function listBrandsFromPrices(city = null) {
     const name = normalizeMaybeText(row?.place_name);
     if (!name) continue;
     const key = name;
-    if (!map.has(key)) map.set(key, { place_name: name, count: 0, cities: new Set() });
+    if (!map.has(key)) {
+      map.set(key, {
+        place_name: name,
+        place_address: normalizeMaybeText(row?.place_address) || null,
+        count: 0,
+        cities: new Set(),
+        latitude: null,
+        longitude: null,
+      });
+    }
     const entry = map.get(key);
     entry.count += 1;
     if (row?.city) entry.cities.add(row.city);
+    // Capture the first available coordinates/address for this brand.
+    if (entry.latitude == null && row?.latitude != null) entry.latitude = Number(row.latitude);
+    if (entry.longitude == null && row?.longitude != null) entry.longitude = Number(row.longitude);
+    if (!entry.place_address && row?.place_address) entry.place_address = normalizeMaybeText(row.place_address);
   }
 
   return Array.from(map.values())
-    .map(e => ({ place_name: e.place_name, count: e.count, cities: Array.from(e.cities) }))
+    .map(e => ({
+      place_name: e.place_name,
+      place_address: e.place_address,
+      count: e.count,
+      cities: Array.from(e.cities),
+      latitude: e.latitude,
+      longitude: e.longitude,
+    }))
     .sort((a, b) => b.count - a.count);
 }
 
@@ -2424,6 +2444,45 @@ async function renameBrandInPrices(oldName, newName) {
   if (pendingError && pendingError.code !== 'PGRST116') throw pendingError;
 
   return { updated };
+}
+
+// Update a store/brand's name and/or coordinates across every matching price row.
+async function updateBrandInPrices(oldName, changes = {}) {
+  const from = normalizeMaybeText(oldName);
+  if (!from) throw new Error('oldName is required');
+
+  const patch = {};
+  if (changes.newName !== undefined) {
+    const to = normalizeMaybeText(changes.newName);
+    if (to) patch.place_name = to;
+  }
+  if (changes.latitude !== undefined) {
+    const lat = changes.latitude === null || changes.latitude === '' ? null : Number(changes.latitude);
+    if (lat === null || Number.isFinite(lat)) patch.latitude = lat;
+  }
+  if (changes.longitude !== undefined) {
+    const lng = changes.longitude === null || changes.longitude === '' ? null : Number(changes.longitude);
+    if (lng === null || Number.isFinite(lng)) patch.longitude = lng;
+  }
+  if (Object.keys(patch).length === 0) return { updated: 0, place_name: from };
+
+  const { data, error } = await supabase
+    .from('prices')
+    .update(patch)
+    .eq('place_name', from)
+    .select('id');
+  if (error) throw error;
+
+  // Keep the name in sync on pending_prices when renaming.
+  if (patch.place_name) {
+    const { error: pendingError } = await supabase
+      .from('pending_prices')
+      .update({ place_name: patch.place_name })
+      .eq('place_name', from);
+    if (pendingError && pendingError.code !== 'PGRST116') throw pendingError;
+  }
+
+  return { updated: Array.isArray(data) ? data.length : 0, place_name: patch.place_name || from };
 }
 
 // ─── /Approved prices + brands ─────────────────────────────────────────────
@@ -3216,6 +3275,10 @@ export default async function moderation(req, res) {
       }
       case 'renameBrandInPrices': {
         const result = await renameBrandInPrices(body.oldName, body.newName);
+        return send(res, 200, { ok: true, ...result });
+      }
+      case 'updateBrandInPrices': {
+        const result = await updateBrandInPrices(body.oldName, body.changes || {});
         return send(res, 200, { ok: true, ...result });
       }
       default:
