@@ -45,20 +45,45 @@ export async function matchProduct(rawName, source, supabase, fuzz, options = {}
   const normed = normaliseName(rawName);
   const tokenSorted = tokenSortName(rawName);
 
+  // When the caller supplies an in-memory cache of every store_product for this
+  // source plus an upsert queue, the matcher performs ZERO per-product DB
+  // round-trips for Levels 1-3: lookups hit the cache maps and writes are
+  // deferred into the queue for the caller to flush in a single batch.
+  const allCache = options.sourceAllCache || null;
+  const upsertQueue = options.upsertQueue || null;
+
+  // Resolve a store_products row for a write: either defer it to the batch
+  // queue (returning a known id when one already exists) or upsert immediately.
+  const recordUpsert = async (data, existingId) => {
+    if (upsertQueue) {
+      upsertQueue.push(data);
+      return existingId || null;
+    }
+    return await upsertStoreProduct(supabase, data);
+  };
+
   // ── LEVEL 1: Exact source match ─────────────────────────────────────────
-  // Same exact string from same source seen before — instant DB lookup
-  const { data: exactMatch } = await supabase
-    .from('store_products')
-    .select('id, canonical_product_id, match_confidence, times_seen')
-    .eq('source', normSource)
-    .eq('original_name', rawName)
-    .maybeSingle();
+  // Same exact string from same source seen before — cache hit / instant DB lookup
+  let exactMatch;
+  if (allCache) {
+    exactMatch = allCache.byOriginal.get(rawName) || null;
+  } else {
+    ({ data: exactMatch } = await supabase
+      .from('store_products')
+      .select('id, canonical_product_id, match_confidence, times_seen')
+      .eq('source', normSource)
+      .eq('original_name', rawName)
+      .maybeSingle());
+  }
+  const selfId = exactMatch?.id || null;
 
   if (exactMatch?.canonical_product_id) {
-    await supabase
-      .from('store_products')
-      .update({ times_seen: (Number(exactMatch.times_seen) || 1) + 1, last_seen: new Date().toISOString() })
-      .eq('id', exactMatch.id);
+    if (!upsertQueue) {
+      await supabase
+        .from('store_products')
+        .update({ times_seen: (Number(exactMatch.times_seen) || 1) + 1, last_seen: new Date().toISOString() })
+        .eq('id', exactMatch.id);
+    }
 
     return {
       store_product_id: exactMatch.id,
@@ -70,26 +95,31 @@ export async function matchProduct(rawName, source, supabase, fuzz, options = {}
 
   // ── LEVEL 2: Normalised exact match ─────────────────────────────────────
   // Same product, minor punctuation/capitalisation difference
-  const { data: normedMatch } = await supabase
-    .from('store_products')
-    .select('id, canonical_product_id')
-    .eq('source', normSource)
-    .eq('normalised_name', normed)
-    .not('canonical_product_id', 'is', null)
-    .maybeSingle();
+  let normedMatch;
+  if (allCache) {
+    normedMatch = allCache.byNormalised.get(normed) || null;
+  } else {
+    ({ data: normedMatch } = await supabase
+      .from('store_products')
+      .select('id, canonical_product_id')
+      .eq('source', normSource)
+      .eq('normalised_name', normed)
+      .not('canonical_product_id', 'is', null)
+      .maybeSingle());
+  }
 
   if (normedMatch?.canonical_product_id) {
-    await upsertStoreProduct(supabase, {
+    const storeProductId = await recordUpsert({
       original_name: rawName,
       normalised_name: normed,
       token_sorted_name: tokenSorted,
       source: normSource,
       canonical_product_id: normedMatch.canonical_product_id,
       match_confidence: 'normalised',
-    });
+    }, selfId);
 
     return {
-      store_product_id: normedMatch.id,
+      store_product_id: storeProductId || normedMatch.id,
       canonical_product_id: normedMatch.canonical_product_id,
       confidence: 'normalised',
       level: 2,
@@ -98,26 +128,31 @@ export async function matchProduct(rawName, source, supabase, fuzz, options = {}
 
   // ── LEVEL 3: Token-sorted normalised match ───────────────────────────────
   // Same words, different order — "Heinz ketchup" vs "ketchup Heinz"
-  const { data: tokenMatch } = await supabase
-    .from('store_products')
-    .select('id, canonical_product_id')
-    .eq('source', normSource)
-    .eq('token_sorted_name', tokenSorted)
-    .not('canonical_product_id', 'is', null)
-    .maybeSingle();
+  let tokenMatch;
+  if (allCache) {
+    tokenMatch = allCache.byTokenSorted.get(tokenSorted) || null;
+  } else {
+    ({ data: tokenMatch } = await supabase
+      .from('store_products')
+      .select('id, canonical_product_id')
+      .eq('source', normSource)
+      .eq('token_sorted_name', tokenSorted)
+      .not('canonical_product_id', 'is', null)
+      .maybeSingle());
+  }
 
   if (tokenMatch?.canonical_product_id) {
-    await upsertStoreProduct(supabase, {
+    const storeProductId = await recordUpsert({
       original_name: rawName,
       normalised_name: normed,
       token_sorted_name: tokenSorted,
       source: normSource,
       canonical_product_id: tokenMatch.canonical_product_id,
       match_confidence: 'normalised',
-    });
+    }, selfId);
 
     return {
-      store_product_id: tokenMatch.id,
+      store_product_id: storeProductId || tokenMatch.id,
       canonical_product_id: tokenMatch.canonical_product_id,
       confidence: 'token_sorted',
       level: 3,
@@ -153,14 +188,14 @@ export async function matchProduct(rawName, source, supabase, fuzz, options = {}
     }
 
     if (bestScore >= FUZZY_HIGH_THRESHOLD && bestMatch?.canonical_product_id) {
-      const storeProductId = await upsertStoreProduct(supabase, {
+      const storeProductId = await recordUpsert({
         original_name: rawName,
         normalised_name: normed,
         token_sorted_name: tokenSorted,
         source: normSource,
         canonical_product_id: bestMatch.canonical_product_id,
         match_confidence: 'fuzzy_high',
-      });
+      }, selfId);
 
       return {
         store_product_id: storeProductId,
@@ -172,14 +207,14 @@ export async function matchProduct(rawName, source, supabase, fuzz, options = {}
     }
 
     if (bestScore >= FUZZY_LOW_THRESHOLD && bestMatch?.canonical_product_id) {
-      const storeProductId = await upsertStoreProduct(supabase, {
+      const storeProductId = await recordUpsert({
         original_name: rawName,
         normalised_name: normed,
         token_sorted_name: tokenSorted,
         source: normSource,
         canonical_product_id: bestMatch.canonical_product_id,
         match_confidence: 'fuzzy_low',
-      });
+      }, selfId);
 
       return {
         store_product_id: storeProductId,
@@ -224,14 +259,14 @@ export async function matchProduct(rawName, source, supabase, fuzz, options = {}
     }
 
     if (bestScore >= FUZZY_HIGH_THRESHOLD && bestCanonical) {
-      const storeProductId = await upsertStoreProduct(supabase, {
+      const storeProductId = await recordUpsert({
         original_name: rawName,
         normalised_name: normed,
         token_sorted_name: tokenSorted,
         source: normSource,
         canonical_product_id: bestCanonical.id,
         match_confidence: 'fuzzy_high',
-      });
+      }, selfId);
 
       return {
         store_product_id: storeProductId,
@@ -243,14 +278,14 @@ export async function matchProduct(rawName, source, supabase, fuzz, options = {}
     }
 
     if (bestScore >= FUZZY_LOW_THRESHOLD && bestCanonical) {
-      const storeProductId = await upsertStoreProduct(supabase, {
+      const storeProductId = await recordUpsert({
         original_name: rawName,
         normalised_name: normed,
         token_sorted_name: tokenSorted,
         source: normSource,
         canonical_product_id: bestCanonical.id,
         match_confidence: 'fuzzy_low',
-      });
+      }, selfId);
 
       return {
         store_product_id: storeProductId,
@@ -265,14 +300,14 @@ export async function matchProduct(rawName, source, supabase, fuzz, options = {}
 
   // ── LEVEL 6: No match — create unmatched store_product ──────────────────
   // Queued for manual normalisation. Admin downloads and processes via Claude.
-  const storeProductId = await upsertStoreProduct(supabase, {
+  const storeProductId = await recordUpsert({
     original_name: rawName,
     normalised_name: normed,
     token_sorted_name: tokenSorted,
     source: normSource,
     canonical_product_id: null,
     match_confidence: 'unmatched',
-  });
+  }, selfId);
 
   return {
     store_product_id: storeProductId,

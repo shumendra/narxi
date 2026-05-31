@@ -684,13 +684,33 @@ export default async function handler(req, res) {
     const [{ data: spRows }, { data: cpRows }] = await Promise.all([
       supabase.from('store_products')
         .select('id, original_name, normalised_name, token_sorted_name, canonical_product_id')
-        .eq('source', normSource)
-        .not('canonical_product_id', 'is', null),
+        .eq('source', normSource),
       supabase.from('products')
         .select('id, name_uz, name_ru, name_en, search_text'),
     ]);
-    sourceProductsCache = spRows || [];
+    const allSourceProducts = spRows || [];
+    sourceProductsCache = allSourceProducts.filter((r) => r.canonical_product_id);
     canonicalProductsCache = cpRows || [];
+
+    // In-memory indexes so the matcher resolves Levels 1-3 with zero per-product
+    // DB reads. byOriginal covers every row; the normalised/token maps only hold
+    // rows that already carry a canonical match (Levels 2-3 require one).
+    const sourceAllCache = { byOriginal: new Map(), byNormalised: new Map(), byTokenSorted: new Map() };
+    for (const r of allSourceProducts) {
+      if (r.original_name != null && !sourceAllCache.byOriginal.has(r.original_name)) {
+        sourceAllCache.byOriginal.set(r.original_name, r);
+      }
+      if (r.canonical_product_id) {
+        if (r.normalised_name != null && !sourceAllCache.byNormalised.has(r.normalised_name)) {
+          sourceAllCache.byNormalised.set(r.normalised_name, r);
+        }
+        if (r.token_sorted_name != null && !sourceAllCache.byTokenSorted.has(r.token_sorted_name)) {
+          sourceAllCache.byTokenSorted.set(r.token_sorted_name, r);
+        }
+      }
+    }
+    // Deferred store_products writes — flushed once after the loop in a single batch.
+    const storeProductUpsertQueue = [];
 
     // 4. Match via store_products layer and batch DB writes.
     let matched = 0;
@@ -712,6 +732,8 @@ export default async function handler(req, res) {
       const matchResult = await matchProduct(rawName, store, supabase, fuzzball, {
         sourceProductsCache,
         canonicalProductsCache,
+        sourceAllCache,
+        upsertQueue: storeProductUpsertQueue,
       });
 
       // Approach A: even when a product has no canonical match, still write the price
@@ -788,6 +810,27 @@ export default async function handler(req, res) {
             storeName: storeBrand,
           });
         }
+      }
+    }
+
+    // Flush all deferred store_products writes in one batched upsert, then backfill
+    // store_product_id onto the price rows for any brand-new entries.
+    if (storeProductUpsertQueue.length > 0) {
+      const dedupSp = new Map();
+      for (const sp of storeProductUpsertQueue) dedupSp.set(sp.original_name, sp);
+      const spPayload = Array.from(dedupSp.values());
+      const spIdByName = new Map();
+      for (let i = 0; i < spPayload.length; i += 500) {
+        const chunk = spPayload.slice(i, i + 500);
+        const { data: upserted, error: spErr } = await supabase
+          .from('store_products')
+          .upsert(chunk, { onConflict: 'source,original_name' })
+          .select('id, original_name');
+        if (spErr) { errors.push(`store_products upsert: ${spErr.message}`); continue; }
+        for (const r of (upserted || [])) spIdByName.set(r.original_name, r.id);
+      }
+      for (const row of rowsToInsert) {
+        if (!row.store_product_id) row.store_product_id = spIdByName.get(row.product_name_raw) || null;
       }
     }
 
