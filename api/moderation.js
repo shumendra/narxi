@@ -2324,21 +2324,29 @@ const PRICE_EDITABLE_FIELDS = new Set([
   'place_name', 'place_address', 'city',
 ]);
 
-async function listApprovedPrices({ page = 0, pageSize = 50, query = '', city = null } = {}) {
+async function listApprovedPrices({ page = 0, pageSize = 50, query = '', city = null, sortBy = 'created_at', sortDir = 'desc', since = null, until = null } = {}) {
   const size = Math.min(Math.max(Number(pageSize) || 50, 1), 200);
   const from = Math.max(Number(page) || 0, 0) * size;
   const to = from + size - 1;
 
+  const SORTABLE = new Set(['created_at', 'receipt_date', 'price', 'product_name_raw']);
+  const orderCol = SORTABLE.has(String(sortBy)) ? String(sortBy) : 'created_at';
+  const ascending = String(sortDir) === 'asc';
+
   let q = supabase
     .from('prices')
-    .select('id, product_name_raw, price, unit_price, quantity, place_name, place_address, city, product_id, source, receipt_date, created_at', { count: 'exact' })
+    .select('id, product_name_raw, price, unit_price, quantity, place_name, place_address, city, product_id, source, price_scope, receipt_date, created_at', { count: 'exact' })
     .eq('status', 'approved')
-    .order('created_at', { ascending: false })
+    .order(orderCol, { ascending, nullsFirst: false })
     .range(from, to);
 
   const search = String(query || '').trim();
   if (search) q = q.ilike('product_name_raw', `%${search}%`);
   if (city) q = q.eq('city', city);
+  // Time-window filters apply to the chosen time column (created_at or receipt_date).
+  const timeCol = orderCol === 'receipt_date' ? 'receipt_date' : 'created_at';
+  if (since) q = q.gte(timeCol, since);
+  if (until) q = q.lte(timeCol, until);
 
   const { data, error, count } = await q;
   if (error) throw error;
@@ -2367,6 +2375,53 @@ async function deletePriceRow(id) {
   const { error } = await supabase.from('prices').delete().eq('id', id);
   if (error) throw error;
   return { deleted: 1 };
+}
+
+// Bulk-delete approved price rows by explicit id list (multi-select in the UI).
+async function deletePriceRowsMany(ids) {
+  const targetIds = Array.from(new Set(Array.isArray(ids) ? ids.filter(Boolean) : []));
+  if (targetIds.length === 0) return { deleted: 0 };
+
+  let deleted = 0;
+  for (const chunk of chunkArray(targetIds, BULK_DB_CHUNK_SIZE)) {
+    const { data, error } = await supabase
+      .from('prices')
+      .delete()
+      .in('id', chunk)
+      .select('id');
+    if (error) throw error;
+    deleted += Array.isArray(data) ? data.length : 0;
+  }
+  return { deleted };
+}
+
+// Delete every approved price row matching the current filter (the "Delete ALL N"
+// action). Selects matching ids in pages, then deletes them in chunks, so it can
+// clear thousands of duplicate rows without an unbounded single statement.
+async function deleteApprovedPricesByQuery({ query = '', city = null, since = null, until = null, timeCol = 'created_at' } = {}) {
+  const col = timeCol === 'receipt_date' ? 'receipt_date' : 'created_at';
+  const buildFilter = () => {
+    let q = supabase.from('prices').select('id').eq('status', 'approved');
+    const search = String(query || '').trim();
+    if (search) q = q.ilike('product_name_raw', `%${search}%`);
+    if (city) q = q.eq('city', city);
+    if (since) q = q.gte(col, since);
+    if (until) q = q.lte(col, until);
+    return q;
+  };
+
+  let deleted = 0;
+  // Loop: each pass grabs up to 1000 matching ids and deletes them, until none remain.
+  for (let guard = 0; guard < 1000; guard += 1) {
+    const { data, error } = await buildFilter().limit(1000);
+    if (error) throw error;
+    const ids = (data || []).map((r) => r.id).filter(Boolean);
+    if (ids.length === 0) break;
+    const result = await deletePriceRowsMany(ids);
+    deleted += result.deleted;
+    if (ids.length < 1000) break;
+  }
+  return { deleted };
 }
 
 // Brand / store management derived from the prices table (no `stores` table needed).
@@ -3258,6 +3313,10 @@ export default async function moderation(req, res) {
           pageSize: body.pageSize || 50,
           query: body.query || '',
           city: body.city || null,
+          sortBy: body.sortBy || 'created_at',
+          sortDir: body.sortDir || 'desc',
+          since: body.since || null,
+          until: body.until || null,
         });
         return send(res, 200, { ok: true, ...result });
       }
@@ -3267,6 +3326,20 @@ export default async function moderation(req, res) {
       }
       case 'deletePriceRow': {
         const result = await deletePriceRow(body.id);
+        return send(res, 200, { ok: true, ...result });
+      }
+      case 'deletePriceRowsMany': {
+        const result = await deletePriceRowsMany(body.ids || []);
+        return send(res, 200, { ok: true, ...result });
+      }
+      case 'deleteApprovedPricesByQuery': {
+        const result = await deleteApprovedPricesByQuery({
+          query: body.query || '',
+          city: body.city || null,
+          since: body.since || null,
+          until: body.until || null,
+          timeCol: body.timeCol || 'created_at',
+        });
         return send(res, 200, { ok: true, ...result });
       }
       case 'listBrandsFromPrices': {

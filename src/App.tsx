@@ -1786,6 +1786,12 @@ export default function App() {
   const [approvedPricesLoading, setApprovedPricesLoading] = useState(false);
   const [priceRowEdits, setPriceRowEdits] = useState<Record<string, { product_name_raw?: string; price?: string; unit_price?: string; quantity?: string; place_name?: string; place_address?: string; city?: string }>>({});
   const [expandedPriceRowId, setExpandedPriceRowId] = useState<string | null>(null);
+  // Time sorting + multi-select for the Products (approved prices) tab.
+  const [approvedPricesSortBy, setApprovedPricesSortBy] = useState<'created_at' | 'receipt_date' | 'price' | 'product_name_raw'>('created_at');
+  const [approvedPricesSortDir, setApprovedPricesSortDir] = useState<'asc' | 'desc'>('desc');
+  const [approvedPricesSince, setApprovedPricesSince] = useState('');
+  const [approvedPricesUntil, setApprovedPricesUntil] = useState('');
+  const [priceSelectedIds, setPriceSelectedIds] = useState<string[]>([]);
   // Brands derived from price data
   const [brandRows, setBrandRows] = useState<BrandRow[]>([]);
   const [brandsLoading, setBrandsLoading] = useState(false);
@@ -2712,15 +2718,77 @@ export default function App() {
     if (!isAdminUser || !telegramInitData) return;
     setApprovedPricesLoading(true);
     try {
-      const result = await callModerationApi('listApprovedPrices', { page, query, pageSize: 50 });
+      const result = await callModerationApi('listApprovedPrices', {
+        page,
+        query,
+        pageSize: 50,
+        sortBy: approvedPricesSortBy,
+        sortDir: approvedPricesSortDir,
+        since: approvedPricesSince || null,
+        until: approvedPricesUntil || null,
+      });
       setApprovedPrices((result.items || []) as ApprovedPriceRow[]);
       setApprovedPricesTotal(Number(result.total) || 0);
       setApprovedPricesPage(Number(result.page) || 0);
       setPriceRowEdits({});
+      setPriceSelectedIds([]);
     } catch {
       window.Telegram?.WebApp?.showAlert(t.moderationError);
     } finally {
       setApprovedPricesLoading(false);
+    }
+  };
+
+  const togglePriceSelect = (id: string) => {
+    setPriceSelectedIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
+  };
+  const selectAllPricesOnPage = () => setPriceSelectedIds(approvedPrices.map(r => r.id));
+  const clearPriceSelection = () => setPriceSelectedIds([]);
+
+  const handleDeleteSelectedPrices = async () => {
+    const ids = [...priceSelectedIds];
+    if (ids.length === 0) return;
+    const run = async () => {
+      try {
+        const result = await callModerationApi('deletePriceRowsMany', { ids });
+        const removed = Number(result.deleted) || 0;
+        setApprovedPrices(prev => prev.filter(r => !ids.includes(r.id)));
+        setApprovedPricesTotal(prev => Math.max(0, prev - removed));
+        setPriceSelectedIds([]);
+      } catch {
+        window.Telegram?.WebApp?.showAlert(t.moderationError);
+      }
+    };
+    if (window.Telegram?.WebApp?.showConfirm) {
+      window.Telegram.WebApp.showConfirm(`Delete ${ids.length} selected item(s)?`, (ok: boolean) => { if (ok) run(); });
+    } else {
+      await run();
+    }
+  };
+
+  const handleDeleteAllMatchingPrices = async () => {
+    const total = approvedPricesTotal;
+    if (total === 0) return;
+    const run = async () => {
+      setApprovedPricesLoading(true);
+      try {
+        await callModerationApi('deleteApprovedPricesByQuery', {
+          query: approvedPricesQuery,
+          since: approvedPricesSince || null,
+          until: approvedPricesUntil || null,
+          timeCol: approvedPricesSortBy === 'receipt_date' ? 'receipt_date' : 'created_at',
+        });
+        await fetchApprovedPrices(0, approvedPricesQuery);
+      } catch {
+        window.Telegram?.WebApp?.showAlert(t.moderationError);
+      } finally {
+        setApprovedPricesLoading(false);
+      }
+    };
+    if (window.Telegram?.WebApp?.showConfirm) {
+      window.Telegram.WebApp.showConfirm(`Delete ALL ${total} item(s) matching the current filter? This cannot be undone.`, (ok: boolean) => { if (ok) run(); });
+    } else {
+      await run();
     }
   };
 
@@ -6213,6 +6281,54 @@ export default function App() {
                   )}
                 </div>
 
+                <div className="flex flex-wrap items-end gap-2 text-[11px] text-stone-500">
+                  <label className="flex flex-col gap-0.5">Sort by
+                    <select
+                      value={approvedPricesSortBy}
+                      onChange={(e) => setApprovedPricesSortBy(e.target.value as typeof approvedPricesSortBy)}
+                      className="rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-xs text-stone-700"
+                    >
+                      <option value="created_at">Date added</option>
+                      <option value="receipt_date">Price date</option>
+                      <option value="price">Price</option>
+                      <option value="product_name_raw">Name</option>
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-0.5">Order
+                    <select
+                      value={approvedPricesSortDir}
+                      onChange={(e) => setApprovedPricesSortDir(e.target.value as typeof approvedPricesSortDir)}
+                      className="rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-xs text-stone-700"
+                    >
+                      <option value="desc">Newest / High first</option>
+                      <option value="asc">Oldest / Low first</option>
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-0.5">From
+                    <input type="date" value={approvedPricesSince} onChange={(e) => setApprovedPricesSince(e.target.value)} className="rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-xs text-stone-700" />
+                  </label>
+                  <label className="flex flex-col gap-0.5">To
+                    <input type="date" value={approvedPricesUntil} onChange={(e) => setApprovedPricesUntil(e.target.value)} className="rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-xs text-stone-700" />
+                  </label>
+                  <button onClick={() => fetchApprovedPrices(0, approvedPricesQuery)} className="rounded-lg bg-stone-700 px-3 py-1.5 text-xs font-semibold text-white">Apply</button>
+                  {(approvedPricesSince || approvedPricesUntil) && (
+                    <button onClick={() => { setApprovedPricesSince(''); setApprovedPricesUntil(''); setTimeout(() => fetchApprovedPrices(0, approvedPricesQuery), 0); }} className="rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-stone-600">Reset dates</button>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button onClick={selectAllPricesOnPage} className="rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-stone-600">Select page</button>
+                  {priceSelectedIds.length > 0 && (
+                    <button onClick={clearPriceSelection} className="rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-stone-600">Clear</button>
+                  )}
+                  {priceSelectedIds.length > 0 && (
+                    <button onClick={handleDeleteSelectedPrices} className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white">✕ Delete {priceSelectedIds.length}</button>
+                  )}
+                  {approvedPricesTotal > 0 && (
+                    <button onClick={handleDeleteAllMatchingPrices} className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700">Delete ALL {approvedPricesTotal} matching</button>
+                  )}
+                </div>
+
                 <div className="flex items-center justify-between text-xs text-stone-500">
                   <span>{approvedPricesTotal} approved item(s)</span>
                   <div className="flex items-center gap-2">
@@ -6241,6 +6357,14 @@ export default function App() {
                     <table className="w-full text-xs">
                       <thead className="bg-stone-50 text-stone-500">
                         <tr>
+                          <th className="px-2 py-2 text-center font-semibold">
+                            <input
+                              type="checkbox"
+                              checked={approvedPrices.length > 0 && priceSelectedIds.length === approvedPrices.length}
+                              onChange={(e) => { if (e.target.checked) selectAllPricesOnPage(); else clearPriceSelection(); }}
+                              className="h-4 w-4"
+                            />
+                          </th>
                           <th className="px-2 py-2 text-left font-semibold">Product</th>
                           <th className="px-2 py-2 text-right font-semibold">Price</th>
                           <th className="px-2 py-2 text-left font-semibold">Store</th>
@@ -6257,6 +6381,14 @@ export default function App() {
                           return (
                             <React.Fragment key={row.id}>
                             <tr className="border-t border-stone-100">
+                              <td className="px-2 py-1.5 text-center">
+                                <input
+                                  type="checkbox"
+                                  checked={priceSelectedIds.includes(row.id)}
+                                  onChange={() => togglePriceSelect(row.id)}
+                                  className="h-4 w-4"
+                                />
+                              </td>
                               <td className="px-2 py-1.5">
                                 <input
                                   value={edit.product_name_raw !== undefined ? edit.product_name_raw : (row.product_name_raw || '')}
@@ -6285,7 +6417,7 @@ export default function App() {
                             </tr>
                             {expanded && (
                               <tr className="border-t border-stone-100 bg-stone-50">
-                                <td colSpan={6} className="px-3 py-3">
+                                <td colSpan={7} className="px-3 py-3">
                                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                                     <label className="flex flex-col gap-0.5 text-[11px] text-stone-500">Product name
                                       <input value={edit.product_name_raw !== undefined ? edit.product_name_raw : (row.product_name_raw || '')} onChange={(e) => handlePriceRowFieldChange(row.id, 'product_name_raw', e.target.value)} className="rounded border border-stone-200 px-2 py-1 text-xs text-stone-800" />
