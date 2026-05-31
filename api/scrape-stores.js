@@ -159,6 +159,11 @@ const HTTP_CONCURRENCY = 16;
 const KORZINKA_CONCURRENCY = 20;
 const DB_CHUNK_SIZE = 250;
 
+// Korzinka scans this category-id range. Exposed so the handler can split it into
+// batches (the full ~660-id scan + ~23k-row ingest can exceed the function limit).
+const KORZINKA_SCAN_START = 750;
+const KORZINKA_SCAN_END = 1410;
+
 function chunkArray(values, size) {
   const chunks = [];
   for (let i = 0; i < values.length; i += size) {
@@ -448,10 +453,12 @@ async function scrapeMakro() {
 // The Korzinka catalog is accessible via the mobile endpoint with catalog_category_id values.
 // These IDs cluster from ~800 to ~1410. Scanning this range yields ~21k unique products.
 // The top-level /api/catalogs/categories response only has 8 promotional categories (~260 embedded).
-async function scrapeKorzinka() {
-  const KORZINKA_SCAN_START = 750;
-  const KORZINKA_SCAN_END = 1410;
-  const ids = Array.from({ length: KORZINKA_SCAN_END - KORZINKA_SCAN_START + 1 }, (_, i) => KORZINKA_SCAN_START + i);
+async function scrapeKorzinka(range) {
+  const start = Number.isFinite(range?.start) ? Math.max(KORZINKA_SCAN_START, range.start) : KORZINKA_SCAN_START;
+  const end = Number.isFinite(range?.end) ? Math.min(KORZINKA_SCAN_END, range.end) : KORZINKA_SCAN_END;
+  const ids = start > end
+    ? []
+    : Array.from({ length: end - start + 1 }, (_, i) => start + i);
 
   const categoryRows = await runWithConcurrency(ids, KORZINKA_CONCURRENCY, async (ccid) => {
     const res = await fetch('https://catalog.korzinka.uz/api/mobile/catalogs/category/products', {
@@ -523,6 +530,22 @@ async function archiveStoreRows(sourceTag, rowIds, errors) {
   return archived;
 }
 
+// Optional price columns that may not exist yet in an unmigrated database.
+// If an insert fails because one of these columns is missing from the schema,
+// we strip it from every row and retry so ingestion still succeeds.
+const OPTIONAL_PRICE_COLUMNS = ['price_scope'];
+
+function isMissingColumnError(error, column) {
+  const msg = String(error?.message || '');
+  return msg.includes(column) && /(schema cache|could not find|column)/i.test(msg);
+}
+
+function stripColumns(row, columns) {
+  const copy = { ...row };
+  for (const col of columns) delete copy[col];
+  return copy;
+}
+
 async function insertPriceRows(rows, errors) {
   const payload = Array.isArray(rows) ? rows : [];
   if (payload.length === 0) {
@@ -531,19 +554,40 @@ async function insertPriceRows(rows, errors) {
 
   let inserted = 0;
   const successfulProductIds = new Set();
+  // Columns confirmed missing from this DB; dropped from all subsequent inserts.
+  const droppedColumns = new Set();
+
+  const prepare = (row) => (droppedColumns.size > 0 ? stripColumns(row, droppedColumns) : row);
 
   for (const chunk of chunkArray(payload, DB_CHUNK_SIZE)) {
-    const { error } = await supabase.from('prices').insert(chunk);
+    let preparedChunk = chunk.map(prepare);
+    let { error } = await supabase.from('prices').insert(preparedChunk);
+
+    // If the chunk failed because an optional column is missing, learn it, strip
+    // it from this (and every future) chunk, and retry once.
+    if (error) {
+      for (const col of OPTIONAL_PRICE_COLUMNS) {
+        if (!droppedColumns.has(col) && isMissingColumnError(error, col)) {
+          droppedColumns.add(col);
+        }
+      }
+      if (droppedColumns.size > 0) {
+        preparedChunk = chunk.map(prepare);
+        ({ error } = await supabase.from('prices').insert(preparedChunk));
+      }
+    }
+
     if (!error) {
-      inserted += chunk.length;
-      for (const row of chunk) {
+      inserted += preparedChunk.length;
+      for (const row of preparedChunk) {
         if (row?.product_id) successfulProductIds.add(row.product_id);
       }
       continue;
     }
 
+    // Fall back to per-row inserts so one bad row can't sink the whole chunk.
     for (const row of chunk) {
-      const { error: rowError } = await supabase.from('prices').insert(row);
+      const { error: rowError } = await supabase.from('prices').insert(prepare(row));
       if (rowError) {
         errors.push({
           phase: 'insert',
@@ -567,14 +611,28 @@ export default async function handler(req, res) {
   if (!supabase) return send(res, 500, { ok: false, error: 'SUPABASE_NOT_CONFIGURED' });
   if (!serviceRoleKey) return send(res, 500, { ok: false, error: 'SUPABASE_SERVICE_ROLE_KEY required' });
 
-  const { admin_id, store } = req.body || {};
-  if (!admin_id || !adminTelegramIds.includes(String(admin_id))) {
+  const { admin_id, store } = req.body || {};  if (!admin_id || !adminTelegramIds.includes(String(admin_id))) {
     return send(res, 403, { ok: false, error: 'Unauthorized' });
   }
 
   const validStores = ['makro', 'korzinka', ...Object.keys(YANDEX_STORES).map(k => `yandex_${k}`)];
   if (!store || !validStores.includes(store)) {
     return send(res, 400, { ok: false, error: `Invalid store. Use one of: ${validStores.join(', ')}` });
+  }
+
+  // Optional batching (korzinka only): split the category-id scan into N batches so
+  // the large ~23k-row ingest fits inside the function time limit. `batches` is the
+  // total number of slices; `batch` is the 1-based slice to run now (default: whole).
+  const totalBatches = Math.max(1, Math.min(Number(req.body?.batches) || 1, 50));
+  const batchIndex = Math.max(1, Math.min(Number(req.body?.batch) || 1, totalBatches));
+  const isPartialRun = store === 'korzinka' && totalBatches > 1;
+  let korzinkaRange = null;
+  if (store === 'korzinka' && totalBatches > 1) {
+    const span = KORZINKA_SCAN_END - KORZINKA_SCAN_START + 1;
+    const per = Math.ceil(span / totalBatches);
+    const start = KORZINKA_SCAN_START + (batchIndex - 1) * per;
+    const end = Math.min(KORZINKA_SCAN_END, start + per - 1);
+    korzinkaRange = { start, end };
   }
 
   try {
@@ -598,7 +656,7 @@ export default async function handler(req, res) {
       const makroStores = await fetchMakroStores();
       stores = makroStores.length > 0 ? makroStores : [CHAIN_REPRESENTATIVE_STORES.makro];
     } else if (store === 'korzinka') {
-      storeProducts = await scrapeKorzinka();
+      storeProducts = await scrapeKorzinka(korzinkaRange);
       const korzinkaStores = await fetchKorzinkaStores();
       stores = korzinkaStores.length > 0 ? korzinkaStores : [CHAIN_REPRESENTATIVE_STORES.korzinka];
     } else if (isYandex) {
@@ -732,6 +790,7 @@ export default async function handler(req, res) {
     const now = new Date().toISOString();
     const processedBranchKeys = new Set();
     const rowsToInsert = [];
+    const touchedKeys = new Set();
     const aliasRowsByKey = new Map();
 
     for (const sp of storeProducts) {
@@ -776,6 +835,7 @@ export default async function handler(req, res) {
 
         // Diff against the current row for this (product × city).
         const diffKey = `${dedupId}|${String(city || '').trim().toLowerCase()}`;
+        touchedKeys.add(diffKey);
         const existingRows = currentByKey.get(diffKey);
         const samePriceRow = existingRows && existingRows.find((e) => e.price === Number(sp.price));
         if (samePriceRow) {
@@ -844,7 +904,22 @@ export default async function handler(req, res) {
 
     // Archive every current row we did NOT retain: price changes (old value kept as
     // history), delisted products, and any duplicate extras for the same key.
-    const archiveIds = new Set(allCurrentIds.filter((id) => !keepIds.has(id)));
+    //
+    // On a PARTIAL (batched) run we only scraped a subset of the catalog, so a row we
+    // didn't see is NOT necessarily delisted — it may just belong to another batch.
+    // We therefore archive only rows for keys this batch actually touched (price
+    // changes/dupes), never treating un-scraped keys as delisted.
+    let archiveIds;
+    if (isPartialRun) {
+      archiveIds = new Set();
+      for (const key of touchedKeys) {
+        for (const entry of currentByKey.get(key) || []) {
+          if (!keepIds.has(entry.id)) archiveIds.add(entry.id);
+        }
+      }
+    } else {
+      archiveIds = new Set(allCurrentIds.filter((id) => !keepIds.has(id)));
+    }
     const archived = await archiveStoreRows(sourceTag, archiveIds, errors);
     const insertResult = await insertPriceRows(rowsToInsert, errors);
     const inserted = insertResult.inserted;
@@ -859,6 +934,7 @@ export default async function handler(req, res) {
 
     const durationMs = Date.now() - startedAt;
 
+    const hasMore = isPartialRun && batchIndex < totalBatches;
     return send(res, 200, {
       ok: true,
       store,
@@ -871,9 +947,13 @@ export default async function handler(req, res) {
       unchanged,
       archived,
       queued: rowsToInsert.length,
+      batch: isPartialRun ? batchIndex : undefined,
+      batches: isPartialRun ? totalBatches : undefined,
+      hasMore: isPartialRun ? hasMore : undefined,
+      nextBatch: hasMore ? batchIndex + 1 : undefined,
       durationMs,
       errors: errors.length > 0 ? errors.slice(0, 10) : undefined,
-      message: `Scraped ${storeProducts.length} products from ${store} across ${stores.length} branches (${branchCities.length} ${branchCities.length === 1 ? 'city' : 'cities'}): ${inserted} new/changed prices written, ${unchanged} unchanged kept, ${archived} prior prices archived to history (${matched} matched to canonical, ${unmatched} unmatched) in ${Math.round(durationMs / 1000)}s.`,
+      message: `Scraped ${storeProducts.length} products from ${store}${isPartialRun ? ` (batch ${batchIndex}/${totalBatches})` : ''} across ${stores.length} branches (${branchCities.length} ${branchCities.length === 1 ? 'city' : 'cities'}): ${inserted} new/changed prices written, ${unchanged} unchanged kept, ${archived} prior prices archived to history (${matched} matched to canonical, ${unmatched} unmatched) in ${Math.round(durationMs / 1000)}s.${hasMore ? ` Run batch ${batchIndex + 1}/${totalBatches} next.` : ''}`,
     });
   } catch (err) {
     console.error('scrape-stores error:', err);

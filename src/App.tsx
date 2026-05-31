@@ -2212,11 +2212,11 @@ export default function App() {
     return parts.join(' · ');
   };
 
-  const runScrapeStoreRequest = async (store: ScrapeStoreKey) => {
+  const runScrapeStoreRequest = async (store: ScrapeStoreKey, opts?: { batch?: number; batches?: number }) => {
     const res = await fetch('/api/scrape-stores', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ admin_id: telegramUserId, store }),
+      body: JSON.stringify({ admin_id: telegramUserId, store, ...(opts || {}) }),
     });
     const data = await res.json();
     if (!res.ok || !data?.ok) {
@@ -2225,12 +2225,35 @@ export default function App() {
     return data;
   };
 
+  // Korzinka's catalog (~23k rows) is too large for a single function invocation,
+  // so it is ingested in sequential batches that are accumulated into one summary.
+  const KORZINKA_BATCHES = 4;
+  const runScrapeStoreBatched = async (store: ScrapeStoreKey) => {
+    if (store !== 'korzinka') return runScrapeStoreRequest(store);
+
+    const totals = { inserted: 0, matched: 0, total: 0, unmatched: 0, skippedDup: 0, archived: 0, durationMs: 0, errors: [] as any[] };
+    for (let batch = 1; batch <= KORZINKA_BATCHES; batch++) {
+      setScrapeResult(`korzinka: batch ${batch}/${KORZINKA_BATCHES}…`);
+      const data = await runScrapeStoreRequest(store, { batch, batches: KORZINKA_BATCHES });
+      totals.inserted += Number(data?.inserted) || 0;
+      totals.matched += Number(data?.matched) || 0;
+      totals.total += Number(data?.total) || 0;
+      totals.unmatched += Number(data?.unmatched) || 0;
+      totals.skippedDup += Number(data?.skippedDup) || 0;
+      totals.archived += Number(data?.archived) || 0;
+      totals.durationMs += Number(data?.durationMs) || 0;
+      if (Array.isArray(data?.errors)) totals.errors.push(...data.errors);
+      if (!data?.hasMore) break;
+    }
+    return totals;
+  };
+
   const handleScrapeStore = async (store: ScrapeStoreKey) => {
     if (!isAdminUser || scrapeLoadingStores.length > 0) return;
     setScrapeLoadingStores([store]);
     setScrapeResult(null);
     try {
-      const data = await runScrapeStoreRequest(store);
+      const data = await runScrapeStoreBatched(store);
       setScrapeResult(formatScrapeSummary(store, data));
       await fetchModerationItems();
     } catch (err: any) {
@@ -2254,7 +2277,7 @@ export default function App() {
       for (const store of SCRAPE_STORES) {
         setScrapeLoadingStores([store]);
         try {
-          const data = await runScrapeStoreRequest(store);
+          const data = await runScrapeStoreBatched(store);
           settled.push({ store, ok: true, data });
         } catch (error: any) {
           settled.push({ store, ok: false, error: error?.message || 'unknown' });
