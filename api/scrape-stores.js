@@ -699,47 +699,37 @@ export default async function handler(req, res) {
 
     // Preload current store_api rows for this source to diff against the new scrape.
     const sourceTag = `store_api_${store}`;
-    // Chain model: an API product is stored as ONE chain-wide row per (product × city)
-    // with price_scope='chain' and no coordinates — NOT duplicated across every branch.
-    // The Mini App expands each chain row to the brand's branches at search time.
+    // Chain model: an API product is stored as ONE blanket chain-wide row
+    // (price_scope='chain', city=null, no coordinates) that applies to EVERY branch
+    // in EVERY city. It is NOT duplicated per city — the Mini App expands each chain
+    // row to all of the brand's branches (across all cities) at search time, and any
+    // on-the-ground (location-scoped) price submitted by people supersedes it.
     //
     // Price-history diff: instead of archiving and re-inserting everything on each run
-    // (which churns the table and creates duplicates), we compare each scraped
-    // (product × city) against the current row:
-    //   • same price  → keep the existing row untouched (no duplicate, no history entry)
+    // (which churns the table and creates duplicates), we compare each scraped product
+    // against the current row(s) for that product:
+    //   • same price  → keep one existing row untouched (no duplicate, no history entry)
     //   • new price    → archive the old row to history_* (preserving the prior price for
     //                    trend analysis) and insert the new current row
     //   • disappeared  → archive the stale row to history_*
+    // Keying purely by product (ignoring city) also collapses any legacy per-city
+    // duplicate rows from older scrapes down to a single blanket row.
     const { data: currentApiRows } = await supabase
       .from('prices')
       .select('id, product_id, product_name_raw, city, price')
       .eq('source', sourceTag);
 
-    const currentByKey = new Map(); // `${keyId}|${city}` -> [{ id, price }]
+    const currentByKey = new Map(); // `${keyId}` -> [{ id, price }]
     const allCurrentIds = [];
     for (const row of currentApiRows || []) {
       allCurrentIds.push(row.id);
       const keyId = row.product_id || `raw:${normalizeProductNameKey(row.product_name_raw)}`;
-      const key = `${keyId}|${String(row.city || '').trim().toLowerCase()}`;
-      const list = currentByKey.get(key) || [];
+      const list = currentByKey.get(keyId) || [];
       list.push({ id: row.id, price: Number(row.price) });
-      currentByKey.set(key, list);
+      currentByKey.set(keyId, list);
     }
     // Ids of current rows to retain as-is (unchanged price). Everything else is archived.
     const keepIds = new Set();
-
-    const defaultCity = normalizeStoreCity(stores?.[0]?.city, stores?.[0]?.address);
-
-    // Distinct cities the brand operates in. Collapses dozens of branches into a
-    // handful of city-scoped chain rows; falls back to the representative city.
-    const branchCities = [];
-    const seenCities = new Set();
-    for (const branch of stores) {
-      const c = normalizeStoreCity(branch.city, branch.address || '') || defaultCity;
-      const key = String(c || '').trim().toLowerCase();
-      if (key && !seenCities.has(key)) { seenCities.add(key); branchCities.push(c); }
-    }
-    if (branchCities.length === 0 && defaultCity) branchCities.push(defaultCity);
 
     // 3b. Pre-fetch matcher caches once (avoids repeated DB queries inside the per-product loop).
     //     sourceProductsCache — all store_products already matched for this source (Level 4 in matcher)
@@ -813,60 +803,56 @@ export default async function handler(req, res) {
       if (!matchedProductId) unmatched += 1;
       const dedupId = matchedProductId || `raw:${normalizeProductNameKey(rawName)}`;
 
-      // Chain model: one chain-wide row per city the brand operates in. No
-      // per-branch coordinates — the Mini App resolves the nearest branch at
-      // search time from the live store directory.
+      // Chain model: a SINGLE blanket chain-wide row per product (city=null, no
+      // coordinates) that applies to every branch in every city. The Mini App
+      // resolves the brand's branches across all cities at search time.
       let queuedThisProduct = false;
-      for (const city of branchCities) {
-        const placeName = storeBrand;
-        const placeAddress = storeBrand;
+      const placeName = storeBrand;
+      const placeAddress = storeBrand;
 
-        const branchKey = buildStoreBranchKey({
-          productId: dedupId,
-          city,
-          placeName,
-          placeAddress,
-        });
-        if (processedBranchKeys.has(branchKey)) {
-          skippedDup++;
-          continue;
-        }
+      const branchKey = buildStoreBranchKey({
+        productId: dedupId,
+        city: '',
+        placeName,
+        placeAddress,
+      });
+      if (processedBranchKeys.has(branchKey)) {
+        skippedDup++;
+      } else {
         processedBranchKeys.add(branchKey);
 
-        // Diff against the current row for this (product × city).
-        const diffKey = `${dedupId}|${String(city || '').trim().toLowerCase()}`;
-        touchedKeys.add(diffKey);
-        const existingRows = currentByKey.get(diffKey);
+        // Diff against the current row(s) for this product (city-blind).
+        touchedKeys.add(dedupId);
+        const existingRows = currentByKey.get(dedupId);
         const samePriceRow = existingRows && existingRows.find((e) => e.price === Number(sp.price));
         if (samePriceRow) {
           // Unchanged price — retain the existing row, write no duplicate, log no history.
           keepIds.add(samePriceRow.id);
           unchanged++;
           queuedThisProduct = true; // keep alias upkeep for matched products
-          continue;
+        } else {
+          // New product OR changed price: the old row(s) for this product get archived
+          // to history below (price preserved), and we insert the fresh current row.
+          rowsToInsert.push({
+            product_name_raw: rawName,
+            product_id: matchedProductId,
+            store_product_id: storeProductId,
+            price: sp.price,
+            quantity: 1,
+            unit_price: sp.price,
+            city: null,
+            place_name: placeName,
+            place_address: placeAddress,
+            receipt_date: now,
+            source: sourceTag,
+            status: 'approved',
+            price_scope: 'chain',
+            submitted_by: String(admin_id),
+            latitude: null,
+            longitude: null,
+          });
+          queuedThisProduct = true;
         }
-        // New product OR changed price: the old row(s) for this key get archived to
-        // history below (price preserved), and we insert the fresh current row.
-        rowsToInsert.push({
-          product_name_raw: rawName,
-          product_id: matchedProductId,
-          store_product_id: storeProductId,
-          price: sp.price,
-          quantity: 1,
-          unit_price: sp.price,
-          city,
-          place_name: placeName,
-          place_address: placeAddress,
-          receipt_date: now,
-          source: sourceTag,
-          status: 'approved',
-          price_scope: 'chain',
-          submitted_by: String(admin_id),
-          latitude: null,
-          longitude: null,
-        });
-
-        queuedThisProduct = true;
       }
 
       if (queuedThisProduct && matchedProductId) {
@@ -953,7 +939,7 @@ export default async function handler(req, res) {
       nextBatch: hasMore ? batchIndex + 1 : undefined,
       durationMs,
       errors: errors.length > 0 ? errors.slice(0, 10) : undefined,
-      message: `Scraped ${storeProducts.length} products from ${store}${isPartialRun ? ` (batch ${batchIndex}/${totalBatches})` : ''} across ${stores.length} branches (${branchCities.length} ${branchCities.length === 1 ? 'city' : 'cities'}): ${inserted} new/changed prices written, ${unchanged} unchanged kept, ${archived} prior prices archived to history (${matched} matched to canonical, ${unmatched} unmatched) in ${Math.round(durationMs / 1000)}s.${hasMore ? ` Run batch ${batchIndex + 1}/${totalBatches} next.` : ''}`,
+      message: `Scraped ${storeProducts.length} products from ${store}${isPartialRun ? ` (batch ${batchIndex}/${totalBatches})` : ''} as blanket chain-wide prices (all branches in all cities): ${inserted} new/changed prices written, ${unchanged} unchanged kept, ${archived} prior prices archived to history (${matched} matched to canonical, ${unmatched} unmatched) in ${Math.round(durationMs / 1000)}s.${hasMore ? ` Run batch ${batchIndex + 1}/${totalBatches} next.` : ''}`,
     });
   } catch (err) {
     console.error('scrape-stores error:', err);

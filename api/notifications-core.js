@@ -68,7 +68,7 @@ function buildWeeklyMessage(user, stats, weeklyReceipts, peopleHelped) {
       `👥 Ваши данные помогли: ${peopleHelped || 0} людям\n` +
       `🔥 Серия: ${stats?.current_streak_weeks || 0} недель\n\n` +
       `💡 Совет на следующую неделю:\nПроверьте цены в соседнем районе, часто разница 10-20%\n\n` +
-      `👉 @NarxiUzbBot`
+      `👉 @NarxiUzBot`
     );
   }
 
@@ -80,7 +80,7 @@ function buildWeeklyMessage(user, stats, weeklyReceipts, peopleHelped) {
       `👥 Your data helped: ${peopleHelped || 0} people\n` +
       `🔥 Streak: ${stats?.current_streak_weeks || 0} weeks\n\n` +
       `💡 Tip for next week:\nCheck nearby districts, prices often vary by 10-20%\n\n` +
-      `👉 @NarxiUzbBot`
+      `👉 @NarxiUzBot`
     );
   }
 
@@ -91,7 +91,7 @@ function buildWeeklyMessage(user, stats, weeklyReceipts, peopleHelped) {
     `👥 Sizning ma'lumotlaringiz ${peopleHelped || 0} kishiga yordam berdi\n` +
     `🔥 Ketma-ket: ${stats?.current_streak_weeks || 0} hafta\n\n` +
     `💡 Keyingi hafta maslahati:\nYaqin hududlardagi narxlarni ham tekshirib turing\n\n` +
-    `👉 @NarxiUzbBot`
+    `👉 @NarxiUzBot`
   );
 }
 

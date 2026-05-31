@@ -1993,7 +1993,7 @@ export default function App() {
         .from('prices')
         .select('*')
         .eq('product_name_raw', product.name_uz)
-        .eq('city', selectedCity)
+        .or(`city.eq.${selectedCity},city.is.null`)
         .not('source', 'like', 'history_%')
         .order('price', { ascending: true })
         .limit(200);
@@ -2009,7 +2009,7 @@ export default function App() {
         .from('prices')
         .select('*')
         .eq('product_id', product.id)
-        .eq('city', selectedCity)
+        .or(`city.eq.${selectedCity},city.is.null`)
         .not('source', 'like', 'history_%')
         .order('price', { ascending: true })
         .limit(200),

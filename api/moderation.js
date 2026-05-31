@@ -2360,7 +2360,9 @@ async function listApprovedPrices({ page = 0, pageSize = 50, query = '', city = 
       .range(from, to);
     const search = String(query || '').trim();
     if (search) q = q.ilike('product_name_raw', `%${search}%`);
-    if (city) q = q.eq('city', city);
+    // Blanket chain prices have city=null and apply to every city, so include them
+    // alongside the selected city instead of filtering them out.
+    if (city) q = q.or(`city.eq.${city},city.is.null`);
     if (since) q = q.gte(timeCol, since);
     if (until) {
       if (untilExclusive) q = q.lt(timeCol, untilExclusive);
