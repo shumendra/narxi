@@ -2834,8 +2834,23 @@ export default function App() {
     const doRevert = async () => {
       setApiRunReverting(true);
       try {
-        const result = await callModerationApi('revertApiRun', { source: run.source, since: run.since });
-        const msg = `Reverted ${run.store}: ${Number(result?.deletedPrices) || 0} price(s) removed, ${Number(result?.restoredPrices) || 0} prior price(s) restored, ${Number(result?.deletedProducts) || 0} product(s) deleted.`;
+        // A run can contain 100k+ rows; the backend reverts a bounded batch per call
+        // and reports `remaining`, so loop until the whole run is gone.
+        let deletedPrices = 0;
+        let restoredPrices = 0;
+        let deletedProducts = 0;
+        const MAX_LOOPS = 200; // safety stop (200 × 5k = 1M rows)
+        for (let i = 0; i < MAX_LOOPS; i++) {
+          const result = await callModerationApi('revertApiRun', { source: run.source, since: run.since });
+          deletedPrices += Number(result?.deletedPrices) || 0;
+          restoredPrices += Number(result?.restoredPrices) || 0;
+          deletedProducts += Number(result?.deletedProducts) || 0;
+          const remaining = Number(result?.remaining) || 0;
+          if (result?.done || remaining === 0) break;
+          setScrapeResult(`Undoing ${run.store}: ${deletedPrices} removed so far, ${remaining} remaining…`);
+        }
+        const msg = `Reverted ${run.store}: ${deletedPrices} price(s) removed, ${restoredPrices} prior price(s) restored, ${deletedProducts} product(s) deleted.`;
+        setScrapeResult(msg);
         window.Telegram?.WebApp?.showAlert(msg);
         await Promise.all([fetchApprovedPrices(0, approvedPricesQuery), fetchLastApiRun()]);
       } catch (err) {

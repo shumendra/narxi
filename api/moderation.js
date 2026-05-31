@@ -2473,22 +2473,29 @@ async function getLastApiRun() {
   const lastRunAt = latestRows[0].created_at;
 
   // Walk created_at descending for this source until a gap larger than RUN_GAP_MS,
-  // so we isolate just the last run regardless of how often the scraper runs.
-  const { data: stamps, error: stampsErr } = await supabase
-    .from('prices')
-    .select('created_at')
-    .eq('source', source)
-    .order('created_at', { ascending: false })
-    .limit(20000);
-  if (stampsErr) throw stampsErr;
-
+  // paging through ALL rows so very large runs (100k+ rows) are fully covered and the
+  // returned `since` spans the whole run (not just the newest page).
   let since = lastRunAt;
   let prev = new Date(lastRunAt).getTime();
-  for (const row of stamps || []) {
-    const t = new Date(row.created_at).getTime();
-    if (prev - t > RUN_GAP_MS) break;
-    since = row.created_at;
-    prev = t;
+  let stampFrom = 0;
+  let foundGap = false;
+  while (!foundGap) {
+    const { data: stamps, error: stampsErr } = await supabase
+      .from('prices')
+      .select('created_at')
+      .eq('source', source)
+      .order('created_at', { ascending: false })
+      .range(stampFrom, stampFrom + PAGE_SIZE - 1);
+    if (stampsErr) throw stampsErr;
+    const page = stamps || [];
+    for (const row of page) {
+      const t = new Date(row.created_at).getTime();
+      if (prev - t > RUN_GAP_MS) { foundGap = true; break; }
+      since = row.created_at;
+      prev = t;
+    }
+    if (page.length < PAGE_SIZE) break;
+    stampFrom += PAGE_SIZE;
   }
 
   const { count, error: countErr } = await supabase
@@ -2519,6 +2526,12 @@ function buildPriceRunKey(row) {
 // Revert the most recent scrape run for a source: delete the prices it inserted and,
 // where an older price was archived to history, restore that prior price. Products
 // created only by this run (no remaining prices) are deleted.
+//
+// A single run can contain 100k+ rows, which cannot be processed in one serverless
+// invocation. This therefore handles a BOUNDED batch per call and reports `remaining`
+// so the caller can loop until the run is fully reverted (`done: true`).
+const REVERT_BATCH_MAX = 5000;
+
 async function revertApiRun({ source, since } = {}) {
   const src = String(source || '').trim();
   if (!src || !src.startsWith(API_SOURCE_PREFIX)) {
@@ -2534,24 +2547,45 @@ async function revertApiRun({ source, since } = {}) {
   }
   const historySource = `history_${src}`;
 
-  // 1. Rows inserted by this run.
-  const newRows = await fetchAllPages((from, to) => (
-    supabase
-      .from('prices')
-      .select('id, product_id, product_name_raw, city, price, created_at')
-      .eq('source', src)
-      .gte('created_at', sinceTs)
-      .range(from, to)
-  ));
+  // 1. A bounded batch of rows inserted by this run (newest first).
+  const { data: newRowsRaw, error: newErr } = await supabase
+    .from('prices')
+    .select('id, product_id, product_name_raw, city, price, created_at')
+    .eq('source', src)
+    .gte('created_at', sinceTs)
+    .order('created_at', { ascending: false })
+    .limit(REVERT_BATCH_MAX);
+  if (newErr) throw newErr;
+  const newRows = newRowsRaw || [];
 
-  // 2. All archived history rows for this source (the prior prices).
-  const histRows = await fetchAllPages((from, to) => (
-    supabase
+  if (newRows.length === 0) {
+    return { source: src, deletedPrices: 0, restoredPrices: 0, deletedProducts: 0, remaining: 0, done: true };
+  }
+
+  // 2. History rows for THIS batch only (scoped by product_id / raw name → bounded).
+  const batchProductIds = Array.from(new Set(newRows.filter(r => r.product_id).map(r => String(r.product_id))));
+  const batchRawNames = Array.from(new Set(newRows.filter(r => !r.product_id).map(r => r.product_name_raw).filter(Boolean)));
+
+  const histRows = [];
+  for (const chunk of chunkArray(batchProductIds, 200)) {
+    const { data, error } = await supabase
       .from('prices')
       .select('id, product_id, product_name_raw, city, price, created_at')
       .eq('source', historySource)
-      .range(from, to)
-  ));
+      .in('product_id', chunk);
+    if (error) throw error;
+    histRows.push(...(data || []));
+  }
+  for (const chunk of chunkArray(batchRawNames, 200)) {
+    const { data, error } = await supabase
+      .from('prices')
+      .select('id, product_id, product_name_raw, city, price, created_at')
+      .eq('source', historySource)
+      .is('product_id', null)
+      .in('product_name_raw', chunk);
+    if (error) throw error;
+    histRows.push(...(data || []));
+  }
 
   // Group history by product+city, newest first.
   const histMap = new Map();
@@ -2582,7 +2616,7 @@ async function revertApiRun({ source, since } = {}) {
     }
   }
 
-  // 3. Delete the run's inserted price rows.
+  // 3. Delete this batch's inserted price rows.
   const deletedResult = await deletePriceRowsMany(deleteNewIds);
 
   // 4. Restore prior prices (flip history_* source back to the live source).
@@ -2597,29 +2631,39 @@ async function revertApiRun({ source, since } = {}) {
     restored += Array.isArray(data) ? data.length : 0;
   }
 
-  // 5. Delete products that have no remaining prices after the revert.
-  let deletedProducts = 0;
-  for (const productId of orphanCandidateProductIds) {
-    const { count, error } = await supabase
-      .from('prices')
-      .select('*', { count: 'exact', head: true })
-      .eq('product_id', productId);
-    if (error) throw error;
-    if ((count || 0) === 0) {
-      try {
-        const res = await deleteProduct(productId);
-        deletedProducts += Number(res?.deletedCount) || 0;
-      } catch (e) {
-        if (Number(e?.statusCode) !== 404) throw e;
-      }
-    }
+  // 5. Delete products orphaned by this revert — BULK, not per-product. A candidate is
+  //    an orphan only if it has ZERO remaining price rows (any source) after the deletes
+  //    above. We page fully (fetchAllPages) so presence is never missed by row limits.
+  const candidateIds = Array.from(orphanCandidateProductIds);
+  const stillHavePrices = new Set();
+  for (const chunk of chunkArray(candidateIds, 300)) {
+    const present = await fetchAllPages((from, to) => (
+      supabase.from('prices').select('product_id').in('product_id', chunk).range(from, to)
+    ));
+    for (const r of present) if (r.product_id) stillHavePrices.add(String(r.product_id));
   }
+  const orphanIds = candidateIds.filter((id) => !stillHavePrices.has(id));
+  let deletedProducts = 0;
+  if (orphanIds.length > 0) {
+    const res = await deleteProductsMany(orphanIds);
+    deletedProducts = Number(res?.deletedCount) || 0;
+  }
+
+  // 6. How many of this run's rows still remain (so the caller can loop).
+  const { count: remainingCount } = await supabase
+    .from('prices')
+    .select('*', { count: 'exact', head: true })
+    .eq('source', src)
+    .gte('created_at', sinceTs);
+  const remaining = remainingCount || 0;
 
   return {
     source: src,
     deletedPrices: deletedResult.deleted,
     restoredPrices: restored,
     deletedProducts,
+    remaining,
+    done: remaining === 0,
   };
 }
 
