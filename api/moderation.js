@@ -2475,6 +2475,11 @@ async function getLastApiRun() {
   // Walk created_at descending for this source until a gap larger than RUN_GAP_MS,
   // paging through ALL rows so very large runs (100k+ rows) are fully covered and the
   // returned `since` spans the whole run (not just the newest page).
+  //
+  // We request large pages (created_at only) and advance by the ACTUAL number of rows
+  // returned, so a 100k+ run resolves in a handful of round-trips when the server
+  // honors big ranges, while still being correct if it caps page size.
+  const SCAN_PAGE = 10000;
   let since = lastRunAt;
   let prev = new Date(lastRunAt).getTime();
   let stampFrom = 0;
@@ -2485,17 +2490,17 @@ async function getLastApiRun() {
       .select('created_at')
       .eq('source', source)
       .order('created_at', { ascending: false })
-      .range(stampFrom, stampFrom + PAGE_SIZE - 1);
+      .range(stampFrom, stampFrom + SCAN_PAGE - 1);
     if (stampsErr) throw stampsErr;
     const page = stamps || [];
+    if (page.length === 0) break;
     for (const row of page) {
       const t = new Date(row.created_at).getTime();
       if (prev - t > RUN_GAP_MS) { foundGap = true; break; }
       since = row.created_at;
       prev = t;
     }
-    if (page.length < PAGE_SIZE) break;
-    stampFrom += PAGE_SIZE;
+    stampFrom += page.length;
   }
 
   const { count, error: countErr } = await supabase

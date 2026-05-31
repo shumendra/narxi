@@ -1795,6 +1795,7 @@ export default function App() {
   // Last API scrape run (for one-click "undo last import").
   const [lastApiRun, setLastApiRun] = useState<{ source: string; store: string; lastRunAt: string; since: string; count: number } | null>(null);
   const [apiRunReverting, setApiRunReverting] = useState(false);
+  const [apiRunLoading, setApiRunLoading] = useState(false);
   // Brands derived from price data
   const [brandRows, setBrandRows] = useState<BrandRow[]>([]);
   const [brandsLoading, setBrandsLoading] = useState(false);
@@ -2820,11 +2821,14 @@ export default function App() {
 
   const fetchLastApiRun = async () => {
     if (!isAdminUser || !telegramInitData) return;
+    setApiRunLoading(true);
     try {
       const result = await callModerationApi('getLastApiRun');
       setLastApiRun(result?.run || null);
     } catch {
       setLastApiRun(null);
+    } finally {
+      setApiRunLoading(false);
     }
   };
 
@@ -3725,7 +3729,7 @@ export default function App() {
         .from('prices')
         .select('product_name_raw')
         .is('product_id', null)
-        .eq('city', selectedCity)
+        .or(`city.eq.${selectedCity},city.is.null`)
         .eq('status', 'approved')
         .ilike('product_name_raw', `%${searchQuery}%`)
         .limit(20);
@@ -4109,7 +4113,7 @@ export default function App() {
       const { data } = await supabase
         .from('prices')
         .select('product_id, product_name_raw, price, place_name, place_address, latitude, longitude, receipt_date')
-        .eq('city', selectedCity)
+        .or(`city.eq.${selectedCity},city.is.null`)
         .not('source', 'like', 'history_%')
         .in('product_id', batch);
       if (data) allPrices = [...allPrices, ...data];
@@ -6404,6 +6408,12 @@ export default function App() {
                     <button onClick={handleDeleteAllMatchingPrices} className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700">Delete ALL {approvedPricesTotal} matching</button>
                   )}
                 </div>
+
+                {apiRunLoading && !lastApiRun && (
+                  <div className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-xs text-stone-500">
+                    Checking for last API import…
+                  </div>
+                )}
 
                 {lastApiRun && lastApiRun.count > 0 && (
                   <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs">
