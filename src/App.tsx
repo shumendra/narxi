@@ -1792,6 +1792,9 @@ export default function App() {
   const [approvedPricesSince, setApprovedPricesSince] = useState('');
   const [approvedPricesUntil, setApprovedPricesUntil] = useState('');
   const [priceSelectedIds, setPriceSelectedIds] = useState<string[]>([]);
+  // Last API scrape run (for one-click "undo last import").
+  const [lastApiRun, setLastApiRun] = useState<{ source: string; store: string; lastRunAt: string; since: string; count: number } | null>(null);
+  const [apiRunReverting, setApiRunReverting] = useState(false);
   // Brands derived from price data
   const [brandRows, setBrandRows] = useState<BrandRow[]>([]);
   const [brandsLoading, setBrandsLoading] = useState(false);
@@ -2732,8 +2735,8 @@ export default function App() {
       setApprovedPricesPage(Number(result.page) || 0);
       setPriceRowEdits({});
       setPriceSelectedIds([]);
-    } catch {
-      window.Telegram?.WebApp?.showAlert(t.moderationError);
+    } catch (err) {
+      window.Telegram?.WebApp?.showAlert(String((err as Error)?.message || t.moderationError));
     } finally {
       setApprovedPricesLoading(false);
     }
@@ -2789,6 +2792,40 @@ export default function App() {
       window.Telegram.WebApp.showConfirm(`Delete ALL ${total} item(s) matching the current filter? This cannot be undone.`, (ok: boolean) => { if (ok) run(); });
     } else {
       await run();
+    }
+  };
+
+  const fetchLastApiRun = async () => {
+    if (!isAdminUser || !telegramInitData) return;
+    try {
+      const result = await callModerationApi('getLastApiRun');
+      setLastApiRun(result?.run || null);
+    } catch {
+      setLastApiRun(null);
+    }
+  };
+
+  const handleRevertApiRun = async () => {
+    if (!lastApiRun || apiRunReverting) return;
+    const run = lastApiRun;
+    const doRevert = async () => {
+      setApiRunReverting(true);
+      try {
+        const result = await callModerationApi('revertApiRun', { source: run.source, since: run.since });
+        const msg = `Reverted ${run.store}: ${Number(result?.deletedPrices) || 0} price(s) removed, ${Number(result?.restoredPrices) || 0} prior price(s) restored, ${Number(result?.deletedProducts) || 0} product(s) deleted.`;
+        window.Telegram?.WebApp?.showAlert(msg);
+        await Promise.all([fetchApprovedPrices(0, approvedPricesQuery), fetchLastApiRun()]);
+      } catch (err) {
+        window.Telegram?.WebApp?.showAlert(String((err as Error)?.message || t.moderationError));
+      } finally {
+        setApiRunReverting(false);
+      }
+    };
+    const confirmMsg = `Undo the last "${run.store}" import (${run.count} price(s))? Items with an earlier price will be reverted; brand-new items will be deleted.`;
+    if (window.Telegram?.WebApp?.showConfirm) {
+      window.Telegram.WebApp.showConfirm(confirmMsg, (ok: boolean) => { if (ok) doRevert(); });
+    } else {
+      await doRevert();
     }
   };
 
@@ -3515,6 +3552,7 @@ export default function App() {
   useEffect(() => {
     if (mode === 'moderate' && isAdminUser && moderationSection === 'products') {
       fetchApprovedPrices(0, '');
+      fetchLastApiRun();
     }
   }, [mode, isAdminUser, moderationSection]);
 
@@ -6328,6 +6366,21 @@ export default function App() {
                     <button onClick={handleDeleteAllMatchingPrices} className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700">Delete ALL {approvedPricesTotal} matching</button>
                   )}
                 </div>
+
+                {lastApiRun && lastApiRun.count > 0 && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs">
+                    <div className="text-amber-800">
+                      <span className="font-semibold">Last API import:</span>{' '}
+                      {lastApiRun.store} · {lastApiRun.count} price(s) ·{' '}
+                      {new Date(lastApiRun.lastRunAt).toLocaleString()}
+                    </div>
+                    <button
+                      onClick={handleRevertApiRun}
+                      disabled={apiRunReverting}
+                      className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                    >{apiRunReverting ? 'Reverting…' : '↶ Undo last import'}</button>
+                  </div>
+                )}
 
                 <div className="flex items-center justify-between text-xs text-stone-500">
                   <span>{approvedPricesTotal} approved item(s)</span>

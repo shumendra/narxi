@@ -2324,6 +2324,21 @@ const PRICE_EDITABLE_FIELDS = new Set([
   'place_name', 'place_address', 'city',
 ]);
 
+const FULL_PRICE_COLS = 'id, product_name_raw, price, unit_price, quantity, place_name, place_address, city, product_id, source, price_scope, receipt_date, created_at';
+const SAFE_PRICE_COLS = 'id, product_name_raw, price, unit_price, quantity, place_name, place_address, city, product_id, source, receipt_date, created_at';
+
+// Convert a YYYY-MM-DD "until" date into the next-day ISO timestamp so the filter
+// includes the entire selected day (created_at is a full timestamp).
+function endOfDayExclusive(value) {
+  const s = String(value || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const d = new Date(`${s}T00:00:00.000Z`);
+    d.setUTCDate(d.getUTCDate() + 1);
+    return d.toISOString();
+  }
+  return null;
+}
+
 async function listApprovedPrices({ page = 0, pageSize = 50, query = '', city = null, sortBy = 'created_at', sortDir = 'desc', since = null, until = null } = {}) {
   const size = Math.min(Math.max(Number(pageSize) || 50, 1), 200);
   const from = Math.max(Number(page) || 0, 0) * size;
@@ -2332,23 +2347,34 @@ async function listApprovedPrices({ page = 0, pageSize = 50, query = '', city = 
   const SORTABLE = new Set(['created_at', 'receipt_date', 'price', 'product_name_raw']);
   const orderCol = SORTABLE.has(String(sortBy)) ? String(sortBy) : 'created_at';
   const ascending = String(sortDir) === 'asc';
-
-  let q = supabase
-    .from('prices')
-    .select('id, product_name_raw, price, unit_price, quantity, place_name, place_address, city, product_id, source, price_scope, receipt_date, created_at', { count: 'exact' })
-    .eq('status', 'approved')
-    .order(orderCol, { ascending, nullsFirst: false })
-    .range(from, to);
-
-  const search = String(query || '').trim();
-  if (search) q = q.ilike('product_name_raw', `%${search}%`);
-  if (city) q = q.eq('city', city);
   // Time-window filters apply to the chosen time column (created_at or receipt_date).
   const timeCol = orderCol === 'receipt_date' ? 'receipt_date' : 'created_at';
-  if (since) q = q.gte(timeCol, since);
-  if (until) q = q.lte(timeCol, until);
+  const untilExclusive = until ? endOfDayExclusive(until) : null;
 
-  const { data, error, count } = await q;
+  const runQuery = async (cols) => {
+    let q = supabase
+      .from('prices')
+      .select(cols, { count: 'exact' })
+      .eq('status', 'approved')
+      .order(orderCol, { ascending, nullsFirst: false })
+      .range(from, to);
+    const search = String(query || '').trim();
+    if (search) q = q.ilike('product_name_raw', `%${search}%`);
+    if (city) q = q.eq('city', city);
+    if (since) q = q.gte(timeCol, since);
+    if (until) {
+      if (untilExclusive) q = q.lt(timeCol, untilExclusive);
+      else q = q.lte(timeCol, until);
+    }
+    return q;
+  };
+
+  let { data, error, count } = await runQuery(FULL_PRICE_COLS);
+  // Gracefully degrade if the price_scope column has not been migrated yet, so the
+  // products list still loads instead of failing with "moderation action failed".
+  if (error && /price_scope/i.test(String(error.message || ''))) {
+    ({ data, error, count } = await runQuery(SAFE_PRICE_COLS));
+  }
   if (error) throw error;
   return { items: data || [], total: count || 0, page: Number(page) || 0, pageSize: size };
 }
@@ -2422,6 +2448,177 @@ async function deleteApprovedPricesByQuery({ query = '', city = null, since = nu
     if (ids.length < 1000) break;
   }
   return { deleted };
+}
+
+// ─── Undo last API import run ──────────────────────────────────────────────
+const API_SOURCE_PREFIX = 'store_api_';
+// Rows belonging to one scrape run cluster within this gap of created_at.
+const RUN_GAP_MS = 15 * 60 * 1000;
+
+// Identify the most recent API scrape run: the source with the newest created_at,
+// plus the time window of that single run (detected via a gap in created_at).
+async function getLastApiRun() {
+  const { data: latestRows, error: latestErr } = await supabase
+    .from('prices')
+    .select('source, created_at')
+    .like('source', `${API_SOURCE_PREFIX}%`)
+    .order('created_at', { ascending: false })
+    .limit(1);
+  if (latestErr) throw latestErr;
+  if (!latestRows || latestRows.length === 0) return { run: null };
+
+  const source = latestRows[0].source;
+  const lastRunAt = latestRows[0].created_at;
+
+  // Walk created_at descending for this source until a gap larger than RUN_GAP_MS,
+  // so we isolate just the last run regardless of how often the scraper runs.
+  const { data: stamps, error: stampsErr } = await supabase
+    .from('prices')
+    .select('created_at')
+    .eq('source', source)
+    .order('created_at', { ascending: false })
+    .limit(20000);
+  if (stampsErr) throw stampsErr;
+
+  let since = lastRunAt;
+  let prev = new Date(lastRunAt).getTime();
+  for (const row of stamps || []) {
+    const t = new Date(row.created_at).getTime();
+    if (prev - t > RUN_GAP_MS) break;
+    since = row.created_at;
+    prev = t;
+  }
+
+  const { count, error: countErr } = await supabase
+    .from('prices')
+    .select('*', { count: 'exact', head: true })
+    .eq('source', source)
+    .gte('created_at', since);
+  if (countErr) throw countErr;
+
+  return {
+    run: {
+      source,
+      store: source.slice(API_SOURCE_PREFIX.length),
+      lastRunAt,
+      since,
+      count: count || 0,
+    },
+  };
+}
+
+function buildPriceRunKey(row) {
+  const pid = String(row?.product_id || '').trim();
+  const base = pid ? pid : `raw:${normalizeProductNameKey(row?.product_name_raw)}`;
+  const city = String(row?.city || '').trim().toLowerCase();
+  return `${base}|${city}`;
+}
+
+// Revert the most recent scrape run for a source: delete the prices it inserted and,
+// where an older price was archived to history, restore that prior price. Products
+// created only by this run (no remaining prices) are deleted.
+async function revertApiRun({ source, since } = {}) {
+  const src = String(source || '').trim();
+  if (!src || !src.startsWith(API_SOURCE_PREFIX)) {
+    const err = new Error('A valid store_api_* source is required');
+    err.statusCode = 400;
+    throw err;
+  }
+  const sinceTs = String(since || '').trim();
+  if (!sinceTs) {
+    const err = new Error('since timestamp is required');
+    err.statusCode = 400;
+    throw err;
+  }
+  const historySource = `history_${src}`;
+
+  // 1. Rows inserted by this run.
+  const newRows = await fetchAllPages((from, to) => (
+    supabase
+      .from('prices')
+      .select('id, product_id, product_name_raw, city, price, created_at')
+      .eq('source', src)
+      .gte('created_at', sinceTs)
+      .range(from, to)
+  ));
+
+  // 2. All archived history rows for this source (the prior prices).
+  const histRows = await fetchAllPages((from, to) => (
+    supabase
+      .from('prices')
+      .select('id, product_id, product_name_raw, city, price, created_at')
+      .eq('source', historySource)
+      .range(from, to)
+  ));
+
+  // Group history by product+city, newest first.
+  const histMap = new Map();
+  for (const h of histRows) {
+    const key = buildPriceRunKey(h);
+    if (!histMap.has(key)) histMap.set(key, []);
+    histMap.get(key).push(h);
+  }
+  for (const list of histMap.values()) {
+    list.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  }
+
+  const deleteNewIds = [];
+  const restoreIds = [];
+  const usedHistory = new Set();
+  const orphanCandidateProductIds = new Set();
+
+  for (const row of newRows) {
+    deleteNewIds.push(row.id);
+    const key = buildPriceRunKey(row);
+    const candidates = histMap.get(key) || [];
+    const restore = candidates.find((h) => !usedHistory.has(h.id));
+    if (restore) {
+      usedHistory.add(restore.id);
+      restoreIds.push(restore.id);
+    } else if (row.product_id) {
+      orphanCandidateProductIds.add(String(row.product_id));
+    }
+  }
+
+  // 3. Delete the run's inserted price rows.
+  const deletedResult = await deletePriceRowsMany(deleteNewIds);
+
+  // 4. Restore prior prices (flip history_* source back to the live source).
+  let restored = 0;
+  for (const chunk of chunkArray(restoreIds, BULK_DB_CHUNK_SIZE)) {
+    const { data, error } = await supabase
+      .from('prices')
+      .update({ source: src })
+      .in('id', chunk)
+      .select('id');
+    if (error) throw error;
+    restored += Array.isArray(data) ? data.length : 0;
+  }
+
+  // 5. Delete products that have no remaining prices after the revert.
+  let deletedProducts = 0;
+  for (const productId of orphanCandidateProductIds) {
+    const { count, error } = await supabase
+      .from('prices')
+      .select('*', { count: 'exact', head: true })
+      .eq('product_id', productId);
+    if (error) throw error;
+    if ((count || 0) === 0) {
+      try {
+        const res = await deleteProduct(productId);
+        deletedProducts += Number(res?.deletedCount) || 0;
+      } catch (e) {
+        if (Number(e?.statusCode) !== 404) throw e;
+      }
+    }
+  }
+
+  return {
+    source: src,
+    deletedPrices: deletedResult.deleted,
+    restoredPrices: restored,
+    deletedProducts,
+  };
 }
 
 // Brand / store management derived from the prices table (no `stores` table needed).
@@ -3340,6 +3537,14 @@ export default async function moderation(req, res) {
           until: body.until || null,
           timeCol: body.timeCol || 'created_at',
         });
+        return send(res, 200, { ok: true, ...result });
+      }
+      case 'getLastApiRun': {
+        const result = await getLastApiRun();
+        return send(res, 200, { ok: true, ...result });
+      }
+      case 'revertApiRun': {
+        const result = await revertApiRun({ source: body.source, since: body.since });
         return send(res, 200, { ok: true, ...result });
       }
       case 'listBrandsFromPrices': {
