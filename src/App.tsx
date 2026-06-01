@@ -2189,18 +2189,42 @@ export default function App() {
         return;
       }
 
-      const result = await callModerationApi('importNormalizationQueue', { products });
+      // Upload in client-side chunks so large files never hit the serverless time limit.
+      // Each request handles a slice of product groups; totals are accumulated.
+      const UPLOAD_CHUNK = 250;
+      const totals = {
+        importedCount: 0, remainingLimboCount: 0, unmatchedCount: 0, failedCount: 0,
+        ambiguousAliasCount: 0, storeProductsLinked: 0, pricesBackfilled: 0,
+        createdProducts: 0, updatedProducts: 0,
+      };
+      const chunkCount = Math.ceil(products.length / UPLOAD_CHUNK);
+      for (let i = 0; i < products.length; i += UPLOAD_CHUNK) {
+        const chunkIndex = Math.floor(i / UPLOAD_CHUNK) + 1;
+        setQueueStatus(`Importing chunk ${chunkIndex}/${chunkCount}… (${i}/${products.length} groups)`);
+        const chunk = products.slice(i, i + UPLOAD_CHUNK);
+        const result = await callModerationApi('importNormalizationQueue', { products: chunk });
+        totals.importedCount += Number(result?.importedCount) || 0;
+        totals.remainingLimboCount = Number(result?.remainingLimboCount) || 0;
+        totals.unmatchedCount += Number(result?.unmatchedCount) || 0;
+        totals.failedCount += Number(result?.failedCount) || 0;
+        totals.ambiguousAliasCount += Number(result?.ambiguousAliasCount) || 0;
+        totals.storeProductsLinked += Number(result?.storeProductsLinked) || 0;
+        totals.pricesBackfilled += Number(result?.pricesBackfilled) || 0;
+        totals.createdProducts += Number(result?.createdProducts) || 0;
+        totals.updatedProducts += Number(result?.updatedProducts) || 0;
+      }
+
       await fetchModerationItems();
       await fetchProducts({ force: true });
       if (moderationSection === 'products') await fetchModerationProducts();
 
-      const importedCount = Number(result?.importedCount) || 0;
-      const remainingCount = Number(result?.remainingLimboCount) || 0;
-      const unmatchedCount = Number(result?.unmatchedCount) || 0;
-      const failedCount = Number(result?.failedCount) || 0;
-      const ambiguousAliasCount = Number(result?.ambiguousAliasCount) || 0;
-      const storeProductsLinked = Number(result?.storeProductsLinked) || 0;
-      const pricesBackfilled = Number(result?.pricesBackfilled) || 0;
+      const importedCount = totals.importedCount;
+      const remainingCount = totals.remainingLimboCount;
+      const unmatchedCount = totals.unmatchedCount;
+      const failedCount = totals.failedCount;
+      const ambiguousAliasCount = totals.ambiguousAliasCount;
+      const storeProductsLinked = totals.storeProductsLinked;
+      const pricesBackfilled = totals.pricesBackfilled;
 
       const summary = t.queueImportDone(importedCount, remainingCount);
       setQueueStatus(summary);

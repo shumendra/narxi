@@ -243,6 +243,25 @@ function chunkArray(values, size) {
   return result;
 }
 
+// Run an async worker over items with a bounded number of concurrent in-flight calls.
+// Results are returned in input order. Used to avoid serverless timeouts caused by long
+// sequential chains of per-item DB round-trips.
+async function mapWithConcurrency(items, concurrency, worker) {
+  const list = Array.isArray(items) ? items : [];
+  const limit = Math.max(1, Math.min(Number(concurrency) || 1, list.length || 1));
+  const results = new Array(list.length);
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(limit, list.length) }, async () => {
+    while (true) {
+      const index = cursor++;
+      if (index >= list.length) break;
+      results[index] = await worker(list[index], index);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
 async function ensurePerformanceIndexes() {
   if (performanceIndexesChecked) return;
   if (ensurePerformanceIndexesPromise) {
@@ -1422,10 +1441,15 @@ async function importNormalizationQueue(productsInput) {
   let updatedProducts = 0;
   let aliasesProcessed = 0;
 
-  for (const entry of normalizedProducts) {
+  // Process entries with bounded concurrency. Sequential per-entry DB chains (lookup +
+  // upsert product, then one alias upsert per name) made large files time out; running
+  // several entries in flight at once keeps total wall-time well under the limit.
+  // Map/Set mutations below are synchronous between awaits, so they stay consistent.
+  const ENTRY_CONCURRENCY = 10;
+  await mapWithConcurrency(normalizedProducts, ENTRY_CONCURRENCY, async (entry) => {
     const preferredProductId = resolveEntryProductIdFromIndex(entry, keyToProductIds);
     const resolved = await resolveNormalizedEntryProduct(entry, preferredProductId);
-    if (!resolved?.productId) continue;
+    if (!resolved?.productId) return;
 
     if (resolved.created) createdProducts += 1;
     if (resolved.updated) updatedProducts += 1;
@@ -1465,7 +1489,7 @@ async function importNormalizationQueue(productsInput) {
       assignAliasToProduct(aliasText, resolved.productId);
       registerKnownProductName(resolved.productId, aliasText);
     }
-  }
+  });
 
   // Match unmatched store_products using the alias map built from the uploaded file,
   // then backfill prices.product_id for those rows (prices already in DB from scraper).
@@ -1497,20 +1521,29 @@ async function importNormalizationQueue(productsInput) {
       }
 
       // Backfill prices that were inserted while the store_product was unmatched.
-      const toLinkMap = new Map(toLink.map(({ id, canonical_product_id }) => [id, canonical_product_id]));
-      for (const chunk of chunkArray(toLink, BULK_DB_CHUNK_SIZE)) {
-        for (const { id: spId } of chunk) {
-          const productId = toLinkMap.get(spId);
-          if (!productId) continue;
-          const { data } = await supabase
-            .from('prices')
-            .update({ product_id: productId })
-            .eq('store_product_id', spId)
-            .is('product_id', null)
-            .select('id');
-          pricesBackfilled += Array.isArray(data) ? data.length : 0;
-        }
+      // Group store_product ids by their target product so each productId needs only a
+      // handful of chunked `.in(...)` updates instead of one round-trip per store row.
+      const spIdsByProduct = new Map();
+      for (const { id: spId, canonical_product_id: productId } of toLink) {
+        if (!spId || !productId) continue;
+        if (!spIdsByProduct.has(productId)) spIdsByProduct.set(productId, []);
+        spIdsByProduct.get(productId).push(spId);
       }
+      await mapWithConcurrency(
+        Array.from(spIdsByProduct.entries()),
+        BULK_DB_CONCURRENCY,
+        async ([productId, spIds]) => {
+          for (const chunk of chunkArray(spIds, BULK_DB_CHUNK_SIZE)) {
+            const { data } = await supabase
+              .from('prices')
+              .update({ product_id: productId })
+              .in('store_product_id', chunk)
+              .is('product_id', null)
+              .select('id');
+            pricesBackfilled += Array.isArray(data) ? data.length : 0;
+          }
+        }
+      );
     }
   }
 
