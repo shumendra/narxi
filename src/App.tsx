@@ -191,6 +191,8 @@ interface ProductAdminItem {
   category: string;
   unit?: string | null;
   available_cities?: string[] | null;
+  aliases?: string[];
+  normalized?: boolean;
   price_count?: number;
   pending_count?: number;
   latest_price?: {
@@ -570,7 +572,7 @@ export default function App() {
   const [aliasImporting, setAliasImporting] = useState(false);
   const [productFilterQuery, setProductFilterQuery] = useState('');
   const [productFilterCategory, setProductFilterCategory] = useState('all');
-  const [productFilterCity, setProductFilterCity] = useState('all');
+  const [productFilterNormalized, setProductFilterNormalized] = useState<'all' | 'yes' | 'no'>('all');
   const [productFilterHasPrices, setProductFilterHasPrices] = useState<'all' | 'yes' | 'no'>('all');
   const [productFilterHasPending, setProductFilterHasPending] = useState<'all' | 'yes' | 'no'>('all');
   const [productSortBy, setProductSortBy] = useState<'name' | 'category' | 'price_count' | 'pending_count' | 'latest_receipt'>('name');
@@ -825,6 +827,10 @@ export default function App() {
         queueUploading: 'Yuklanmoqda...',
         approvedToQueue: (approvedCount: number) => `✅ ${approvedCount} ta narx ma'lumotlar bazasiga qo'shildi`,
         queueImportDone: (importedCount: number, remainingCount: number) => `Import yakunlandi: ${importedCount} ta narx bazaga qo\'shildi, navbatda ${remainingCount} qoldi`,
+        normalizationImportDone: (created: number, updated: number, linked: number, backfilled: number) => `Normalizatsiya qo\'llandi: ${created} ta mahsulot yaratildi, ${updated} ta yangilandi · ${linked} ta do\'kon mahsuloti bog\'landi (${backfilled} ta narx mahsulotga bog\'landi)`,
+        normImportAmbiguous: 'Noaniq nomlar (o\'tkazib yuborildi)',
+        normImportUnmatched: 'Mos kelmadi',
+        normImportFailed: 'Xato',
         messagesTitle: 'Foydalanuvchi xabarlari',
         messagesEmpty: 'Xabarlar yo‘q',
         linksTitle: 'Chek havolalari navbati',
@@ -868,6 +874,9 @@ export default function App() {
         productClearSelection: 'Tanlovni tozalash',
         productFilterSearch: 'Qidiruv',
         productFilterCategory: 'Kategoriya filtri',
+        productFilterNormalized: 'Normallashtirish',
+        normalizedYes: 'Normallashtirilgan',
+        normalizedNo: 'Normallashtirilmagan',
         productFilterCity: 'Shahar filtri',
         productFilterHasPrices: 'Narxlar borligi',
         productFilterHasPending: 'Kutilayotganlar borligi',
@@ -1190,6 +1199,10 @@ export default function App() {
         queueUploading: 'Загрузка...',
         approvedToQueue: (approvedCount: number) => `✅ ${approvedCount} цен добавлено в базу данных`,
         queueImportDone: (importedCount: number, remainingCount: number) => `Импорт завершен: ${importedCount} цен добавлено в базу, в очереди осталось ${remainingCount}`,
+        normalizationImportDone: (created: number, updated: number, linked: number, backfilled: number) => `Нормализация применена: создано ${created} товаров, обновлено ${updated} · привязано ${linked} товаров магазина (${backfilled} цен привязано к товарам)`,
+        normImportAmbiguous: 'Неоднозначные названия (пропущены)',
+        normImportUnmatched: 'Не совпало',
+        normImportFailed: 'Ошибки',
         messagesTitle: 'Сообщения от пользователей',
         messagesEmpty: 'Сообщений пока нет',
         linksTitle: 'Очередь ссылок чеков',
@@ -1233,6 +1246,9 @@ export default function App() {
         productClearSelection: 'Снять выбор',
         productFilterSearch: 'Поиск',
         productFilterCategory: 'Фильтр категории',
+        productFilterNormalized: 'Нормализация',
+        normalizedYes: 'Нормализованные',
+        normalizedNo: 'Ненормализованные',
         productFilterCity: 'Фильтр города',
         productFilterHasPrices: 'Есть цены',
         productFilterHasPending: 'Есть ожидания',
@@ -1555,6 +1571,10 @@ export default function App() {
         queueUploading: 'Uploading...',
         approvedToQueue: (approvedCount: number) => `✅ ${approvedCount} prices added to database`,
         queueImportDone: (importedCount: number, remainingCount: number) => `Import complete: ${importedCount} prices added to database, ${remainingCount} still in queue`,
+        normalizationImportDone: (created: number, updated: number, linked: number, backfilled: number) => `Normalization applied: ${created} products created, ${updated} updated · ${linked} store items linked (${backfilled} prices linked to products)`,
+        normImportAmbiguous: 'Ambiguous names (skipped)',
+        normImportUnmatched: 'Unmatched',
+        normImportFailed: 'Failed',
         messagesTitle: 'User messages',
         messagesEmpty: 'No messages yet',
         linksTitle: 'Receipt links queue',
@@ -1598,6 +1618,9 @@ export default function App() {
         productClearSelection: 'Clear selection',
         productFilterSearch: 'Search',
         productFilterCategory: 'Category filter',
+        productFilterNormalized: 'Normalized',
+        normalizedYes: 'Normalized',
+        normalizedNo: 'Non-normalized',
         productFilterCity: 'City filter',
         productFilterHasPrices: 'Has prices',
         productFilterHasPending: 'Has pending',
@@ -2062,6 +2085,8 @@ export default function App() {
   const normalizeProductAdminItem = (item: any): ProductAdminItem => ({
     ...item,
     available_cities: Array.isArray(item.available_cities) ? item.available_cities : [],
+    aliases: Array.isArray(item.aliases) ? item.aliases : [],
+    normalized: Boolean(item.normalized),
     prices: Array.isArray(item.prices) ? item.prices : [],
     pending: Array.isArray(item.pending) ? item.pending : [],
     price_count: Number(item.price_count) || 0,
@@ -2225,15 +2250,17 @@ export default function App() {
       const ambiguousAliasCount = totals.ambiguousAliasCount;
       const storeProductsLinked = totals.storeProductsLinked;
       const pricesBackfilled = totals.pricesBackfilled;
+      const createdProducts = totals.createdProducts;
+      const updatedProducts = totals.updatedProducts;
+      void importedCount; void remainingCount;
 
-      const summary = t.queueImportDone(importedCount, remainingCount);
+      const summary = t.normalizationImportDone(createdProducts, updatedProducts, storeProductsLinked, pricesBackfilled);
       setQueueStatus(summary);
 
       const details: string[] = [];
-      if (storeProductsLinked > 0) details.push(`Store products linked: ${storeProductsLinked} (${pricesBackfilled} prices backfilled)`);
-      if (unmatchedCount > 0) details.push(`Unmatched: ${unmatchedCount}`);
-      if (failedCount > 0) details.push(`Failed: ${failedCount}`);
-      if (ambiguousAliasCount > 0) details.push(`Ambiguous aliases: ${ambiguousAliasCount}`);
+      if (ambiguousAliasCount > 0) details.push(`${t.normImportAmbiguous}: ${ambiguousAliasCount}`);
+      if (unmatchedCount > 0) details.push(`${t.normImportUnmatched}: ${unmatchedCount}`);
+      if (failedCount > 0) details.push(`${t.normImportFailed}: ${failedCount}`);
 
       window.Telegram?.WebApp?.showAlert(details.length > 0 ? `${summary}\n${details.join(' · ')}` : summary);
     } catch (error: any) {
@@ -3117,20 +3144,21 @@ export default function App() {
       .sort((a, b) => a.localeCompare(b));
   }, [productAdminItems]);
 
-  const productCityOptions = useMemo(() => {
-    return (Array.from(new Set(productAdminItems.flatMap(item => item.available_cities || []).map(city => String(city || '').trim()).filter(Boolean))) as string[])
-      .sort((a, b) => a.localeCompare(b));
-  }, [productAdminItems]);
-
   const filteredSortedProductAdminItems = useMemo(() => {
     const query = productFilterQuery.trim().toLowerCase();
     const rows = productAdminItems.filter(item => {
-      const byQuery = !query || [item.name_uz, item.name_ru, item.name_en, item.category, item.unit, item.id]
+      const byQuery = !query || [item.name_uz, item.name_ru, item.name_en, item.category, item.unit, item.id, ...(item.aliases || [])]
         .filter(Boolean)
         .some(value => String(value).toLowerCase().includes(query));
 
       const byCategory = productFilterCategory === 'all' || String(item.category || '') === productFilterCategory;
-      const byCity = productFilterCity === 'all' || (item.available_cities || []).includes(productFilterCity);
+      // City is taken from the global selector at the top of the app. Chain/blanket products
+      // have an empty available_cities list, so they are always shown.
+      const cities = item.available_cities || [];
+      const byCity = selectedCity === 'all' || cities.length === 0 || cities.includes(selectedCity);
+      const byNormalized = productFilterNormalized === 'all'
+        || (productFilterNormalized === 'yes' && Boolean(item.normalized))
+        || (productFilterNormalized === 'no' && !item.normalized);
       const byHasPrices = productFilterHasPrices === 'all'
         || (productFilterHasPrices === 'yes' && (Number(item.price_count) || 0) > 0)
         || (productFilterHasPrices === 'no' && (Number(item.price_count) || 0) === 0);
@@ -3138,7 +3166,7 @@ export default function App() {
         || (productFilterHasPending === 'yes' && (Number(item.pending_count) || 0) > 0)
         || (productFilterHasPending === 'no' && (Number(item.pending_count) || 0) === 0);
 
-      return byQuery && byCategory && byCity && byHasPrices && byHasPending;
+      return byQuery && byCategory && byCity && byNormalized && byHasPrices && byHasPending;
     });
 
     const sorted = [...rows].sort((left, right) => {
@@ -3156,7 +3184,7 @@ export default function App() {
     });
 
     return sorted;
-  }, [productAdminItems, productFilterQuery, productFilterCategory, productFilterCity, productFilterHasPrices, productFilterHasPending, productSortBy, productSortDir]);
+  }, [productAdminItems, productFilterQuery, productFilterCategory, selectedCity, productFilterNormalized, productFilterHasPrices, productFilterHasPending, productSortBy, productSortDir]);
 
   const activeProductItem = useMemo(() => {
     return filteredSortedProductAdminItems.find(item => item.id === activeProductId)
@@ -7073,9 +7101,10 @@ export default function App() {
                       <option value="all">{t.productFilterCategory}: {t.allLabel}</option>
                       {productCategoryOptions.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
-                    <select value={productFilterCity} onChange={(e) => setProductFilterCity(e.target.value)} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm">
-                      <option value="all">{t.productFilterCity}: {t.allLabel}</option>
-                      {productCityOptions.map(c => <option key={c} value={c}>{c}</option>)}
+                    <select value={productFilterNormalized} onChange={(e) => setProductFilterNormalized(e.target.value as 'all' | 'yes' | 'no')} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm">
+                      <option value="all">{t.productFilterNormalized}: {t.allLabel}</option>
+                      <option value="yes">{t.productFilterNormalized}: {t.normalizedYes}</option>
+                      <option value="no">{t.productFilterNormalized}: {t.normalizedNo}</option>
                     </select>
                     <select value={productFilterHasPrices} onChange={(e) => setProductFilterHasPrices(e.target.value as 'all' | 'yes' | 'no')} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm">
                       <option value="all">{t.productFilterHasPrices}: {t.allLabel}</option>
@@ -7171,6 +7200,7 @@ export default function App() {
                               <th className="px-2 py-2 font-semibold">{t.productTableNameUz}</th>
                               <th className="px-2 py-2 font-semibold">{t.productTableNameRu}</th>
                               <th className="px-2 py-2 font-semibold">{t.productTableNameEn}</th>
+                              <th className="px-2 py-2 font-semibold">{t.productTableAliases}</th>
                               <th className="px-2 py-2 font-semibold">{t.productTableCategory}</th>
                               <th className="px-2 py-2 font-semibold text-center">{t.productTablePrices}</th>
                             </tr>
@@ -7186,6 +7216,7 @@ export default function App() {
                                 <td className="px-2 py-1.5 font-medium text-stone-900 max-w-[140px] truncate">{item.name_uz}</td>
                                 <td className="px-2 py-1.5 text-stone-700 max-w-[140px] truncate">{item.name_ru}</td>
                                 <td className="px-2 py-1.5 text-stone-700 max-w-[120px] truncate">{item.name_en || '-'}</td>
+                                <td className="px-2 py-1.5 text-stone-500 max-w-[220px]" title={(item.aliases || []).join(', ')}>{(item.aliases && item.aliases.length > 0) ? item.aliases.join(', ') : '-'}</td>
                                 <td className="px-2 py-1.5 text-stone-600">{item.category || '-'}</td>
                                 <td className="px-2 py-1.5 text-center text-stone-600">{item.price_count || 0}</td>
                               </tr>

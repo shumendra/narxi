@@ -2129,8 +2129,20 @@ async function listProducts() {
       latest_price: null,
     };
 
+    const aliasTexts = aliasTextsByProduct.get(product.id) || [];
+
+    // A product is "normalised" when it has real, distinct translations rather than a
+    // placeholder where all three language names are identical (the shape auto-created
+    // from a single raw name before an admin/AI normalised it).
+    const nameUz = String(product.name_uz || '').trim().toLowerCase();
+    const nameRu = String(product.name_ru || '').trim().toLowerCase();
+    const nameEn = String(product.name_en || '').trim().toLowerCase();
+    const normalized = Boolean(nameUz) && !(nameUz === nameRu && (!nameEn || nameEn === nameUz));
+
     return {
       ...product,
+      aliases: aliasTexts,
+      normalized,
       prices: [],
       pending: [],
       price_count: Number(summary.price_count) || 0,
