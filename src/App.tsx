@@ -3801,8 +3801,8 @@ export default function App() {
         .or(`city.eq.${selectedCity},city.is.null`)
         .eq('status', 'approved')
         .ilike('product_name_raw', `%${searchQuery}%`)
-        .limit(20);
-      const uniqueNames = [...new Set((data || []).map((r: { product_name_raw: string }) => r.product_name_raw))].slice(0, 5);
+        .limit(500);
+      const uniqueNames = [...new Set((data || []).map((r: { product_name_raw: string }) => r.product_name_raw))].slice(0, 50);
       setRawSearchResults(uniqueNames.map(name => ({
         id: null,
         name_uz: name,
@@ -4070,29 +4070,32 @@ export default function App() {
     let targetLng = price.longitude;
 
     if (targetLat === null || targetLng === null) {
-      if (mapPrices.length === 0) return;
+      if (mapPrices.length > 0) {
+        const nearest = userLocation
+          ? [...mapPrices].sort((left, right) => {
+              const leftDistance = haversineDistanceKm(userLocation, { lat: left.latitude!, lng: left.longitude! });
+              const rightDistance = haversineDistanceKm(userLocation, { lat: right.latitude!, lng: right.longitude! });
+              return leftDistance - rightDistance;
+            })[0]
+          : mapPrices[0];
 
-      const nearest = userLocation
-        ? [...mapPrices].sort((left, right) => {
-            const leftDistance = haversineDistanceKm(userLocation, { lat: left.latitude!, lng: left.longitude! });
-            const rightDistance = haversineDistanceKm(userLocation, { lat: right.latitude!, lng: right.longitude! });
-            return leftDistance - rightDistance;
-          })[0]
-        : mapPrices[0];
-
-      targetLat = nearest.latitude;
-      targetLng = nearest.longitude;
+        targetLat = nearest.latitude;
+        targetLng = nearest.longitude;
+      }
     }
 
-    if (targetLat === null || targetLng === null) return;
+    if (targetLat !== null && targetLng !== null) {
+      setFindMapFocus({
+        lat: targetLat,
+        lng: targetLng,
+        zoom: 16,
+        trigger: Date.now(),
+      });
+    }
 
-    setFindMapFocus({
-      lat: targetLat,
-      lng: targetLng,
-      zoom: 16,
-      trigger: Date.now(),
-    });
-
+    // Always scroll to the map, even when the price has no coordinates (e.g. a
+    // chain-wide price whose store has no known branch) so the user still lands
+    // on the map section showing the city overview.
     window.requestAnimationFrame(() => {
       findMapSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
@@ -5558,6 +5561,16 @@ export default function App() {
                           color="white"
                           weight={2}
                           fillOpacity={0.9}
+                        />
+                      )}
+                      {findMapFocus && (
+                        <CircleMarker
+                          center={[findMapFocus.lat, findMapFocus.lng]}
+                          radius={16}
+                          fillColor="#2563eb"
+                          color="#1e3a8a"
+                          weight={3}
+                          fillOpacity={0.25}
                         />
                       )}
                     </MapContainer>
