@@ -557,6 +557,8 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [products, setProducts] = useState<Product[]>([]);
   const [rawSearchResults, setRawSearchResults] = useState<Product[]>([]);   // Layer 2: raw names from prices
+  const [pricedProductIds, setPricedProductIds] = useState<Set<string>>(new Set()); // canonical ids that actually have prices in the city
+  const [pricedIdsReady, setPricedIdsReady] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [prices, setPrices] = useState<PriceRecord[]>([]);
   const [moderationItems, setModerationItems] = useState<PendingModerationItem[]>([]);
@@ -679,6 +681,7 @@ export default function App() {
         nearbyHint: 'Avval yaqin do‘konlar ko‘rsatiladi',
         nearbyDistance: 'masofa',
         nearbyError: 'Joylashuvni olishga ruxsat berilmadi',
+        enableLocationForChain: 'Bu mahsulot barcha filiallarda sotiladi. Eng yaqin do‘konni ko‘rsatish uchun joylashuvni yoqing.',
         nearbyRetry: 'Joylashuvni qayta so‘rash',
         searchPlaceholder: 'Mahsulot nomi (masalan: Shakar)',
         emptyTitle: 'Narxlarni qidirish',
@@ -1049,6 +1052,7 @@ export default function App() {
         nearbyHint: 'Сначала показывать ближайшие магазины',
         nearbyDistance: 'расстояние',
         nearbyError: 'Не удалось получить геолокацию',
+        enableLocationForChain: 'Этот товар продаётся во всех филиалах. Включите геолокацию, чтобы показать ближайший магазин.',
         nearbyRetry: 'Запросить геолокацию снова',
         maxDistanceLabel: 'Макс. расстояние',
         maxDistanceKmUnit: 'км',
@@ -1421,6 +1425,7 @@ export default function App() {
         nearbyHint: 'Show the closest stores first',
         nearbyDistance: 'distance',
         nearbyError: 'Location access was not granted',
+        enableLocationForChain: 'This product is sold at all branches. Turn on location to show the nearest store.',
         nearbyRetry: 'Request location again',
         maxDistanceLabel: 'Max distance',
         maxDistanceKmUnit: 'km',
@@ -3779,13 +3784,57 @@ export default function App() {
     );
   }, [searchQuery, cityProducts]);
 
-  // Combined Layer 1 + Layer 2 (raw names deduplicated against canonical results)
+  // Combined Layer 1 + Layer 2 (raw names deduplicated against canonical results).
+  // Canonical products are hidden unless they actually have at least one price in the
+  // selected city — products with no price/location must never appear in search.
   const filteredProducts = useMemo(() => {
     if (!searchQuery) return [];
-    const canonicalNames = new Set(canonicalFiltered.map(p => p.name_uz.toLowerCase()));
+    const canonical = pricedIdsReady
+      ? canonicalFiltered.filter(p => !p.id || pricedProductIds.has(p.id))
+      : canonicalFiltered;
+    const canonicalNames = new Set(canonical.map(p => p.name_uz.toLowerCase()));
     const rawFiltered = rawSearchResults.filter(r => !canonicalNames.has(r.name_uz.toLowerCase()));
-    return [...canonicalFiltered, ...rawFiltered];
-  }, [searchQuery, canonicalFiltered, rawSearchResults]);
+    return [...canonical, ...rawFiltered];
+  }, [searchQuery, canonicalFiltered, rawSearchResults, pricedProductIds, pricedIdsReady]);
+
+  // Debounced effect: determine which matched canonical products actually have prices
+  // in the selected city, so products with no price/location are filtered out.
+  useEffect(() => {
+    if (!searchQuery || searchQuery.length < 2 || mode !== 'find') {
+      setPricedProductIds(new Set());
+      setPricedIdsReady(false);
+      return;
+    }
+    const ids = canonicalFiltered.map(p => p.id).filter(Boolean) as string[];
+    if (ids.length === 0) {
+      setPricedProductIds(new Set());
+      setPricedIdsReady(true);
+      return;
+    }
+    let cancelled = false;
+    setPricedIdsReady(false);
+    const timer = window.setTimeout(async () => {
+      const found = new Set<string>();
+      for (let i = 0; i < ids.length; i += 100) {
+        const chunk = ids.slice(i, i + 100);
+        const { data } = await supabase
+          .from('prices')
+          .select('product_id')
+          .in('product_id', chunk)
+          .or(`city.eq.${selectedCity},city.is.null`)
+          .eq('status', 'approved')
+          .not('source', 'like', 'history_%')
+          .limit(2000);
+        for (const r of (data || []) as { product_id: string | null }[]) {
+          if (r.product_id) found.add(r.product_id);
+        }
+      }
+      if (cancelled) return;
+      setPricedProductIds(found);
+      setPricedIdsReady(true);
+    }, 350);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [searchQuery, selectedCity, mode, canonicalFiltered]);
 
   // Debounced effect: fetch raw product_name_raw results from prices (Layer 2)
   useEffect(() => {
@@ -4066,39 +4115,54 @@ export default function App() {
   const findMapZoom = findMapFocus?.zoom ?? (nearbyEnabled && userLocation ? 13 : selectedCityOption.zoom);
 
   const focusPriceOnMap = (price: PriceRecord) => {
-    let targetLat = price.latitude;
-    let targetLng = price.longitude;
+    const scrollToMap = () => {
+      window.requestAnimationFrame(() => {
+        findMapSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    };
 
-    if (targetLat === null || targetLng === null) {
+    // Fly to the branch nearest to the given location; if no branches are mapped,
+    // fall back to the location itself so the map still recentres on the user.
+    const flyToNearest = (loc: { lat: number; lng: number }) => {
+      let targetLat: number | null = null;
+      let targetLng: number | null = null;
       if (mapPrices.length > 0) {
-        const nearest = userLocation
-          ? [...mapPrices].sort((left, right) => {
-              const leftDistance = haversineDistanceKm(userLocation, { lat: left.latitude!, lng: left.longitude! });
-              const rightDistance = haversineDistanceKm(userLocation, { lat: right.latitude!, lng: right.longitude! });
-              return leftDistance - rightDistance;
-            })[0]
-          : mapPrices[0];
-
+        const nearest = [...mapPrices].sort((left, right) => {
+          const leftDistance = haversineDistanceKm(loc, { lat: left.latitude!, lng: left.longitude! });
+          const rightDistance = haversineDistanceKm(loc, { lat: right.latitude!, lng: right.longitude! });
+          return leftDistance - rightDistance;
+        })[0];
         targetLat = nearest.latitude;
         targetLng = nearest.longitude;
+      } else {
+        targetLat = loc.lat;
+        targetLng = loc.lng;
       }
+      if (targetLat !== null && targetLng !== null) {
+        setFindMapFocus({ lat: targetLat, lng: targetLng, zoom: 16, trigger: Date.now() });
+      }
+      scrollToMap();
+    };
+
+    // Case 1: the price has its own coordinates (location-specific). Just focus it.
+    if (price.latitude !== null && price.longitude !== null) {
+      setFindMapFocus({ lat: price.latitude, lng: price.longitude, zoom: 16, trigger: Date.now() });
+      scrollToMap();
+      return;
     }
 
-    if (targetLat !== null && targetLng !== null) {
-      setFindMapFocus({
-        lat: targetLat,
-        lng: targetLng,
-        zoom: 16,
-        trigger: Date.now(),
-      });
+    // Case 2: chain-only price with no specific location. We need the user's
+    // location to pick the nearest branch.
+    if (userLocation) {
+      flyToNearest(userLocation);
+      return;
     }
 
-    // Always scroll to the map, even when the price has no coordinates (e.g. a
-    // chain-wide price whose store has no known branch) so the user still lands
-    // on the map section showing the city overview.
-    window.requestAnimationFrame(() => {
-      findMapSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
+    // No location yet: scroll to the map and keep prompting on every press until
+    // the user grants location, then fly to the nearest branch.
+    scrollToMap();
+    window.Telegram?.WebApp?.showAlert?.(t.enableLocationForChain);
+    requestUserLocation((coords) => flyToNearest(coords));
   };
 
   const requestUserLocation = (onSuccess?: (coords: { lat: number; lng: number }) => void) => {
