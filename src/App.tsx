@@ -43,53 +43,31 @@ let _knownStoresCache: Array<{ name: string; lat: number; lng: number }> | null 
 
 async function fetchKnownStores(): Promise<Array<{ name: string; lat: number; lng: number }>> {
   if (_knownStoresCache) return _knownStoresCache;
-  const stores: Array<{ name: string; lat: number; lng: number }> = [];
+  let stores: Array<{ name: string; lat: number; lng: number }> = [];
   try {
-    // Makro: regions 1-14
-    const makroFetches = Array.from({ length: 14 }, (_, i) =>
-      fetch(`https://api.makromarket.uz/api/location-list/?region=${i + 1}`, {
-        headers: { 'Accept': 'application/json', 'Origin': 'https://makromarket.uz' },
-      }).then(r => r.json()).catch(() => [])
-    );
-    const makroRegions = await Promise.all(makroFetches);
-    for (const region of makroRegions) {
-      if (Array.isArray(region)) {
-        for (const s of region) {
-          const lat = parseFloat(s.latitude);
-          const lng = parseFloat(s.longitude);
-          if (lat && lng) stores.push({ name: s.title || 'Makro', lat, lng });
-        }
-      }
-    }
-    // Korzinka
-    const kRes = await fetch('https://api.korzinka.uz/shop_search/?q=&category[]=66&category[]=64', {
-      headers: { 'Accept': 'application/json', 'Origin': 'https://korzinka.uz' },
-    });
-    const kData = await kRes.json();
-    const kItems = kData?.data?.items?.ru || kData?.data?.items?.uz || [];
-    for (const s of kItems) {
-      const lat = parseFloat(s.location?.lat);
-      const lng = parseFloat(s.location?.lon);
-      if (lat && lng) stores.push({ name: s.name || 'Korzinka', lat, lng });
-    }
-
-    // Baraka Market branches
-    const bRes = await fetch('https://backend.barakamarket.uz/shop/', {
-      headers: { 'Accept': 'application/json', 'Origin': 'https://barakamarket.uz' },
-    });
-    const bData = await bRes.json();
-    const bItems = Array.isArray(bData) ? bData : (Array.isArray(bData?.results) ? bData.results : []);
-    for (const s of bItems) {
-      let lat = parseFloat(String(s.latitude ?? s.lat ?? '0'));
-      let lng = parseFloat(String(s.longitude ?? s.lng ?? s.lon ?? '0'));
-      if (Math.abs(lat) > 55 && Math.abs(lng) < 55) {
-        const tmp = lat;
-        lat = lng;
-        lng = tmp;
-      }
-      if (lat && lng) stores.push({ name: `Baraka Market ${s.title || ''}`.trim(), lat, lng });
+    // Branch coordinates are fetched via our own serverless proxy (api/stores).
+    // The chain APIs (Korzinka especially) restrict CORS to their own origin, so
+    // fetching them directly from the browser fails — the proxy runs server-side.
+    const res = await fetch('/api/stores', { headers: { Accept: 'application/json' } });
+    const data = await res.json();
+    if (Array.isArray(data?.stores)) {
+      stores = data.stores
+        .map((s: { name?: string; lat?: number; lng?: number }) => ({
+          name: String(s?.name || '').trim() || 'Store',
+          lat: Number(s?.lat),
+          lng: Number(s?.lng),
+        }))
+        .filter((s: { lat: number; lng: number }) => Number.isFinite(s.lat) && Number.isFinite(s.lng) && s.lat !== 0 && s.lng !== 0);
     }
   } catch { /* use whatever we got */ }
+
+  if (stores.length === 0) {
+    // Proxy unavailable (e.g. local Vite dev without serverless) — fall back to
+    // the small static list so the map still has something to work with.
+    _knownStoresCache = KNOWN_STORES_FALLBACK;
+    return _knownStoresCache;
+  }
+
   // Deduplicate by coordinates
   const seen = new Set<string>();
   _knownStoresCache = stores.filter(s => {
@@ -4158,11 +4136,18 @@ export default function App() {
       return;
     }
 
-    // No location yet: scroll to the map and keep prompting on every press until
-    // the user grants location, then fly to the nearest branch.
+    // No location yet: scroll to the map and prompt with a confirm dialog that
+    // has a "Turn on" button. Pressing it grants/requests location directly and
+    // then flies to the nearest branch. Keeps prompting on every press until on.
     scrollToMap();
-    window.Telegram?.WebApp?.showAlert?.(t.enableLocationForChain);
-    requestUserLocation((coords) => flyToNearest(coords));
+    const tg = window.Telegram?.WebApp;
+    if (tg?.showConfirm) {
+      tg.showConfirm(t.enableLocationForChain, (confirmed: boolean) => {
+        if (confirmed) requestUserLocation((coords) => flyToNearest(coords));
+      });
+    } else {
+      requestUserLocation((coords) => flyToNearest(coords));
+    }
   };
 
   const requestUserLocation = (onSuccess?: (coords: { lat: number; lng: number }) => void) => {
