@@ -3996,12 +3996,19 @@ export default function App() {
     }
 
     // Expand chain-wide prices to all known branches of that chain,
-    // but only where no location-specific price already exists
+    // but only where no location-specific price already exists.
+    // Branches are restricted to those near the selected city so a chain product
+    // searched in Tashkent never shows (or focuses) a branch in Andijan etc.
+    const cityCenter = { lat: selectedCityOption.center[0], lng: selectedCityOption.center[1] };
+    const CITY_RADIUS_KM = 80;
     for (const chainPrice of chainPrices) {
       const chainName = (chainPrice.place_name || '').toLowerCase().trim();
-      const matchingBranches = knownStores.filter(s =>
-        s.name.toLowerCase().includes(chainName) || chainName.includes(s.name.toLowerCase())
-      );
+      const matchingBranches = knownStores.filter(s => {
+        const sn = s.name.toLowerCase();
+        const nameMatch = sn.includes(chainName) || chainName.includes(sn);
+        if (!nameMatch) return false;
+        return haversineDistanceKm(cityCenter, { lat: s.lat, lng: s.lng }) <= CITY_RADIUS_KM;
+      });
 
       if (matchingBranches.length === 0) {
         // No known branches — show as a plain entry without coordinates
@@ -4045,7 +4052,7 @@ export default function App() {
     }
 
     return withDistance.sort((left, right) => left.price - right.price);
-  }, [prices, nearbyEnabled, userLocation, knownStores]);
+  }, [prices, nearbyEnabled, userLocation, knownStores, selectedCityOption]);
 
   const mapPrices = useMemo(
     () => sortedPrices.filter(p => p.latitude !== null && p.longitude !== null),
@@ -4099,60 +4106,74 @@ export default function App() {
       });
     };
 
-    // Fly to the branch nearest to the given location; if no branches are mapped,
-    // fall back to the location itself so the map still recentres on the user.
+    // All candidate branch coordinates for THIS price's chain, restricted to the
+    // selected city (so a Tashkent search never resolves to an Andijan branch).
+    const cityCenter = { lat: selectedCityOption.center[0], lng: selectedCityOption.center[1] };
+    const CITY_RADIUS_KM = 80;
+    const chainName = (price.place_name || '').toLowerCase().trim();
+    const cityBranches = knownStores.filter(s => {
+      const sn = s.name.toLowerCase();
+      const nameMatch = !chainName || sn.includes(chainName) || chainName.includes(sn);
+      if (!nameMatch) return false;
+      return haversineDistanceKm(cityCenter, { lat: s.lat, lng: s.lng }) <= CITY_RADIUS_KM;
+    });
+
+    // Fly to the branch nearest to the given location. Candidates come from the
+    // chain's city branches; fall back to any mapped price, then to the location.
     const flyToNearest = (loc: { lat: number; lng: number }) => {
-      let targetLat: number | null = null;
-      let targetLng: number | null = null;
-      if (mapPrices.length > 0) {
-        const nearest = [...mapPrices].sort((left, right) => {
-          const leftDistance = haversineDistanceKm(loc, { lat: left.latitude!, lng: left.longitude! });
-          const rightDistance = haversineDistanceKm(loc, { lat: right.latitude!, lng: right.longitude! });
-          return leftDistance - rightDistance;
-        })[0];
-        targetLat = nearest.latitude;
-        targetLng = nearest.longitude;
-      } else {
-        targetLat = loc.lat;
-        targetLng = loc.lng;
+      const candidates: Array<{ lat: number; lng: number }> = cityBranches.length > 0
+        ? cityBranches.map(b => ({ lat: b.lat, lng: b.lng }))
+        : mapPrices
+            .filter(p => p.latitude !== null && p.longitude !== null)
+            .map(p => ({ lat: p.latitude as number, lng: p.longitude as number }));
+
+      if (candidates.length === 0) {
+        setFindMapFocus({ lat: loc.lat, lng: loc.lng, zoom: 14, trigger: Date.now() });
+        scrollToMap();
+        return;
       }
-      if (targetLat !== null && targetLng !== null) {
-        setFindMapFocus({ lat: targetLat, lng: targetLng, zoom: 16, trigger: Date.now() });
-      }
+
+      const nearest = [...candidates].sort((a, b) =>
+        haversineDistanceKm(loc, a) - haversineDistanceKm(loc, b)
+      )[0];
+      setFindMapFocus({ lat: nearest.lat, lng: nearest.lng, zoom: 16, trigger: Date.now() });
       scrollToMap();
     };
 
-    // Case 1: the price has its own coordinates (location-specific). Just focus it.
-    if (price.latitude !== null && price.longitude !== null) {
+    // Case 1: a true location-specific price (receipt / scope='location') with its
+    // own coordinates — focus exactly there.
+    if (price.price_scope !== 'chain' && price.latitude !== null && price.longitude !== null) {
       setFindMapFocus({ lat: price.latitude, lng: price.longitude, zoom: 16, trigger: Date.now() });
       scrollToMap();
       return;
     }
 
-    // Case 2: chain-only price with no specific location. We need the user's
-    // location to pick the nearest branch.
+    // Case 2: chain price. Always pick the nearest branch to the user's location.
     if (userLocation) {
       flyToNearest(userLocation);
       return;
     }
 
-    // No location yet: scroll to the map and prompt with a confirm dialog that
-    // has a "Turn on" button. Pressing it grants/requests location directly and
-    // then flies to the nearest branch. Keeps prompting on every press until on.
+    // No location yet: prompt with a confirm dialog that has a "Turn on" button.
+    // On grant, fly to the nearest branch. If the user declines or it fails, fall
+    // back to the nearest branch to the selected city centre (never Andijan).
     scrollToMap();
     const tg = window.Telegram?.WebApp;
+    const onDenied = () => flyToNearest(cityCenter);
     if (tg?.showConfirm) {
       tg.showConfirm(t.enableLocationForChain, (confirmed: boolean) => {
-        if (confirmed) requestUserLocation((coords) => flyToNearest(coords));
+        if (confirmed) requestUserLocation((coords) => flyToNearest(coords), onDenied);
+        else onDenied();
       });
     } else {
-      requestUserLocation((coords) => flyToNearest(coords));
+      requestUserLocation((coords) => flyToNearest(coords), onDenied);
     }
   };
 
-  const requestUserLocation = (onSuccess?: (coords: { lat: number; lng: number }) => void) => {
+  const requestUserLocation = (onSuccess?: (coords: { lat: number; lng: number }) => void, onError?: () => void) => {
     if (!navigator.geolocation) {
       setGeoError(t.nearbyError);
+      onError?.();
       return;
     }
 
@@ -4169,7 +4190,7 @@ export default function App() {
         () => {
           navigator.geolocation.getCurrentPosition(
             onGeoSuccess,
-            () => setGeoError(t.nearbyError),
+            () => { setGeoError(t.nearbyError); onError?.(); },
             { enableHighAccuracy: false, timeout: 20000, maximumAge: 0 }
           );
         },
