@@ -47,7 +47,7 @@ async function fetchMakroStores() {
     for (const s of data) {
       const lat = parseFloat(s.latitude);
       const lng = parseFloat(s.longitude);
-      if (lat && lng) stores.push({ name: s.title || 'Makro', lat, lng });
+      if (lat && lng) stores.push({ chain: 'makro', name: s.title || 'Makro', lat, lng });
     }
   }
   return stores;
@@ -66,7 +66,7 @@ async function fetchKorzinkaStores() {
       const loc = s.location || {};
       const lat = parseFloat(loc.lat);
       const lng = parseFloat(loc.lon);
-      if (lat && lng) stores.push({ name: s.name || 'Korzinka', lat, lng });
+      if (lat && lng) stores.push({ chain: 'korzinka', name: s.name || 'Korzinka', lat, lng });
     }
   } catch { /* skip on failure */ }
   return stores;
@@ -91,7 +91,7 @@ async function fetchBarakaStores() {
       }
       if (lat && lng) {
         const title = String(row?.title || row?.name || '').trim();
-        stores.push({ name: title ? `Baraka Market ${title}` : 'Baraka Market', lat, lng });
+        stores.push({ chain: 'baraka', name: title ? `Baraka Market ${title}` : 'Baraka Market', lat, lng });
       }
     }
   } catch { /* skip on failure */ }

@@ -13,6 +13,7 @@ import { formatDistanceToNow } from 'date-fns';
 import { enUS, ru, uz } from 'date-fns/locale';
 import { CITY_OPTIONS, DEFAULT_CITY, getCityLabel, getCityOption } from './constants/cities.js';
 import { haversineDistanceKm } from './utils/haversine.js';
+import { STORE_LOCATIONS } from './constants/storeLocations.js';
 import { TASHKENT_DISTRICTS, DISTRICT_LIST, findDistrict } from './constants/districts.js';
 
 // Utility for Tailwind classes
@@ -39,38 +40,47 @@ const adminTelegramIds = (import.meta.env.VITE_ADMIN_TELEGRAM_IDS || import.meta
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Known store locations for display name resolution — fetched dynamically
-let _knownStoresCache: Array<{ name: string; lat: number; lng: number }> | null = null;
+let _knownStoresCache: Array<{ name: string; lat: number; lng: number; chain?: string }> | null = null;
 
-async function fetchKnownStores(): Promise<Array<{ name: string; lat: number; lng: number }>> {
+// Map a price's place_name to a canonical chain key so we can match it against
+// branch coordinates. Handles Latin and Cyrillic brand spellings.
+function detectChainKey(text: string | null | undefined): string | null {
+  const s = String(text || '').toLowerCase();
+  if (!s) return null;
+  if (s.includes('makro') || s.includes('макро')) return 'makro';
+  if (s.includes('korzinka') || s.includes('корзинка')) return 'korzinka';
+  if (s.includes('baraka') || s.includes('барака')) return 'baraka';
+  return null;
+}
+
+async function fetchKnownStores(): Promise<Array<{ name: string; lat: number; lng: number; chain?: string }>> {
   if (_knownStoresCache) return _knownStoresCache;
-  let stores: Array<{ name: string; lat: number; lng: number }> = [];
+
+  // Start from the baked-in static dataset (Makro + Korzinka branches) so nearest
+  // calculations always work, even with no network. Then try the serverless proxy
+  // to merge in live data (e.g. Baraka, which the browser cannot fetch via CORS).
+  const merged: Array<{ name: string; lat: number; lng: number; chain?: string }> = STORE_LOCATIONS.map(s => ({
+    name: s.name, lat: s.lat, lng: s.lng, chain: s.chain,
+  }));
+
   try {
-    // Branch coordinates are fetched via our own serverless proxy (api/stores).
-    // The chain APIs (Korzinka especially) restrict CORS to their own origin, so
-    // fetching them directly from the browser fails — the proxy runs server-side.
     const res = await fetch('/api/stores', { headers: { Accept: 'application/json' } });
     const data = await res.json();
     if (Array.isArray(data?.stores)) {
-      stores = data.stores
-        .map((s: { name?: string; lat?: number; lng?: number }) => ({
-          name: String(s?.name || '').trim() || 'Store',
-          lat: Number(s?.lat),
-          lng: Number(s?.lng),
-        }))
-        .filter((s: { lat: number; lng: number }) => Number.isFinite(s.lat) && Number.isFinite(s.lng) && s.lat !== 0 && s.lng !== 0);
+      for (const s of data.stores) {
+        const lat = Number(s?.lat);
+        const lng = Number(s?.lng);
+        if (Number.isFinite(lat) && Number.isFinite(lng) && lat !== 0 && lng !== 0) {
+          const name = String(s?.name || '').trim() || 'Store';
+          merged.push({ name, lat, lng, chain: s?.chain || detectChainKey(name) || undefined });
+        }
+      }
     }
-  } catch { /* use whatever we got */ }
+  } catch { /* keep static-only dataset */ }
 
-  if (stores.length === 0) {
-    // Proxy unavailable (e.g. local Vite dev without serverless) — fall back to
-    // the small static list so the map still has something to work with.
-    _knownStoresCache = KNOWN_STORES_FALLBACK;
-    return _knownStoresCache;
-  }
-
-  // Deduplicate by coordinates
+  // Deduplicate by rounded coordinates.
   const seen = new Set<string>();
-  _knownStoresCache = stores.filter(s => {
+  _knownStoresCache = merged.filter(s => {
     const key = `${s.lat.toFixed(4)},${s.lng.toFixed(4)}`;
     if (seen.has(key)) return false;
     seen.add(key);
@@ -79,15 +89,11 @@ async function fetchKnownStores(): Promise<Array<{ name: string; lat: number; ln
   return _knownStoresCache;
 }
 
-// Fallback for sync usage (before fetch completes)
-const KNOWN_STORES_FALLBACK: Array<{ name: string; lat: number; lng: number }> = [
-  { name: 'Makro', lat: 41.313097, lng: 69.332279 },
-  { name: 'Makro', lat: 41.304013, lng: 69.322374 },
-  { name: 'Korzinka', lat: 41.300976, lng: 69.263439 },
-  { name: 'Korzinka', lat: 41.327718, lng: 69.343438 },
-];
+// Fallback for sync usage (before fetch completes) — the full baked-in dataset.
+const KNOWN_STORES_FALLBACK: Array<{ name: string; lat: number; lng: number; chain?: string }> =
+  STORE_LOCATIONS.map(s => ({ name: s.name, lat: s.lat, lng: s.lng, chain: s.chain }));
 
-function identifyStoreByCoords(lat: number, lng: number, knownStores?: Array<{ name: string; lat: number; lng: number }>): string | null {
+function identifyStoreByCoords(lat: number, lng: number, knownStores?: Array<{ name: string; lat: number; lng: number; chain?: string }>): string | null {
   const stores = knownStores || _knownStoresCache || KNOWN_STORES_FALLBACK;
   for (const s of stores) {
     const dlat = (s.lat - lat) * 111320;
@@ -1852,7 +1858,7 @@ export default function App() {
   // refresh) from overwriting the prices/location of the product the user just selected.
   const priceRequestSeqRef = useRef(0);
   const [productsLoading, setProductsLoading] = useState(false);
-  const [knownStores, setKnownStores] = useState<Array<{ name: string; lat: number; lng: number }>>(KNOWN_STORES_FALLBACK);
+  const [knownStores, setKnownStores] = useState<Array<{ name: string; lat: number; lng: number; chain?: string }>>(KNOWN_STORES_FALLBACK);
 
 
   useEffect(() => {
@@ -4002,18 +4008,17 @@ export default function App() {
     const cityCenter = { lat: selectedCityOption.center[0], lng: selectedCityOption.center[1] };
     const CITY_RADIUS_KM = 80;
     for (const chainPrice of chainPrices) {
-      const chainName = (chainPrice.place_name || '').toLowerCase().trim();
+      const priceChain = detectChainKey(chainPrice.place_name);
       const matchingBranches = knownStores.filter(s => {
-        const sn = s.name.toLowerCase();
-        const nameMatch = sn.includes(chainName) || chainName.includes(sn);
-        if (!nameMatch) return false;
+        const branchChain = s.chain || detectChainKey(s.name);
+        if (!priceChain || branchChain !== priceChain) return false;
         return haversineDistanceKm(cityCenter, { lat: s.lat, lng: s.lng }) <= CITY_RADIUS_KM;
       });
 
       if (matchingBranches.length === 0) {
         // No known branches — show as a plain entry without coordinates
         const chainIdPart = chainPrice.product_id ?? (chainPrice.product_name_raw || '').trim().toLowerCase();
-        const fallbackKey = `chain_${chainName}|${chainIdPart}`;
+        const fallbackKey = `chain_${priceChain || (chainPrice.place_name || '').toLowerCase().trim()}|${chainIdPart}`;
         if (!priceByKey.has(fallbackKey)) priceByKey.set(fallbackKey, chainPrice);
         continue;
       }
@@ -4110,11 +4115,10 @@ export default function App() {
     // selected city (so a Tashkent search never resolves to an Andijan branch).
     const cityCenter = { lat: selectedCityOption.center[0], lng: selectedCityOption.center[1] };
     const CITY_RADIUS_KM = 80;
-    const chainName = (price.place_name || '').toLowerCase().trim();
+    const priceChain = detectChainKey(price.place_name);
     const cityBranches = knownStores.filter(s => {
-      const sn = s.name.toLowerCase();
-      const nameMatch = !chainName || sn.includes(chainName) || chainName.includes(sn);
-      if (!nameMatch) return false;
+      const branchChain = s.chain || detectChainKey(s.name);
+      if (!priceChain || branchChain !== priceChain) return false;
       return haversineDistanceKm(cityCenter, { lat: s.lat, lng: s.lng }) <= CITY_RADIUS_KM;
     });
 
@@ -5543,8 +5547,8 @@ export default function App() {
                       </div>
                     ) : sortedPrices.length > 0 ? (
                       sortedPrices.slice(0, 5).map((p, i) => (
-                        <div key={p.id} className="bg-white p-4 rounded-xl border border-stone-200 shadow-sm flex items-center justify-between">
-                          <div className="flex-1">
+                        <div key={p.id} className="bg-white p-4 rounded-xl border border-stone-200 shadow-sm flex items-center justify-between gap-2">
+                          <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 mb-1">
                               <span className={cn(
                                 "w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold",
@@ -5569,7 +5573,7 @@ export default function App() {
                               </p>
                             )}
                           </div>
-                          <div className="text-right">
+                          <div className="text-right shrink-0">
                             <button
                               title={t.mapTitle}
                               onClick={() => focusPriceOnMap(p)}
